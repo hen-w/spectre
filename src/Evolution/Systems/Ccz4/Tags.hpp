@@ -45,9 +45,9 @@ struct ConformalFactorSquared : db::SimpleTag {
  * spatial metric, then we define
  * \f$\bar{\gamma}_{ij} = \phi^2 \gamma_{ij}\f$.
  */
-template <typename DataType, size_t Dim, typename Frame>
+template <typename DataType, size_t Dim, typename Fr = Frame::Inertial>
 using ConformalMetric =
-    gr::Tags::Conformal<gr::Tags::SpatialMetric<DataType, Dim, Frame>, 2>;
+    gr::Tags::Conformal<gr::Tags::SpatialMetric<DataType, Dim, Fr>, 2>;
 
 /*!
  * \brief The conformally scaled inverse spatial metric
@@ -365,6 +365,72 @@ template <typename DataType>
 struct RicciScalarPlusDivergenceZ4Constraint : db::SimpleTag {
   using type = Scalar<DataType>;
 };
+
+/*!
+ * \brief The projection of the Z4 constraint vector along the normal direction
+ *
+ *
+ */
+template <typename DataType>
+struct Theta : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+/*!
+ * \brief Auxiliary variable in the gamma-driver condition
+ *
+ */
+template <typename DataType, size_t Dim, typename Fr = Frame::Inertial>
+struct Fieldb : db::SimpleTag {
+  using type = tnsr::I<DataType, Dim, Fr>;
+};
+
+/*!
+ * \brief The parameter f in the gamma driver
+ *
+ *
+ */
+template <typename DataType>
+struct GammaDriverParam
+    : db::SimpleTag {  // this should probably be changed to an option tag later
+  using type = Scalar<DataType>;
+};
+
+/*!
+ * \brief The projection of the Z4 constraint vector along the normal direction
+ *
+ *
+ */
+template <typename DataType>
+struct Kappa1 : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct Kappa2 : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct Kappa3 : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+/// \brief Tags sent for spacetime evolution. All tags sent are the
+/// reconstruciton+spacetime tags
+using spacetime_reconstruction_tags =
+    tmpl::list<Tags::ConformalMetric<DataVector, 3>,
+               Tags::ATilde<DataVector, 3>, Tags::ConformalFactor<DataVector>,
+               gr::Tags::TraceExtrinsicCurvature<DataVector>,
+               Tags::Theta<DataVector>, Tags::GammaHat<DataVector, 3>,
+               gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
+               Tags::Fieldb<DataVector, 3>>;
+
+/// \brief All tags sent for primitive reconstruction, both GRMHD and spacetime
+/// evolution tags.
+using primitive_grmhd_and_spacetime_reconstruction_tags =
+    tmpl::append<spacetime_reconstruction_tags>;
+
 }  // namespace Tags
 
 namespace OptionTags {

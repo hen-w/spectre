@@ -4,6 +4,7 @@
 set(LIBRARY "Test_Ccz4")
 
 set(LIBRARY_SOURCES
+  FiniteDifference/Test_Derivatives.cpp
   Test_ATilde.cpp
   Test_Christoffel.cpp
   Test_DerivChristoffel.cpp

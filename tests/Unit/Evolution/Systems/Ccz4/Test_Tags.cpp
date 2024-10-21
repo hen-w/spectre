@@ -80,10 +80,14 @@ void test_simple_tags() {
   TestHelpers::db::test_simple_tag<
       Ccz4::Tags::RicciScalarPlusDivergenceZ4Constraint<DataType>>(
       "RicciScalarPlusDivergenceZ4Constraint");
+  TestHelpers::db::test_simple_tag<Ccz4::Tags::Theta<DataType>>("Theta");
+  TestHelpers::db::test_simple_tag<Ccz4::Tags::Fieldb<DataType, Dim, Frame>>(
+      "Fieldb");
 }
 
 SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Tags", "[Unit][Evolution]") {
-  test_simple_tags<double, 1, ArbitraryFrame>();
+  test_simple_tags<double, 1,
+                   ArbitraryFrame>(); /* what does this function do? */
   test_simple_tags<DataVector, 1, ArbitraryFrame>();
   test_simple_tags<double, 2, ArbitraryFrame>();
   test_simple_tags<DataVector, 2, ArbitraryFrame>();

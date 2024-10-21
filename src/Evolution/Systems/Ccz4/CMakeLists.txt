@@ -45,8 +45,11 @@ target_link_libraries(
   ${LIBRARY}
   PUBLIC
   DataStructures
+  DgSubcell
   GeneralRelativity
   Options
   Utilities
   INTERFACE
   )
+
+add_subdirectory(FiniteDifference)
