@@ -23,9 +23,12 @@
 #include "Domain/Structure/ElementId.hpp"
 #include "Evolution/DgSubcell/GhostData.hpp"
 #include "Evolution/Systems/Ccz4/ATilde.hpp"
+#include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
 #include "Evolution/Systems/Ccz4/Christoffel.hpp"
 #include "Evolution/Systems/Ccz4/DerivChristoffel.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Derivatives.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/Reconstructor.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/SoTimeDerivative.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/System.hpp"
@@ -47,7 +50,20 @@
 #include "Utilities/Gsl.hpp"
 #include "Utilities/TMPL.hpp"
 
+namespace Ccz4::fd {
 namespace {
+struct DummyEvolutionMetaVars {
+  struct SubcellOptions {
+    static constexpr bool subcell_enabled_at_external_boundary = false;
+  };
+  struct factory_creation
+      : tt::ConformsTo<Options::protocols::FactoryCreation> {
+    using factory_classes =
+        tmpl::map<tmpl::pair<BoundaryConditions::BoundaryCondition,
+                             BoundaryConditions::standard_boundary_conditions>>;
+  };
+};
+
 using Affine = domain::CoordinateMaps::Affine;
 using Affine3D = domain::CoordinateMaps::ProductOf3Maps<Affine, Affine, Affine>;
 
@@ -101,38 +117,38 @@ void test_minkowski() {
   const auto evolved_vars = TestHelpers::Ccz4::fd::detail::Minkowski::
       compute_prim_solution_for_Minkowski(x);
 
-  // get other parameters
-  const double f = Ccz4::fd::System::f;
-  const double kappa_1 = 0.1;
-  const double kappa_2 = 0.3;
-  const double kappa_3 = 0.4;
-
   const DataVector used_for_size =
       DataVector(subcell_mesh.number_of_grid_points(),
                  std::numeric_limits<double>::signaling_NaN());
   const auto k_0 = make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
   const auto eta = make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
 
+  const Ccz4::fd::DummyReconstructor recons{};
+
   // put needed quantities into databox
   using dt_variables_tag =
       db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
 
   auto box = db::create<db::AddSimpleTags<
+      domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
+      Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
-      ::Ccz4::Tags::K0<DataVector>, ::Ccz4::Tags::GammaDriverParam,
-      ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
-      dt_variables_tag, evolution::dg::subcell::Tags::Mesh<SpatialDim>,
+      ::Ccz4::Tags::K0<DataVector>, dt_variables_tag,
+      evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
           SpatialDim>,
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>>>(
-      evolved_vars, eta, k_0, f, kappa_1, kappa_2, kappa_3,
+      element,
+      std::unique_ptr<Ccz4::fd::Reconstructor>{
+          std::make_unique<std::decay_t<decltype(recons)>>(recons)},
+      DummyEvolutionMetaVars{}, evolved_vars, eta, k_0,
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
       all_ghost_data);
 
   // Check that all time derivatives are 0
-  ::Ccz4::fd::apply<SpatialDim>(make_not_null(&box));
+  ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
   const auto zero = DataVector(used_for_size.size(), 0.0);
 
   tmpl::for_each<Ccz4::fd::System::variables_tag_list>(
@@ -196,13 +212,10 @@ void test_kerrschild() {
   const std::array<double, SpatialDim> center{{0.2, 0.5, 0.1}};
   const gr::Solutions::KerrSchild solution(mass, spin, center);
 
-  const double f = Ccz4::fd::System::f;
-  const double kappa_1 = 0.1;
-  const double kappa_2 = 0.3;
-  const double kappa_3 = 0.4;
-
   // Arbitrary time for time-independent solution.
   const double t = std::numeric_limits<double>::signaling_NaN();
+
+  const double f = Ccz4::fd::System::f;
 
   const DirectionalIdMap<SpatialDim, evolution::dg::subcell::GhostData>
       all_ghost_data =
@@ -232,26 +245,32 @@ void test_kerrschild() {
       get<::Ccz4::Tags::Theta<DataVector>>(evolved_vars),
       get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(evolved_vars));
 
+  const Ccz4::fd::DummyReconstructor recons{};
+
   // put needed quantities into databox
   using dt_variables_tag =
       db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
 
   auto box = db::create<db::AddSimpleTags<
+      domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
+      Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
-      ::Ccz4::Tags::K0<DataVector>, ::Ccz4::Tags::GammaDriverParam,
-      ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
-      dt_variables_tag, evolution::dg::subcell::Tags::Mesh<SpatialDim>,
+      ::Ccz4::Tags::K0<DataVector>, dt_variables_tag,
+      evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
           SpatialDim>,
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>>>(
-      evolved_vars, eta, k_0, f, kappa_1, kappa_2, kappa_3,
+      element,
+      std::unique_ptr<Ccz4::fd::Reconstructor>{
+          std::make_unique<std::decay_t<decltype(recons)>>(recons)},
+      DummyEvolutionMetaVars{}, evolved_vars, eta, k_0,
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
       all_ghost_data);
 
   // Check that all time derivatives are 0
-  ::Ccz4::fd::apply<SpatialDim>(make_not_null(&box));
+  ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
   const auto zero = DataVector(used_for_size.size(), 0.0);
   const Approx custom_approx =
       Approx::custom().epsilon(1.0e-9).scale(*std::max_element(
@@ -364,37 +383,37 @@ void test_gauge_plane_wave(
       compute_prim_solution_for_GaugePlaneWave(x, t, solution,
                                                intermediate_sol);
 
-  // get other parameters
-  const double f = Ccz4::fd::System::f;
-  const double kappa_1 = 0.1;
-  const double kappa_2 = 0.3;
-  const double kappa_3 = 0.4;
-
   const auto& k_0 =
       get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(evolved_vars);
 
   const auto eta = make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
+
+  const Ccz4::fd::DummyReconstructor recons{};
 
   // put needed quantities into databox
   using dt_variables_tag =
       db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
 
   auto box = db::create<db::AddSimpleTags<
+      domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
+      Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
-      ::Ccz4::Tags::K0<DataVector>, ::Ccz4::Tags::GammaDriverParam,
-      ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
-      dt_variables_tag, evolution::dg::subcell::Tags::Mesh<SpatialDim>,
+      ::Ccz4::Tags::K0<DataVector>, dt_variables_tag,
+      evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
           SpatialDim>,
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>>>(
-      evolved_vars, eta, k_0, f, kappa_1, kappa_2, kappa_3,
+      element,
+      std::unique_ptr<Ccz4::fd::Reconstructor>{
+          std::make_unique<std::decay_t<decltype(recons)>>(recons)},
+      DummyEvolutionMetaVars{}, evolved_vars, eta, k_0,
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
       all_ghost_data);
 
   // Check all time derivatives
-  ::Ccz4::fd::apply<SpatialDim>(make_not_null(&box));
+  ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
 
   const Approx custom_approx =
       Approx::custom().epsilon(1.0e-9).scale(*std::max_element(
@@ -429,8 +448,8 @@ void test_gauge_plane_wave(
   const auto& dt_lapse_actual =
       get<::Tags::dt<gr::Tags::Lapse<DataVector>>>(box);
   const auto& d_lapse =
-      get<Tags::deriv<gr::Tags::Lapse<DataVector>, tmpl::size_t<SpatialDim>,
-                      FrameType>>(gauge_plane_wave_vars);
+      get<::Tags::deriv<gr::Tags::Lapse<DataVector>, tmpl::size_t<SpatialDim>,
+                        FrameType>>(gauge_plane_wave_vars);
   const auto dt_lapse_expected = TestHelpers::Ccz4::fd::detail::GaugePlaneWave::
       get_dt_lapse_gauge_plane_wave(
           d_lapse, get<gr::Tags::Shift<DataVector, SpatialDim, FrameType>>(
@@ -442,8 +461,8 @@ void test_gauge_plane_wave(
   const auto& dt_shift_actual =
       get<::Tags::dt<gr::Tags::Shift<DataVector, SpatialDim>>>(box);
   const auto& d_shift =
-      get<Tags::deriv<gr::Tags::Shift<DataVector, SpatialDim, FrameType>,
-                      tmpl::size_t<SpatialDim>, FrameType>>(
+      get<::Tags::deriv<gr::Tags::Shift<DataVector, SpatialDim, FrameType>,
+                        tmpl::size_t<SpatialDim>, FrameType>>(
           gauge_plane_wave_vars);
   const auto dt_shift_expected = TestHelpers::Ccz4::fd::detail::GaugePlaneWave::
       get_dt_shift_gauge_plane_wave(
@@ -531,8 +550,8 @@ void test_gauge_plane_wave(
       TestHelpers::Ccz4::fd::detail::GaugePlaneWave::
           get_dt_d_spatial_metric_gauge_plane_wave(k_tnsr, du_du_h, omega);
   const auto& d_spatial_metric =
-      get<Tags::deriv<gr::Tags::SpatialMetric<DataVector, SpatialDim>,
-                      tmpl::size_t<SpatialDim>, FrameType>>(
+      get<::Tags::deriv<gr::Tags::SpatialMetric<DataVector, SpatialDim>,
+                        tmpl::size_t<SpatialDim>, FrameType>>(
           gauge_plane_wave_vars);
   const auto d_conformal_factor = TestHelpers::Ccz4::fd::detail::
       GaugePlaneWave::get_d_conformal_factor_gauge_plane_wave(
@@ -554,8 +573,8 @@ void test_gauge_plane_wave(
           det_spatial_metric,
           get<gr::Tags::InverseSpatialMetric<DataVector, SpatialDim,
                                              FrameType>>(gauge_plane_wave_vars),
-          get<Tags::deriv<gr::Tags::SpatialMetric<DataVector, SpatialDim>,
-                          tmpl::size_t<SpatialDim>, FrameType>>(
+          get<::Tags::deriv<gr::Tags::SpatialMetric<DataVector, SpatialDim>,
+                            tmpl::size_t<SpatialDim>, FrameType>>(
               gauge_plane_wave_vars));
   const tnsr::ijj<DataVector, SpatialDim, FrameType>
       d_conformal_spatial_metric = TestHelpers::Ccz4::fd::detail::KerrSchild::
@@ -622,3 +641,4 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.FiniteDifference.TimeDerivative",
                   "[Unit][Evolution]") {
   test();
 }
+}  // namespace Ccz4::fd

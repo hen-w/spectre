@@ -39,9 +39,7 @@ namespace evolution::dg::subcell::fd::Actions {
  * \brief Take a finite-difference time step on the subcell grid.
  *
  * The template parameter `TimeDerivative` must have a `static apply` function
- * that takes the `DataBox` by `gsl::not_null` as the first argument, the
- * cell-centered inverse Jacobian from the logical to the grid frame as the
- * second argument, and its determinant as the third argument.
+ * that takes the `DataBox` by `gsl::not_null` as the argument.
  *
  * GlobalCache: nothing
  *

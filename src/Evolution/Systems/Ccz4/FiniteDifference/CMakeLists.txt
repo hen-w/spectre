@@ -9,13 +9,22 @@ spectre_target_sources(
   ${LIBRARY}
   PRIVATE
   Derivatives.cpp
+  DummyReconstructor.cpp
+  GhostData.cpp
+  Reconstructor.cpp
   )
 
 spectre_target_headers(
   ${LIBRARY}
   INCLUDE_DIRECTORY ${CMAKE_SOURCE_DIR}/src
   HEADERS
+  BoundaryConditionGhostData.hpp
   Derivatives.hpp
+  DummyReconstructor.hpp
+  GhostData.hpp
+  Reconstructor.hpp
+  SetInitialEta.hpp
+  SetInitialK0.hpp
   SoTimeDerivative.hpp
   System.hpp
   Tags.hpp

@@ -117,7 +117,6 @@ void test(const BoundaryConditionType& boundary_condition) {
   //  - element map
   //  - coordinate map
   //  - subcell logical coordinates
-  //  - analytic solution
 
   const double time{0.0};
 
@@ -135,9 +134,6 @@ void test(const BoundaryConditionType& boundary_condition) {
           domain::CoordinateMaps::Identity<1>{});
 
   const auto subcell_logical_coords = logical_coordinates(subcell_mesh);
-
-  using SolutionForTest = Burgers::Solutions::Linear;
-  const SolutionForTest solution{-0.5};
 
   // Below are tags required by DemandOutgoingCharSpeeds boundary condition
   //  - scalar field U on subcell mesh
@@ -195,7 +191,7 @@ void test(const BoundaryConditionType& boundary_condition) {
       domain::Tags::ElementMap<1, Frame::Grid>,
       domain::CoordinateMaps::Tags::CoordinateMap<1, Frame::Grid,
                                                   Frame::Inertial>,
-      Tags::AnalyticSolution<SolutionForTest>, Burgers::Tags::U>>(
+      Burgers::Tags::U>>(
       EvolutionMetaVars{}, std::move(domain), std::move(boundary_conditions),
       subcell_mesh, subcell_logical_coords, ghost_data,
       std::unique_ptr<Burgers::fd::Reconstructor>{
@@ -208,7 +204,7 @@ void test(const BoundaryConditionType& boundary_condition) {
               domain::CoordinateMaps::Identity<1>{})},
       domain::make_coordinate_map_base<Frame::Grid, Frame::Inertial>(
           domain::CoordinateMaps::Identity<1>{}),
-      solution, u_subcell);
+      u_subcell);
 
   {
     // compute FD ghost data and retrieve the result

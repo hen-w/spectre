@@ -19,6 +19,7 @@
 #include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/DirichletAnalytic.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Framework/TestCreation.hpp"
 #include "Framework/TestHelpers.hpp"
@@ -72,7 +73,7 @@ void test_fd(const U& boundary_condition, const T& analytic_solution_or_data) {
           Affine3D{Affine{-1., 1., lower_bound[0], upper_bound[0]},
                    Affine{-1., 1., lower_bound[1], upper_bound[1]},
                    Affine{-1., 1., lower_bound[2], upper_bound[2]}});
-  /* what does this do??*/
+
   const ElementId<3> element_id{0};
   const ElementMap logical_to_grid_map{
       element_id,
@@ -83,14 +84,15 @@ void test_fd(const U& boundary_condition, const T& analytic_solution_or_data) {
           .get_clone()};
   const auto direction = Direction<3>::lower_xi();
 
-  constexpr size_t ghost_zone_size =
-      2;  // currenly only 4th order fd is supported
+  const Ccz4::fd::DummyReconstructor reconstructor{};
+  const size_t ghost_zone_size = reconstructor.ghost_zone_size();
 
   using Vars = Variables<Ccz4::fd::Tags::spacetime_reconstruction_tags>;
   Vars vars{ghost_zone_size * subcell_mesh.extents().slice_away(0).product()};
   const auto expected_vars = [&analytic_solution_or_data, &direction,
                               &functions_of_time, &grid_to_inertial_map,
-                              &logical_to_grid_map, &subcell_mesh, time]() {
+                              &logical_to_grid_map, &subcell_mesh, time,
+                              ghost_zone_size]() {
     const auto ghost_logical_coords =
         evolution::dg::subcell::fd::ghost_zone_logical_coordinates(
             subcell_mesh, ghost_zone_size, direction);
@@ -151,7 +153,7 @@ void test_fd(const U& boundary_condition, const T& analytic_solution_or_data) {
       make_not_null(&theta), make_not_null(&gamma_hat),
       make_not_null(&auxiliary_shift_b), direction, subcell_mesh, time,
       functions_of_time, logical_to_grid_map, grid_to_inertial_map,
-      ghost_zone_size);
+      reconstructor);
   // failing line
   CHECK(vars == expected_vars);
 }
@@ -168,8 +170,7 @@ SPECTRE_TEST_CASE("Unit.Ccz4.BoundaryConditions.DirichletAnalytic",
             Metavariables>(
             "DirichletAnalytic:\n"
             "  AnalyticPrescription:\n"
-            "      Ccz4(TrumpetSchwarzschild):\n" /*how do I use the 3D
-                                                     solution??*/
+            "      Ccz4(TrumpetSchwarzschild):\n"
             "        Mass: 1.0\n"
             "        N: 2.0\n")
             ->get_clone();

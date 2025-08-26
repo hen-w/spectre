@@ -11,6 +11,11 @@
 
 namespace Ccz4::fd {
 struct System {
+  // Later we may want to make these databox options
+  // Unclear what to set these to for now
+  static constexpr double kappa_1 = 0.;
+  static constexpr double kappa_2 = 0.;
+  static constexpr double kappa_3 = 0.5;
   // The free parameter f in the Gamma-driver condition.
   static constexpr double f = 0.75;
   // Whether to add the advective terms in the Gamma-driver condition,
@@ -18,11 +23,12 @@ struct System {
   static constexpr bool shifting_shift = false;
 
   using variables_tag = ::Tags::Variables<tmpl::list<
-      Tags::ConformalMetric<DataVector, 3>, gr::Tags::Lapse<DataVector>,
-      gr::Tags::Shift<DataVector, 3>, Tags::ConformalFactor<DataVector>,
-      Tags::ATilde<DataVector, 3>,
-      gr::Tags::TraceExtrinsicCurvature<DataVector>, Tags::Theta<DataVector>,
-      Tags::GammaHat<DataVector, 3>, Tags::AuxiliaryShiftB<DataVector, 3>>>;
+      ::Ccz4::Tags::ConformalMetric<DataVector, 3>, gr::Tags::Lapse<DataVector>,
+      gr::Tags::Shift<DataVector, 3>, ::Ccz4::Tags::ConformalFactor<DataVector>,
+      ::Ccz4::Tags::ATilde<DataVector, 3>,
+      gr::Tags::TraceExtrinsicCurvature<DataVector>,
+      ::Ccz4::Tags::Theta<DataVector>, ::Ccz4::Tags::GammaHat<DataVector, 3>,
+      ::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>>;
 
   using variables_tag_list = typename variables_tag::tags_list;
 

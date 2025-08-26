@@ -39,5 +39,6 @@ namespace Ccz4::Solutions {
 // evolution equations. We will allow analytic lapse and shift in
 // the future.
 using all_solutions =
-    tmpl::list<Ccz4WrappedGr<gr::Solutions::TrumpetSchwarzschild>>;
+    tmpl::list<Ccz4WrappedGr<gr::Solutions::Minkowski<3>>,
+               Ccz4WrappedGr<gr::Solutions::TrumpetSchwarzschild>>;
 }  // namespace Ccz4::Solutions

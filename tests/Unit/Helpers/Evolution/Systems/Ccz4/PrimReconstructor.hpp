@@ -206,8 +206,6 @@ compute_prim_solution_for_second_deriv(
 }
 
 inline Element<3> set_element(const bool skip_last = false) {
-  /* I don't know what this is doing; it seems to set up */
-  /* some element adjacency relations */
   DirectionMap<3, Neighbors<3>> neighbors{};
   for (size_t i = 0; i < 6; ++i) {
     if (skip_last and i == 5) {
@@ -221,11 +219,9 @@ inline Element<3> set_element(const bool skip_last = false) {
 
 inline tnsr::I<DataVector, 3, Frame::ElementLogical> set_logical_coordinates(
     const Mesh<3>& subcell_mesh) {
-  /* this computes the positions of the grid points in [-1,1]^3 */
   auto logical_coords = logical_coordinates(subcell_mesh);
   // Make the logical coordinates different in each direction
   for (size_t i = 1; i < 3; ++i) {
-    /* this seems to shift all grid points in [-1,1]^3 by some number */
     logical_coords.get(i) += static_cast<double>(4 * i);
   }
   return logical_coords;

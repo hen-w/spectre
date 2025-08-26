@@ -87,7 +87,8 @@ class DirichletAnalytic final : public BoundaryCondition {
       tmpl::list<::Tags::Time, ::domain::Tags::FunctionsOfTime,
                  domain::Tags::ElementMap<3, Frame::Grid>,
                  domain::CoordinateMaps::Tags::CoordinateMap<3, Frame::Grid,
-                                                             Frame::Inertial>>;
+                                                             Frame::Inertial>,
+                 ::Ccz4::fd::Tags::Reconstructor>;
   void fd_ghost(
       const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
           conformal_metric,
@@ -114,7 +115,7 @@ class DirichletAnalytic final : public BoundaryCondition {
       const ElementMap<3, Frame::Grid>& logical_to_grid_map,
       const domain::CoordinateMapBase<Frame::Grid, Frame::Inertial, 3>&
           grid_to_inertial_map,
-      const size_t ghost_zone_size) const;
+      const fd::Reconstructor& reconstructor) const;
 
  private:
   std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription_;

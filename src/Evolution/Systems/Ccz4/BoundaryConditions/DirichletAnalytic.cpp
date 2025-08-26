@@ -71,7 +71,9 @@ void DirichletAnalytic::fd_ghost(
     const ElementMap<3, Frame::Grid>& logical_to_grid_map,
     const domain::CoordinateMapBase<Frame::Grid, Frame::Inertial, 3>&
         grid_to_inertial_map,
-    const size_t ghost_zone_size) const {
+    const fd::Reconstructor& reconstructor) const {
+  const size_t ghost_zone_size = reconstructor.ghost_zone_size();
+
   const auto ghost_logical_coords =
       evolution::dg::subcell::fd::ghost_zone_logical_coordinates(
           subcell_mesh, ghost_zone_size, direction);

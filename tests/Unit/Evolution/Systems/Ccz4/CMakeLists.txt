@@ -5,8 +5,13 @@ set(LIBRARY "Test_Ccz4")
 
 set(LIBRARY_SOURCES
   BoundaryConditions/Test_DirichletAnalytic.cpp
+  FiniteDifference/Test_BoundaryConditionGhostData.cpp
   FiniteDifference/Test_Derivatives.cpp
+  FiniteDifference/Test_DummyReconstructor.cpp
+  FiniteDifference/Test_SetInitialEta.cpp
+  FiniteDifference/Test_SetK0.cpp
   FiniteDifference/Test_SoTimeDerivative.cpp
+  FiniteDifference/Test_Tags.cpp
   Test_ATilde.cpp
   Test_Christoffel.cpp
   Test_DerivChristoffel.cpp

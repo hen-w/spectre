@@ -76,14 +76,6 @@
 
 namespace grmhd::ValenciaDivClean {
 namespace {
-
-// These solution tag and metavariables are not strictly required for testing
-// subcell time derivative, but needed for compilation since
-// BoundaryConditionGhostData requires this to be in box.
-struct DummyAnalyticSolutionTag : db::SimpleTag {
-  using type = Solutions::SmoothFlow;
-};
-
 struct DummyEvolutionMetaVars {
   struct SubcellOptions {
     static constexpr bool subcell_enabled_at_external_boundary = false;
