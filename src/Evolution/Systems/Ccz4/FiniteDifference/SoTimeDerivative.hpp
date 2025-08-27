@@ -2,6 +2,8 @@
 // See LICENSE.txt for details.
 #pragma once
 
+#include <iostream>
+
 #include <cmath>
 #include <cstddef>
 
@@ -176,7 +178,6 @@ static void apply(
     const tnsr::iJ<DataVector, Dim>& d_gamma_hat,
     const tnsr::iJ<DataVector, Dim>& d_b, const bool shifting_shift) {
   constexpr double one_third = 1.0 / 3.0;
-
   // quantities we need for computing eq 4, 13 - 27
 
   determinant_and_inverse(det_conformal_spatial_metric,
@@ -194,6 +195,7 @@ static void apply(
                        (*inv_conformal_spatial_metric)(ti::I, ti::K) *
                        (*inv_conformal_spatial_metric)(ti::J, ti::L));
 
+  // std::cout << min(get(theta)) << std::endl;
   ASSERT(min(get(lapse)) > 0.0,
          "The lapse must be positive when using 1+log slicing.");
 
@@ -396,18 +398,21 @@ static void apply(
           (*inv_tau_times_conformal_metric)(ti::i, ti::j) *
               ((*det_conformal_spatial_metric)() - 1.0));
 
-  // time derivative of the lapse
-  ::tenex::evaluate<>(dt_lapse, (shift(ti::K) * field_a(ti::k) -
-                                 (*lapse_times_slicing_condition)() *
-                                     (*k_minus_k0_minus_2_theta_c)()) *
-                                    lapse());
-
-  // time derivative of the shift
-  ::tenex::evaluate<ti::I>(dt_shift, f * b(ti::I));
-
-  if (shifting_shift) {
-    ::tenex::update<ti::I>(
-        dt_shift, (*dt_shift)(ti::I) + shift(ti::K) * field_b(ti::k, ti::I));
+  if (System::evolve_lapse_and_shift) {
+    // time derivative of the lapse
+    ::tenex::evaluate<>(dt_lapse, (shift(ti::K) * field_a(ti::k) -
+                                   (*lapse_times_slicing_condition)() *
+                                       (*k_minus_k0_minus_2_theta_c)()) *
+                                      lapse());
+    // time derivative of the shift
+    ::tenex::evaluate<ti::I>(dt_shift, f * b(ti::I));
+    if (shifting_shift) {
+      ::tenex::update<ti::I>(
+          dt_shift, (*dt_shift)(ti::I) + shift(ti::K) * field_b(ti::k, ti::I));
+    }
+  } else {
+    *dt_lapse = make_with_value<Scalar<DataVector>>(lapse, 0.0);
+    *dt_shift = make_with_value<tnsr::I<DataVector, Dim>>(shift, 0.0);
   }
 
   // time derivative of the the conformal factor
@@ -726,8 +731,12 @@ struct SoTimeDerivative {
     // we assume the databox already has tags corresponding to dt of the evolved
     // variables
     using dt_variables_tag = db::add_tag_prefix<::Tags::dt, evolved_vars_tag>;
+
+    // resize here
+
     db::mutate<dt_variables_tag>(
         [&](const auto dt_vars_ptr) {
+          dt_vars_ptr->initialize(subcell_mesh.number_of_grid_points());
           auto& [conformal_factor_squared, det_conformal_spatial_metric,
                  inv_conformal_spatial_metric, inv_spatial_metric, inv_a_tilde,
                  a_tilde_times_field_b,

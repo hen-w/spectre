@@ -8,6 +8,7 @@ set(LIBRARY_SOURCES
   FiniteDifference/Test_BoundaryConditionGhostData.cpp
   FiniteDifference/Test_Derivatives.cpp
   FiniteDifference/Test_DummyReconstructor.cpp
+  FiniteDifference/Test_EnforceConstrainedEvolution.cpp
   FiniteDifference/Test_SetInitialEta.cpp
   FiniteDifference/Test_SetK0.cpp
   FiniteDifference/Test_SoTimeDerivative.cpp

@@ -6,6 +6,75 @@
 #include <cstdint>
 #include <vector>
 
+#include "DataStructures/Tensor/EagerMath/DeterminantAndInverse.hpp"
+#include "Domain/Creators/Factory3D.hpp"
+#include "Evolution/Actions/RunEventsAndDenseTriggers.hpp"
+#include "Evolution/Actions/RunEventsAndTriggers.hpp"
+#include "Evolution/ComputeTags.hpp"
+#include "Evolution/DgSubcell/Actions/Initialize.hpp"
+#include "Evolution/DgSubcell/Actions/Labels.hpp"
+#include "Evolution/DgSubcell/Actions/ReconstructionCommunication.hpp"
+#include "Evolution/DgSubcell/Actions/SelectNumericalMethod.hpp"
+#include "Evolution/DgSubcell/Actions/TakeTimeStep.hpp"
+#include "Evolution/DgSubcell/SetInterpolators.hpp"
+#include "Evolution/DgSubcell/Tags/MethodOrder.hpp"
+#include "Evolution/DgSubcell/Tags/ObserverCoordinates.hpp"
+#include "Evolution/DgSubcell/Tags/ObserverMesh.hpp"
+#include "Evolution/DgSubcell/Tags/TciStatus.hpp"
+#include "Evolution/DiscontinuousGalerkin/DgElementArray.hpp"
+#include "Evolution/DiscontinuousGalerkin/Initialization/Mortars.hpp"
+#include "Evolution/Initialization/DgDomain.hpp"
+#include "Evolution/Initialization/Evolution.hpp"
+#include "Evolution/Initialization/NonconservativeSystem.hpp"
+#include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/EnforceConstrainedEvolution.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/GhostData.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/Reconstructor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/SetInitialEta.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/SetK0.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/SoTimeDerivative.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
+#include "Evolution/Systems/Ccz4/Tags.hpp"
+#include "IO/Observer/Actions/RegisterEvents.hpp"
+#include "IO/Observer/Helpers.hpp"
+#include "IO/Observer/ObserverComponent.hpp"
+#include "NumericalAlgorithms/LinearOperators/Divergence.hpp"
+#include "Options/Protocols/FactoryCreation.hpp"
+#include "Parallel/Phase.hpp"
+#include "Parallel/PhaseControl/ExecutePhaseChange.hpp"
+#include "Parallel/PhaseControl/Factory.hpp"
+#include "Parallel/PhaseDependentActionList.hpp"
+#include "Parallel/Protocols/RegistrationMetavariables.hpp"
+#include "ParallelAlgorithms/Actions/AddComputeTags.hpp"
+#include "ParallelAlgorithms/Actions/AddSimpleTags.hpp"
+#include "ParallelAlgorithms/Actions/InitializeItems.hpp"
+#include "ParallelAlgorithms/Actions/MutateApply.hpp"
+#include "ParallelAlgorithms/Actions/TerminatePhase.hpp"
+#include "ParallelAlgorithms/Events/Factory.hpp"
+#include "ParallelAlgorithms/EventsAndDenseTriggers/DenseTrigger.hpp"
+#include "ParallelAlgorithms/EventsAndDenseTriggers/DenseTriggers/Factory.hpp"
+#include "ParallelAlgorithms/EventsAndTriggers/Actions/RunEventsOnFailure.hpp"
+#include "ParallelAlgorithms/EventsAndTriggers/Completion.hpp"
+#include "ParallelAlgorithms/EventsAndTriggers/Event.hpp"
+#include "ParallelAlgorithms/EventsAndTriggers/LogicalTriggers.hpp"
+#include "PointwiseFunctions/AnalyticSolutions/GeneralRelativity/Factory.hpp"
+#include "PointwiseFunctions/InitialDataUtilities/Tags/InitialData.hpp"
+#include "Time/Actions/AdvanceTime.hpp"
+#include "Time/Actions/CleanHistory.hpp"
+#include "Time/Actions/RecordTimeStepperData.hpp"
+#include "Time/Actions/SelfStartActions.hpp"
+#include "Time/Actions/UpdateU.hpp"
+#include "Time/ChangeSlabSize/Action.hpp"
+#include "Time/StepChoosers/Factory.hpp"
+#include "Time/Tags/TimeStepId.hpp"
+#include "Time/TimeSteppers/Factory.hpp"
+#include "Time/TimeSteppers/LtsTimeStepper.hpp"
+#include "Time/TimeSteppers/TimeStepper.hpp"
+#include "Time/Triggers/TimeTriggers.hpp"
+#include "Utilities/ProtocolHelpers.hpp"
+#include "Utilities/TMPL.hpp"
+
 /// \cond
 namespace Frame {
 struct Inertial;
@@ -19,14 +88,10 @@ class CProxy_GlobalCache;
 }  // namespace Parallel
 /// \endcond
 
-template <typename InterpolationTargetTags>
-struct EvolutionMetavars;
-
-template <typename... InterpolationTargetTags>
-struct EvolutionMetavars<tmpl::list<InterpolationTargetTags...>> {
+struct EvolutionMetavars {
   static constexpr bool use_dg_subcell = true;
-  static constexpr size_t volume_dim = 3;
-  using initial_data_list = Ccz4::fd::AllSolutions;
+  static constexpr size_t volume_dim = ::Ccz4::fd::System::volume_dim;
+  using initial_data_list = Ccz4::Solutions::all_solutions;
   using initial_data_tag = evolution::initial_data::Tags::InitialData;
   using system = Ccz4::fd::System;
   using temporal_id = Tags::TimeStepId;
@@ -38,50 +103,76 @@ struct EvolutionMetavars<tmpl::list<InterpolationTargetTags...>> {
 
   using analytic_variables_tags = typename system::variables_tag::tags_list;
 
-  using interpolator_source_vars =
-      tmpl::remove_duplicates<tmpl::flatten<tmpl::list<
-          typename InterpolationTargetTags::vars_to_interpolate_to_target...>>>;
-
-  using interpolation_target_tags = tmpl::list<InterpolationTargetTags...>;
-
   using analytic_compute = evolution::Tags::AnalyticSolutionsCompute<
       volume_dim, analytic_variables_tags, use_dg_subcell, initial_data_list>;
   using error_compute = Tags::ErrorsCompute<analytic_variables_tags>;
   using error_tags = db::wrap_tags_in<Tags::Error, analytic_variables_tags>;
-  using observe_fields = tmpl::push_back<tmpl::append<
-      typename system::variables_tag::tags_list, error_tags,
+  using observe_fields = tmpl::push_back<
+      tmpl::append<
+          typename system::variables_tag::tags_list, error_tags,
+          tmpl::conditional_t<
+              use_dg_subcell,
+              tmpl::list<
+                  evolution::dg::subcell::Tags::TciStatusCompute<volume_dim>,
+                  evolution::dg::subcell::Tags::MethodOrderCompute<volume_dim>>,
+              tmpl::list<>>>,
+      tmpl::conditional_t<
+          use_dg_subcell,
+          evolution::dg::subcell::Tags::ObserverCoordinatesCompute<
+              volume_dim, Frame::ElementLogical>,
+          ::Events::Tags::ObserverCoordinatesCompute<volume_dim,
+                                                     Frame::ElementLogical>>,
+      tmpl::conditional_t<
+          use_dg_subcell,
+          evolution::dg::subcell::Tags::ObserverCoordinatesCompute<volume_dim,
+                                                                   Frame::Grid>,
+          ::Events::Tags::ObserverCoordinatesCompute<volume_dim, Frame::Grid>>,
+      tmpl::conditional_t<
+          use_dg_subcell,
+          evolution::dg::subcell::Tags::ObserverCoordinatesCompute<
+              volume_dim, Frame::Inertial>,
+          ::Events::Tags::ObserverCoordinatesCompute<volume_dim,
+                                                     Frame::Inertial>>>;
+  using non_tensor_compute_tags = tmpl::list<
       tmpl::conditional_t<
           use_dg_subcell,
           tmpl::list<
-              evolution::dg::subcell::Tags::TciStatusCompute<volume_dim>,
-              evolution::dg::subcell::Tags::MethodOrderCompute<volume_dim>>,
-          tmpl::list<>>>>;
-  using non_tensor_compute_tags = tmpl::list<analytic_compute, error_compute>;
+              evolution::dg::subcell::Tags::ObserverMeshCompute<volume_dim>,
+              evolution::dg::subcell::Tags::ObserverInverseJacobianCompute<
+                  volume_dim, Frame::ElementLogical, Frame::Inertial>,
+              evolution::dg::subcell::Tags::
+                  ObserverJacobianAndDetInvJacobianCompute<
+                      volume_dim, Frame::ElementLogical, Frame::Inertial>>,
+          tmpl::list<::Events::Tags::ObserverMeshCompute<volume_dim>,
+                     ::Events::Tags::ObserverInverseJacobianCompute<
+                         volume_dim, Frame::ElementLogical, Frame::Inertial>,
+                     ::Events::Tags::ObserverJacobianCompute<
+                         volume_dim, Frame::ElementLogical, Frame::Inertial>,
+                     ::Events::Tags::ObserverDetInvJacobianCompute<
+                         Frame::ElementLogical, Frame::Inertial>>>,
+      analytic_compute, error_compute>;
 
   struct factory_creation
       : tt::ConformsTo<Options::protocols::FactoryCreation> {
     using factory_classes = tmpl::map<
         tmpl::pair<DenseTrigger, DenseTriggers::standard_dense_triggers>,
         tmpl::pair<DomainCreator<volume_dim>, domain_creators<volume_dim>>,
-        tmpl::pair<
-            Event,
-            tmpl::flatten<tmpl::list<
-                Events::Completion,
-                dg::Events::field_observations<volume_dim, observe_fields,
-                                               non_tensor_compute_tags>,
-                Events::time_events<system>,
-                intrp::Events::InterpolateWithoutInterpComponent<
-                    3, InterpolationTargetTags, interpolator_source_vars>...>>>,
+        tmpl::pair<Event,
+                   tmpl::flatten<tmpl::list<
+                       Events::Completion,
+                       dg::Events::field_observations<
+                           volume_dim, observe_fields, non_tensor_compute_tags>,
+                       Events::time_events<system>>>>,
         tmpl::pair<evolution::initial_data::InitialData, initial_data_list>,
         tmpl::pair<Ccz4::BoundaryConditions::BoundaryCondition,
                    Ccz4::BoundaryConditions::standard_boundary_conditions>,
         tmpl::pair<LtsTimeStepper, TimeSteppers::lts_time_steppers>,
         tmpl::pair<PhaseChange, PhaseControl::factory_creatable_classes>,
         tmpl::pair<StepChooser<StepChooserUse::LtsStep>,
-                   StepChoosers::standard_step_choosers<system>>,
-        tmpl::pair<
-            StepChooser<StepChooserUse::Slab>,
-            StepChoosers::standard_slab_choosers<system, local_time_stepping>>,
+                   StepChoosers::standard_step_choosers<system, false>>,
+        tmpl::pair<StepChooser<StepChooserUse::Slab>,
+                   StepChoosers::standard_slab_choosers<
+                       system, local_time_stepping, false>>,
         tmpl::pair<TimeSequence<double>,
                    TimeSequences::all_time_sequences<double>>,
         tmpl::pair<TimeSequence<std::uint64_t>,
@@ -121,20 +212,24 @@ struct EvolutionMetavars<tmpl::list<InterpolationTargetTags...>> {
   using dg_subcell_step_actions = tmpl::flatten<tmpl::list<
       evolution::dg::subcell::Actions::SelectNumericalMethod,
 
+      // the following actions should never happen cuz we are only doing FD
       Actions::Label<evolution::dg::subcell::Actions::Labels::BeginDg>,
       Actions::Goto<evolution::dg::subcell::Actions::Labels::EndOfSolvers>,
 
       Actions::Label<evolution::dg::subcell::Actions::Labels::BeginSubcell>,
       evolution::dg::subcell::Actions::SendDataForReconstruction<
-          volume_dim, GhostVariables, local_time_stepping,
+          volume_dim, SubcellOptions::GhostVariables, local_time_stepping,
           use_dg_element_collection>,
       evolution::dg::subcell::Actions::ReceiveAndSendDataForReconstruction<
-          volume_dim, GhostVariables, local_time_stepping,
+          volume_dim, SubcellOptions::GhostVariables, local_time_stepping,
           use_dg_element_collection>,
       evolution::dg::subcell::Actions::ReceiveDataForReconstruction<volume_dim>,
-      // the following action should never happen cuz we are only doing FD
+
       Actions::Label<
           evolution::dg::subcell::Actions::Labels::BeginSubcellAfterDgRollback>,
+
+      Actions::MutateApply<::Ccz4::fd::EnforceConstrainedEvolution>,
+      // subcell actions
       evolution::dg::subcell::fd::Actions::TakeTimeStep<
           Ccz4::fd::SoTimeDerivative>,
       Actions::RecordTimeStepperData<system>,
@@ -151,35 +246,30 @@ struct EvolutionMetavars<tmpl::list<InterpolationTargetTags...>> {
   using dg_registration_list =
       tmpl::list<observers::Actions::RegisterEventsWithObservers>;
 
-  using initialization_actions =
-      tmpl::flatten <
-      tmpl::list<
-          Initialization::Actions::InitializeItems<
-              Initialization::TimeStepping<EvolutionMetavars, TimeStepperBase>,
-              evolution::dg::Initialization::Domain<EvolutionMetavars>,
-              Initialization::TimeStepperHistory<EvolutionMetavars>>,
-          Initialization::Actions::AddSimpleTags<::Ccz4::Tags::Eta<DataVector>,
-                                                 ::Ccz4::Tags::K0<DataVector>>,
-          Actions::MutateApply<::Ccz4::fd::SetInitialEta>,
-          Actions::MutateApply<::Ccz4::fd::SetInitialK0>,
-          Initialization::Actions::NonconservativeSystem<system>,
+  using initialization_actions = tmpl::flatten<tmpl::list<
+      Initialization::Actions::InitializeItems<
+          Initialization::TimeStepping<EvolutionMetavars, TimeStepperBase>,
+          evolution::dg::Initialization::Domain<EvolutionMetavars>,
+          Initialization::TimeStepperHistory<EvolutionMetavars>>,
+      Initialization::Actions::NonconservativeSystem<system>,
 
-          tmpl::conditional_t<
-              use_dg_subcell,
-              tmpl::list<
-                  evolution::dg::subcell::Actions::SetSubcellGrid<
-                      volume_dim, system, false>,
-                  Actions::MutateApply<evolution::dg::subcell::SetInterpolators<
-                      volume_dim, Ccz4::fd::Tags::Reconstructor>>>,
+      tmpl::conditional_t<
+          use_dg_subcell,
+          tmpl::list<
+              evolution::dg::subcell::Actions::SetSubcellGrid<volume_dim,
+                                                              system, false>,
+              Actions::MutateApply<evolution::dg::subcell::SetInterpolators<
+                  volume_dim, Ccz4::fd::Tags::Reconstructor>>>,
+          tmpl::list<>>,
 
-              Initialization::Actions::AddComputeTags<
-                  StepChoosers::step_chooser_compute_tags<EvolutionMetavars,
-                                                          local_time_stepping>>,
-              ::evolution::dg::Initialization::Mortars<volume_dim, system>,
-              evolution::Actions::InitializeRunEventsAndDenseTriggers,
-              intrp::Actions::ElementInitInterpPoints<
-                  volume_dim, interpolation_target_tags>,
-              Parallel::Actions::TerminatePhase>>;
+      Initialization::Actions::AddComputeTags<
+          StepChoosers::step_chooser_compute_tags<EvolutionMetavars,
+                                                  local_time_stepping>>,
+      ::evolution::dg::Initialization::Mortars<volume_dim, system>,
+      evolution::Actions::InitializeRunEventsAndDenseTriggers,
+      Initialization::Actions::AddSimpleTags<::Ccz4::fd::SetInitialEta,
+                                             ::Ccz4::fd::SetK0>,
+      Parallel::Actions::TerminatePhase>>;
 
   using dg_element_array_component = DgElementArray<
       EvolutionMetavars,
@@ -218,19 +308,16 @@ struct EvolutionMetavars<tmpl::list<InterpolationTargetTags...>> {
         tmpl::map<tmpl::pair<dg_element_array_component, dg_registration_list>>;
   };
 
-  using component_list = tmpl::list<
-      observers::Observer<EvolutionMetavars>,
-      observers::ObserverWriter<EvolutionMetavars>,
-      intrp::InterpolationTarget<EvolutionMetavars, InterpolationTargetTags>...,
-      dg_element_array_component>;
+  using component_list =
+      tmpl::list<observers::Observer<EvolutionMetavars>,
+                 observers::ObserverWriter<EvolutionMetavars>,
+                 dg_element_array_component>;
 
   using const_global_cache_tags = tmpl::push_back<
       tmpl::conditional_t<use_dg_subcell,
                           tmpl::list<Ccz4::fd::Tags::Reconstructor>,
                           tmpl::list<>>,
-      initial_data_tag,
-      /* how is this specified? */
-      Ccz4::fd::Tags::ConstraintDampingParameter>;
+      initial_data_tag, domain::Tags::ExternalBoundaryConditions<3>>;
 
   static constexpr Options::String help{
       "Evolve the second-order Ccz4 formulation of the Einstein Field "

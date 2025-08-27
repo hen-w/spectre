@@ -10,8 +10,10 @@ spectre_target_sources(
   PRIVATE
   Derivatives.cpp
   DummyReconstructor.cpp
+  EventInstantiation.cpp
   GhostData.cpp
   Reconstructor.cpp
+  RegisterDerivedWithCharm.cpp
   )
 
 spectre_target_headers(
@@ -21,8 +23,10 @@ spectre_target_headers(
   BoundaryConditionGhostData.hpp
   Derivatives.hpp
   DummyReconstructor.hpp
+  EnforceConstrainedEvolution.hpp
   GhostData.hpp
   Reconstructor.hpp
+  RegisterDerivedWithCharm.hpp
   SetInitialEta.hpp
   SetInitialK0.hpp
   SoTimeDerivative.hpp
