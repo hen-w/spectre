@@ -26,6 +26,7 @@
 #include "Evolution/Systems/Ccz4/DerivZ4Constraint.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/BoundaryConditionGhostData.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Derivatives.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/Filter.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Ricci.hpp"
 #include "Evolution/Systems/Ccz4/RicciScalarPlusDivergenceZ4Constraint.hpp"
@@ -510,12 +511,15 @@ static void apply(
                                  (*contracted_symmetrized_d_field_b)(ti::k));
 
   // time derivative b^i
-  ::tenex::evaluate<ti::I>(dt_b, (*dt_gamma_hat)(ti::I)-eta() * b(ti::I));
-
-  if (shifting_shift) {
-    ::tenex::update<ti::I>(
-        dt_b, (*dt_b)(ti::I) + shift(ti::K) * (d_b(ti::k, ti::I) -
-                                               d_gamma_hat(ti::k, ti::I)));
+  if (System::evolve_lapse_and_shift) {
+    ::tenex::evaluate<ti::I>(dt_b, (*dt_gamma_hat)(ti::I)-eta() * b(ti::I));
+    if (shifting_shift) {
+      ::tenex::update<ti::I>(
+          dt_b, (*dt_b)(ti::I) + shift(ti::K) * (d_b(ti::k, ti::I) -
+                                                 d_gamma_hat(ti::k, ti::I)));
+    }
+  } else {
+    *dt_b = make_with_value<tnsr::I<DataVector, Dim>>(b, 0.0);
   }
 
   // Note that, we do not need to evolve the auxiliary variables in SO-CCZ4.
@@ -572,6 +576,20 @@ struct SoTimeDerivative {
       if (not element.external_boundaries().empty()) {
         fd::BoundaryConditionGhostData::apply(box, element, recons);
       }
+    }
+
+    if (System::kreiss_oliger_epsilon > 0.0) {
+      db::mutate<System::variables_tag>(
+          [&subcell_mesh](const auto evolved_vars_ptr, const auto& ghost_data) {
+            typename evolved_vars_tag::type filtered_vars = *evolved_vars_ptr;
+            Ccz4::fd::ccz4_kreiss_oliger_filter(
+                make_not_null(&filtered_vars), *evolved_vars_ptr, ghost_data,
+                subcell_mesh, 4, System::kreiss_oliger_epsilon);
+            *evolved_vars_ptr = filtered_vars;
+          },
+          box,
+          db::get<evolution::dg::subcell::Tags::GhostDataForReconstruction<3>>(
+              *box));
     }
 
     ::Ccz4::fd::spacetime_derivatives(

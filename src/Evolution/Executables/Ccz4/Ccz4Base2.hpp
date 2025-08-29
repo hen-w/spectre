@@ -110,6 +110,8 @@ struct EvolutionMetavars {
   using observe_fields = tmpl::push_back<
       tmpl::append<
           typename system::variables_tag::tags_list, error_tags,
+          typename db::add_tag_prefix<::Tags::dt,
+                                      system::variables_tag>::tags_list,
           tmpl::conditional_t<
               use_dg_subcell,
               tmpl::list<

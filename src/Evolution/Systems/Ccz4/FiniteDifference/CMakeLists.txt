@@ -11,6 +11,7 @@ spectre_target_sources(
   Derivatives.cpp
   DummyReconstructor.cpp
   EventInstantiation.cpp
+  Filter.cpp
   GhostData.cpp
   Reconstructor.cpp
   RegisterDerivedWithCharm.cpp
@@ -24,6 +25,7 @@ spectre_target_headers(
   Derivatives.hpp
   DummyReconstructor.hpp
   EnforceConstrainedEvolution.hpp
+  Filter.hpp
   GhostData.hpp
   Reconstructor.hpp
   RegisterDerivedWithCharm.hpp

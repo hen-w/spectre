@@ -28,7 +28,8 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Fd.SetK0", "[Unit][Evolution]") {
   db::mutate_apply<SetK0>(make_not_null(&box));
 
   CHECK(get<::Ccz4::Tags::K0<DataVector>>(box) ==
-        get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(box));
+        make_with_value<Scalar<DataVector>>(
+            get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(box), 0.0));
 }
 
 }  // namespace

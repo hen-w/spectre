@@ -45,9 +45,9 @@ target_link_libraries(
   ${LIBRARY}
   PUBLIC
   DataStructures
+  DgSubcell
   DomainStructure
   ErrorHandling
-  DgSubcell
   FiniteDifference
   GeneralRelativity
   Options

@@ -23,7 +23,10 @@ struct SetK0 : tt::ConformsTo<db::protocols::Mutator> {
 
   static void apply(const gsl::not_null<Scalar<DataVector>*> k_0,
                     const Scalar<DataVector>& trace_extrinsic_curvature) {
-    *k_0 = trace_extrinsic_curvature;
+    // there are two kinds of 1+log slicing conditions.
+    // in trumpet Schwarzschild, we set K0 to zero instead of
+    // the initial value of K
+    *k_0 = make_with_value<Scalar<DataVector>>(trace_extrinsic_curvature, 0.0);
   }
 };
 }  // namespace Ccz4::fd
