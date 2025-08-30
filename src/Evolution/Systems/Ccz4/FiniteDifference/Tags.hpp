@@ -12,6 +12,7 @@
 #include "Evolution/DgSubcell/Tags/SubcellOptions.hpp"
 #include "Evolution/DgSubcell/Tags/SubcellSolver.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Reconstructor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Evolution/Systems/Ccz4/TagsDeclarations.hpp"
 #include "Evolution/Tags.hpp"
@@ -44,12 +45,6 @@ struct Reconstructor : db::SimpleTag {
 };
 
 /// \brief Tags sent for second-order Ccz4 evolution.
-using spacetime_reconstruction_tags = tmpl::list<
-    ::Ccz4::Tags::ConformalMetric<DataVector, 3>, gr::Tags::Lapse<DataVector>,
-    gr::Tags::Shift<DataVector, 3>, ::Ccz4::Tags::ConformalFactor<DataVector>,
-    ::Ccz4::Tags::ATilde<DataVector, 3>,
-    gr::Tags::TraceExtrinsicCurvature<DataVector>,
-    ::Ccz4::Tags::Theta<DataVector>, ::Ccz4::Tags::GammaHat<DataVector, 3>,
-    ::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>;
+using spacetime_reconstruction_tags = System::variables_tag_list;
 }  // namespace Tags
 }  // namespace Ccz4::fd

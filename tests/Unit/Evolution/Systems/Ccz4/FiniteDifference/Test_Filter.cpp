@@ -59,14 +59,6 @@ void set_solution(
           &get<::Ccz4::Tags::ConformalMetric<DataVector, 3>>(*local_vars)[i]));
     }
     for (size_t i = 0; i < 1; ++i) {
-      (*local_dvs)[i + 6].set_data_ref(
-          make_not_null(&get<gr::Tags::Lapse<DataVector>>(*local_vars)[i]));
-    }
-    for (size_t i = 0; i < 3; ++i) {
-      (*local_dvs)[i + 7].set_data_ref(
-          make_not_null(&get<gr::Tags::Shift<DataVector, 3>>(*local_vars)[i]));
-    }
-    for (size_t i = 0; i < 1; ++i) {
       (*local_dvs)[i + 10].set_data_ref(make_not_null(
           &get<::Ccz4::Tags::ConformalFactor<DataVector>>(*local_vars)[i]));
     }
@@ -85,6 +77,14 @@ void set_solution(
     for (size_t i = 0; i < 3; ++i) {
       (*local_dvs)[i + 19].set_data_ref(make_not_null(
           &get<::Ccz4::Tags::GammaHat<DataVector, 3>>(*local_vars)[i]));
+    }
+    for (size_t i = 0; i < 1; ++i) {
+      (*local_dvs)[i + 6].set_data_ref(
+          make_not_null(&get<gr::Tags::Lapse<DataVector>>(*local_vars)[i]));
+    }
+    for (size_t i = 0; i < 3; ++i) {
+      (*local_dvs)[i + 7].set_data_ref(
+          make_not_null(&get<gr::Tags::Shift<DataVector, 3>>(*local_vars)[i]));
     }
     for (size_t i = 0; i < 3; ++i) {
       (*local_dvs)[i + 22].set_data_ref(make_not_null(
@@ -132,8 +132,6 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Fd.Filters",
 
   using System = ::Ccz4::fd::System;
 
-  Variables<System::variables_tag_list> result{
-      subcell_mesh.number_of_grid_points(), 0.0};
   Variables<System::variables_tag_list> volume_evolved_variables{
       subcell_mesh.number_of_grid_points()};
 
@@ -143,16 +141,28 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Fd.Filters",
   set_solution<System>(&volume_evolved_variables,
                        &neighbor_data_for_reconstruction, subcell_mesh,
                        logical_coords, 4, 3);
+  Variables<System::variables_tag_list> result = volume_evolved_variables;
 
   Ccz4::fd::ccz4_kreiss_oliger_filter(
       make_not_null(&result), volume_evolved_variables,
       neighbor_data_for_reconstruction, subcell_mesh, 4, 1.0);
+
+  if (not System::evolve_lapse_and_shift) {
+    CHECK(get<gr::Tags::Lapse<DataVector>>(result) ==
+          get<gr::Tags::Lapse<DataVector>>(volume_evolved_variables));
+    CHECK(get<gr::Tags::Shift<DataVector, 3>>(result) ==
+          get<gr::Tags::Shift<DataVector, 3>>(volume_evolved_variables));
+    CHECK(get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(result) ==
+          get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(
+              volume_evolved_variables));
+  }
 
   tmpl::for_each<System::variables_tag_list>(
       [&result, &volume_evolved_variables](auto tag_v) {
         using tag = tmpl::type_from<decltype(tag_v)>;
         auto& result_tensor = get<tag>(result);
         auto& volume_tensor = get<tag>(volume_evolved_variables);
+        CAPTURE(pretty_type::name<tag>());
         Approx custom_approx = Approx::custom().epsilon(1.0e-12).scale(1.0);
         for (size_t tensor_index = 0; tensor_index < result_tensor.size();
              ++tensor_index) {

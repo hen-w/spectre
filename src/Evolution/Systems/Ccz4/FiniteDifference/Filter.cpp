@@ -30,14 +30,28 @@ void ccz4_kreiss_oliger_filter(
     const DirectionalIdMap<3, evolution::dg::subcell::GhostData>&
         all_ghost_data,
     const Mesh<3>& volume_mesh, const size_t order, const double epsilon) {
-  if (UNLIKELY(result->number_of_grid_points() !=
-               volume_evolved_variables.number_of_grid_points())) {
-    result->initialize(volume_evolved_variables.number_of_grid_points());
+  if (volume_evolved_variables.number_of_grid_points() < 2 * order + 1) {
+    ERROR(
+        "The Kreiss-Oliger filter requires at least 2*order+1 points in each "
+        "direction. The current mesh has "
+        << volume_mesh.extents() << " points but order is " << order);
   }
+  // The result is assumed to be initialized to the volume_evolved_variables
+  ASSERT(result->number_of_grid_points() ==
+             volume_evolved_variables.number_of_grid_points(),
+         "The result and volume_evolved_variables must have the same number of "
+         "grid points. Found "
+             << result->number_of_grid_points() << " and "
+             << volume_evolved_variables.number_of_grid_points());
 
   using first_ccz4_tag = tmpl::front<System::variables_tag_list>;
   constexpr size_t number_of_ccz4_components =
-      Variables<System::variables_tag_list>::number_of_independent_components;
+      System::evolve_lapse_and_shift
+          ? Variables<
+                System::variables_tag_list>::number_of_independent_components
+          : Variables<
+                System::variables_tag_list>::number_of_independent_components -
+                7;
 
   DirectionMap<3, gsl::span<const double>> ghost_cell_vars{};
   for (const auto& [directional_element_id, ghost_data] : all_ghost_data) {

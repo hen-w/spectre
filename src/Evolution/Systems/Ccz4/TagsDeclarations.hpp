@@ -129,8 +129,6 @@ template <typename DataType, size_t Dim, typename Frame = Frame::Inertial>
 struct LapseTimesConformalMetric;
 template <typename DataType, size_t Dim, typename Frame = Frame::Inertial>
 struct SpatialRicciTensor;
-template <typename DataType, size_t Dim, typename Frame = Frame::Inertial>
-struct UpperSpatialZ4Contraint;
 }  // namespace Tags
 
 /// \brief Input option tags for the CCZ4 evolution system

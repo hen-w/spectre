@@ -728,11 +728,11 @@ struct SoTimeDerivative {
         ::Ccz4::Tags::DerivContractedConformalChristoffelSecondKind<DataVector,
                                                                     Dim>,
         ::Ccz4::Tags::SpatialZ4Constraint<DataVector, Dim>,
-        ::Ccz4::Tags::UpperSpatialZ4Contraint<DataVector, Dim>,
         ::Ccz4::Tags::GradSpatialZ4Constraint<DataVector, Dim>,
         ::Ccz4::Tags::RicciScalarPlusDivergenceZ4Constraint<DataVector>>>;
 
     TempVars temp_vars(num_pts);
+    tnsr::I<DataVector, Dim> upper_spatial_z4_constraint(num_pts);
 
     // free params
     const double c = 1.0;               // c = 1.0 in SO-CCZ4
@@ -752,8 +752,10 @@ struct SoTimeDerivative {
 
     // resize here
 
-    db::mutate<dt_variables_tag>(
-        [&](const auto dt_vars_ptr) {
+    db::mutate<dt_variables_tag,
+               ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, Dim>>(
+        [&](const auto dt_vars_ptr,
+            const auto upper_spatial_z4_constraint_ptr) {
           dt_vars_ptr->initialize(subcell_mesh.number_of_grid_points());
           auto& [conformal_factor_squared, det_conformal_spatial_metric,
                  inv_conformal_spatial_metric, inv_spatial_metric, inv_a_tilde,
@@ -780,8 +782,7 @@ struct SoTimeDerivative {
                  spatial_ricci_tensor, grad_grad_lapse, divergence_lapse,
                  contracted_conformal_christoffel_second_kind,
                  d_contracted_conformal_christoffel_second_kind,
-                 spatial_z4_constraint, upper_spatial_z4_constraint,
-                 grad_spatial_z4_constraint,
+                 spatial_z4_constraint, grad_spatial_z4_constraint,
                  ricci_scalar_plus_divergence_z4_constraint] = temp_vars;
           detail::apply(
               // LHS time derivatives of evolved variables: eq 4a - 4i
@@ -907,6 +908,9 @@ struct SoTimeDerivative {
                                 tmpl::size_t<Dim>, Frame::Inertial>>(
                   cell_centered_Ccz4_derivs),
               shifting_shift);
+
+          *upper_spatial_z4_constraint_ptr =
+              std::move(upper_spatial_z4_constraint);
         },
         box);
   }

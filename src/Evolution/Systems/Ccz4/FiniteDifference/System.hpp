@@ -15,28 +15,32 @@ struct System {
   using flux_variables = tmpl::list<>;
   using boundary_conditions_base = BoundaryConditions::BoundaryCondition;
   /* need to write a test for evolve_lapse_and_shift = false*/
-  static constexpr bool evolve_lapse_and_shift = false;
+  static constexpr bool evolve_lapse_and_shift = true;
   static constexpr bool constrained_evolution = true;
   static constexpr bool has_primitive_and_conservative_vars = false;
   static constexpr size_t volume_dim = 3;
   static constexpr bool is_in_flux_conservative_form = false;
   static constexpr bool shifting_shift = false;
-  static constexpr double kreiss_oliger_epsilon = 0.;
+  static constexpr double kreiss_oliger_epsilon = 0.1;
 
   // Later we may want to make these databox options
   // Unclear what to set these to for now
-  static constexpr double kappa_1 = 0.5;
+  static constexpr double kappa_1 = 0.6;
   static constexpr double kappa_2 = 0.;
   static constexpr double kappa_3 = 0.5;
   // The free parameter f in the Gamma-driver condition.
   static constexpr double f = 0.75;
 
+  // the order of the following evolved variables is important
+  // as it is assumed in the filter
   using variables_tag = ::Tags::Variables<tmpl::list<
-      ::Ccz4::Tags::ConformalMetric<DataVector, 3>, gr::Tags::Lapse<DataVector>,
-      gr::Tags::Shift<DataVector, 3>, ::Ccz4::Tags::ConformalFactor<DataVector>,
+      ::Ccz4::Tags::ConformalMetric<DataVector, 3>,
+      ::Ccz4::Tags::ConformalFactor<DataVector>,
       ::Ccz4::Tags::ATilde<DataVector, 3>,
       gr::Tags::TraceExtrinsicCurvature<DataVector>,
       ::Ccz4::Tags::Theta<DataVector>, ::Ccz4::Tags::GammaHat<DataVector, 3>,
+      // gauge variables
+      gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
       ::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>>;
 
   using variables_tag_list = typename variables_tag::tags_list;

@@ -123,6 +123,9 @@ void test_minkowski() {
                  std::numeric_limits<double>::signaling_NaN());
   const auto k_0 = make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
   const auto eta = make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
+  const auto upper_spatial_z4_constraint =
+      make_with_value<tnsr::I<DataVector, 3>>(
+          used_for_size, std::numeric_limits<double>::signaling_NaN());
 
   const Ccz4::fd::DummyReconstructor recons{};
 
@@ -134,7 +137,8 @@ void test_minkowski() {
       domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
-      ::Ccz4::Tags::K0<DataVector>, dt_variables_tag,
+      ::Ccz4::Tags::K0<DataVector>,
+      ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
       evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
           SpatialDim>,
@@ -143,6 +147,7 @@ void test_minkowski() {
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
       DummyEvolutionMetaVars{}, evolved_vars, eta, k_0,
+      upper_spatial_z4_constraint,
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -245,6 +250,9 @@ void test_kerrschild() {
       d_lapse, slicing_condition,
       get<::Ccz4::Tags::Theta<DataVector>>(evolved_vars),
       get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(evolved_vars));
+  const auto upper_spatial_z4_constraint =
+      make_with_value<tnsr::I<DataVector, 3>>(
+          used_for_size, std::numeric_limits<double>::signaling_NaN());
 
   const Ccz4::fd::DummyReconstructor recons{};
 
@@ -256,7 +264,8 @@ void test_kerrschild() {
       domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
-      ::Ccz4::Tags::K0<DataVector>, dt_variables_tag,
+      ::Ccz4::Tags::K0<DataVector>,
+      ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
       evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
           SpatialDim>,
@@ -265,6 +274,7 @@ void test_kerrschild() {
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
       DummyEvolutionMetaVars{}, evolved_vars, eta, k_0,
+      upper_spatial_z4_constraint,
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -388,6 +398,9 @@ void test_gauge_plane_wave(
       get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(evolved_vars);
 
   const auto eta = make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
+  const auto upper_spatial_z4_constraint =
+      make_with_value<tnsr::I<DataVector, 3>>(
+          used_for_size, std::numeric_limits<double>::signaling_NaN());
 
   const Ccz4::fd::DummyReconstructor recons{};
 
@@ -399,7 +412,8 @@ void test_gauge_plane_wave(
       domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
-      ::Ccz4::Tags::K0<DataVector>, dt_variables_tag,
+      ::Ccz4::Tags::K0<DataVector>,
+      ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
       evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
           SpatialDim>,
@@ -408,6 +422,7 @@ void test_gauge_plane_wave(
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
       DummyEvolutionMetaVars{}, evolved_vars, eta, k_0,
+      upper_spatial_z4_constraint,
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,

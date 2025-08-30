@@ -27,6 +27,7 @@
 #include "Evolution/Initialization/Evolution.hpp"
 #include "Evolution/Initialization/NonconservativeSystem.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/AddUpperSpatialZ4Constraint.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/EnforceConstrainedEvolution.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/GhostData.hpp"
@@ -110,6 +111,7 @@ struct EvolutionMetavars {
   using observe_fields = tmpl::push_back<
       tmpl::append<
           typename system::variables_tag::tags_list, error_tags,
+          tmpl::list<::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>>,
           typename db::add_tag_prefix<::Tags::dt,
                                       system::variables_tag>::tags_list,
           tmpl::conditional_t<
@@ -269,8 +271,9 @@ struct EvolutionMetavars {
                                                   local_time_stepping>>,
       ::evolution::dg::Initialization::Mortars<volume_dim, system>,
       evolution::Actions::InitializeRunEventsAndDenseTriggers,
-      Initialization::Actions::AddSimpleTags<::Ccz4::fd::SetInitialEta,
-                                             ::Ccz4::fd::SetK0>,
+      Initialization::Actions::AddSimpleTags<
+          ::Ccz4::fd::SetInitialEta, ::Ccz4::fd::SetK0,
+          ::Ccz4::fd::AddUpperSpatialZ4Constraint>,
       Parallel::Actions::TerminatePhase>>;
 
   using dg_element_array_component = DgElementArray<

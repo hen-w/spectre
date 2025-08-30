@@ -143,8 +143,8 @@ void test_fd(const U& boundary_condition, const T& analytic_solution_or_data) {
         get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(analytic_vars);
     return expected;
   }();
-  auto& [conformal_metric, lapse, shift, conformal_factor, a_tilde,
-         trace_extrinsic_curvature, theta, gamma_hat, auxiliary_shift_b] = vars;
+  auto& [conformal_metric, conformal_factor, a_tilde, trace_extrinsic_curvature,
+         theta, gamma_hat, lapse, shift, auxiliary_shift_b] = vars;
 
   boundary_condition.fd_ghost(
       make_not_null(&conformal_metric), make_not_null(&lapse),
