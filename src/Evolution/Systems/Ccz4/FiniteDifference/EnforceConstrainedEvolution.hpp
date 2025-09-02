@@ -8,6 +8,7 @@
 #include "DataStructures/Tensor/EagerMath/DeterminantAndInverse.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/ProtocolHelpers.hpp"
@@ -15,7 +16,7 @@
 
 namespace Ccz4::fd {
 /*!
- * \brief If System::constrained_evolution is true, enforce
+ * \brief If constrained_evolution is true, enforce
  * the unit determinant constraint on the conformal spatial metric
  * and traceless constraint on the ATilde
  */
@@ -23,12 +24,13 @@ struct EnforceConstrainedEvolution : tt::ConformsTo<db::protocols::Mutator> {
   static constexpr size_t dim = System::volume_dim;
   using return_tags = tmpl::list<::Ccz4::Tags::ConformalMetric<DataVector, dim>,
                                  ::Ccz4::Tags::ATilde<DataVector, dim>>;
-  using argument_tags = tmpl::list<>;
+  using argument_tags = tmpl::list<::Ccz4::fd::Tags::ConstrainedEvolution>;
 
   static void apply(
       const gsl::not_null<tnsr::ii<DataVector, dim>*> conformal_spatial_metric,
-      const gsl::not_null<tnsr::ii<DataVector, dim>*> a_tilde) {
-    if (System::constrained_evolution) {
+      const gsl::not_null<tnsr::ii<DataVector, dim>*> a_tilde,
+      const bool constrained_evolution) {
+    if (constrained_evolution) {
       Scalar<DataVector> det_conformal_spatial_metric{};
       determinant(make_not_null(&det_conformal_spatial_metric),
                   *conformal_spatial_metric);

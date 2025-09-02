@@ -129,12 +129,20 @@ void test_minkowski() {
 
   const Ccz4::fd::DummyReconstructor recons{};
 
+  const double kappa_1 = 0.1;
+  const double kappa_2 = 0.2;
+  const double kappa_3 = 0.3;
+  const double kreiss_oliger_epsilon = 0.0;
+
   // put needed quantities into databox
   using dt_variables_tag =
       db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
 
   auto box = db::create<db::AddSimpleTags<
-      domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
+      ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
+      ::Ccz4::fd::Tags::EvolveLapseAndShift,
+      ::Ccz4::fd::Tags::KreissOligerEpsilon, domain::Tags::Element<SpatialDim>,
+      fd::Tags::Reconstructor,
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
       ::Ccz4::Tags::K0<DataVector>,
@@ -143,7 +151,7 @@ void test_minkowski() {
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
           SpatialDim>,
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>>>(
-      element,
+      kappa_1, kappa_2, kappa_3, true, kreiss_oliger_epsilon, element,
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
       DummyEvolutionMetaVars{}, evolved_vars, eta, k_0,
@@ -256,12 +264,20 @@ void test_kerrschild() {
 
   const Ccz4::fd::DummyReconstructor recons{};
 
+  const double kappa_1 = 0.1;
+  const double kappa_2 = 0.2;
+  const double kappa_3 = 0.3;
+  const double kreiss_oliger_epsilon = 0.0;
+
   // put needed quantities into databox
   using dt_variables_tag =
       db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
 
   auto box = db::create<db::AddSimpleTags<
-      domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
+      ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
+      ::Ccz4::fd::Tags::EvolveLapseAndShift,
+      ::Ccz4::fd::Tags::KreissOligerEpsilon, domain::Tags::Element<SpatialDim>,
+      fd::Tags::Reconstructor,
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
       ::Ccz4::Tags::K0<DataVector>,
@@ -270,7 +286,7 @@ void test_kerrschild() {
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
           SpatialDim>,
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>>>(
-      element,
+      kappa_1, kappa_2, kappa_3, true, kreiss_oliger_epsilon, element,
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
       DummyEvolutionMetaVars{}, evolved_vars, eta, k_0,
@@ -404,12 +420,20 @@ void test_gauge_plane_wave(
 
   const Ccz4::fd::DummyReconstructor recons{};
 
+  const double kappa_1 = 0.1;
+  const double kappa_2 = 0.2;
+  const double kappa_3 = 0.3;
+  const double kreiss_oliger_epsilon = 0.0;
+
   // put needed quantities into databox
   using dt_variables_tag =
       db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
 
   auto box = db::create<db::AddSimpleTags<
-      domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
+      ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
+      ::Ccz4::fd::Tags::EvolveLapseAndShift,
+      ::Ccz4::fd::Tags::KreissOligerEpsilon, domain::Tags::Element<SpatialDim>,
+      fd::Tags::Reconstructor,
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
       ::Ccz4::Tags::K0<DataVector>,
@@ -418,7 +442,7 @@ void test_gauge_plane_wave(
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
           SpatialDim>,
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>>>(
-      element,
+      kappa_1, kappa_2, kappa_3, true, kreiss_oliger_epsilon, element,
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
       DummyEvolutionMetaVars{}, evolved_vars, eta, k_0,

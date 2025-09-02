@@ -37,5 +37,6 @@ void ccz4_kreiss_oliger_filter(
     const Variables<System::variables_tag_list>& volume_evolved_variables,
     const DirectionalIdMap<3, evolution::dg::subcell::GhostData>&
         all_ghost_data,
-    const Mesh<3>& volume_mesh, size_t order, double epsilon);
+    const bool evolve_lapse_and_shift, const Mesh<3>& volume_mesh, size_t order,
+    double epsilon);
 }  // namespace Ccz4::fd

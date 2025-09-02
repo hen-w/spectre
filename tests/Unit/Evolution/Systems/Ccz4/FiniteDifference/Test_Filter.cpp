@@ -143,11 +143,13 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Fd.Filters",
                        logical_coords, 4, 3);
   Variables<System::variables_tag_list> result = volume_evolved_variables;
 
+  const bool evolve_lapse_and_shift = false;
   Ccz4::fd::ccz4_kreiss_oliger_filter(
       make_not_null(&result), volume_evolved_variables,
-      neighbor_data_for_reconstruction, subcell_mesh, 4, 1.0);
+      neighbor_data_for_reconstruction, evolve_lapse_and_shift, subcell_mesh, 4,
+      1.0);
 
-  if (not System::evolve_lapse_and_shift) {
+  if (not evolve_lapse_and_shift) {
     CHECK(get<gr::Tags::Lapse<DataVector>>(result) ==
           get<gr::Tags::Lapse<DataVector>>(volume_evolved_variables));
     CHECK(get<gr::Tags::Shift<DataVector, 3>>(result) ==

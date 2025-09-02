@@ -30,6 +30,33 @@ struct Reconstructor {
   static constexpr Options::String help = {"The reconstruction scheme to use."};
   using group = evolution::dg::subcell::OptionTags::SubcellSolverGroup;
 };
+
+/// \brief Option tag for whether to evolve the lapse and shift
+struct EvolveLapseAndShift {
+  using type = bool;
+
+  static constexpr Options::String help = {
+      "The option to use time-independent laspe and shift."};
+  using group = ::Ccz4::OptionTags::Ccz4Group;
+};
+
+/// \brief Option tag for whether to use constrained evolution
+struct ConstrainedEvolution {
+  using type = bool;
+
+  static constexpr Options::String help = {
+      "Whether to use constrained evolution."};
+  using group = ::Ccz4::OptionTags::Ccz4Group;
+};
+
+/// \brief Option tag for the epsilon parameter of the Kreiss-Oliger dissipation
+struct KreissOligerEpsilon {
+  using type = double;
+
+  static constexpr Options::String help = {
+      "The epsilon parameter for Kreiss-Oliger dissipation."};
+  using group = ::Ccz4::OptionTags::Ccz4Group;
+};
 }  // namespace OptionTags
 
 namespace Tags {
@@ -41,6 +68,45 @@ struct Reconstructor : db::SimpleTag {
   static constexpr bool pass_metavariables = false;
   static type create_from_options(const type& reconstructor) {
     return reconstructor->get_clone();
+  }
+};
+
+/*!
+ * \brief Whether to evolve the lapse and shift
+ */
+struct EvolveLapseAndShift : db::SimpleTag {
+  using type = bool;
+  using option_tags = tmpl::list<OptionTags::EvolveLapseAndShift>;
+
+  static constexpr bool pass_metavariables = false;
+  static type create_from_options(const bool evolve_lapse_and_shift) {
+    return evolve_lapse_and_shift;
+  }
+};
+
+/*!
+ * \brief Whether to use constrained evolution
+ */
+struct ConstrainedEvolution : db::SimpleTag {
+  using type = bool;
+  using option_tags = tmpl::list<OptionTags::ConstrainedEvolution>;
+
+  static constexpr bool pass_metavariables = false;
+  static type create_from_options(const bool constrained_evolution) {
+    return constrained_evolution;
+  }
+};
+
+/*!
+ * \brief The Kreiss-Oliger dissipation parameter \f$\epsilon\f$
+ */
+struct KreissOligerEpsilon : db::SimpleTag {
+  using type = double;
+  using option_tags = tmpl::list<OptionTags::KreissOligerEpsilon>;
+
+  static constexpr bool pass_metavariables = false;
+  static type create_from_options(const double kreiss_oliger_epsilon) {
+    return kreiss_oliger_epsilon;
   }
 };
 

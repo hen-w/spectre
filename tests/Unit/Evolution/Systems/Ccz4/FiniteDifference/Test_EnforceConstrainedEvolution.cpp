@@ -29,13 +29,14 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Fd.ECE", "[Unit][Evolution]") {
   }
 
   auto box = db::create<
-      db::AddSimpleTags<::Ccz4::Tags::ConformalMetric<DataVector, dim>,
+      db::AddSimpleTags<::Ccz4::fd::Tags::ConstrainedEvolution,
+                        ::Ccz4::Tags::ConformalMetric<DataVector, dim>,
                         ::Ccz4::Tags::ATilde<DataVector, dim>>>(
-      conformal_spatial_metric, a_tilde);
+      true, conformal_spatial_metric, a_tilde);
   db::mutate_apply<EnforceConstrainedEvolution>(make_not_null(&box));
 
   for (size_t i = 0; i < dim; ++i) {
-    if (System::constrained_evolution) {
+    if (get<::Ccz4::fd::Tags::ConstrainedEvolution>(box)) {
       conformal_spatial_metric.get(i, i) = DataVector{num_pts, 1.};
       a_tilde.get(i, i) = DataVector{num_pts, 0.};
     } else {

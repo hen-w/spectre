@@ -36,6 +36,7 @@
 #include "Evolution/Systems/Ccz4/FiniteDifference/SetK0.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/SoTimeDerivative.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "IO/Observer/Actions/RegisterEvents.hpp"
 #include "IO/Observer/Helpers.hpp"
@@ -221,6 +222,7 @@ struct EvolutionMetavars {
       Actions::Goto<evolution::dg::subcell::Actions::Labels::EndOfSolvers>,
 
       Actions::Label<evolution::dg::subcell::Actions::Labels::BeginSubcell>,
+      Actions::MutateApply<::Ccz4::fd::EnforceConstrainedEvolution>,
       evolution::dg::subcell::Actions::SendDataForReconstruction<
           volume_dim, SubcellOptions::GhostVariables, local_time_stepping,
           use_dg_element_collection>,
@@ -232,7 +234,6 @@ struct EvolutionMetavars {
       Actions::Label<
           evolution::dg::subcell::Actions::Labels::BeginSubcellAfterDgRollback>,
 
-      Actions::MutateApply<::Ccz4::fd::EnforceConstrainedEvolution>,
       // subcell actions
       evolution::dg::subcell::fd::Actions::TakeTimeStep<
           Ccz4::fd::SoTimeDerivative>,
@@ -319,9 +320,14 @@ struct EvolutionMetavars {
                  dg_element_array_component>;
 
   using const_global_cache_tags = tmpl::push_back<
-      tmpl::conditional_t<use_dg_subcell,
-                          tmpl::list<Ccz4::fd::Tags::Reconstructor>,
-                          tmpl::list<>>,
+      tmpl::conditional_t<
+          use_dg_subcell,
+          tmpl::list<Ccz4::fd::Tags::Reconstructor,
+                     Ccz4::fd::Tags::ConstrainedEvolution,
+                     Ccz4::fd::Tags::EvolveLapseAndShift,
+                     Ccz4::fd::Tags::KreissOligerEpsilon, Ccz4::Tags::Kappa1,
+                     Ccz4::Tags::Kappa2, Ccz4::Tags::Kappa3>,
+          tmpl::list<>>,
       initial_data_tag, domain::Tags::ExternalBoundaryConditions<3>>;
 
   static constexpr Options::String help{

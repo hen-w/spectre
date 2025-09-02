@@ -14,20 +14,11 @@ namespace Ccz4::fd {
 struct System {
   using flux_variables = tmpl::list<>;
   using boundary_conditions_base = BoundaryConditions::BoundaryCondition;
-  /* need to write a test for evolve_lapse_and_shift = false*/
-  static constexpr bool evolve_lapse_and_shift = true;
-  static constexpr bool constrained_evolution = true;
   static constexpr bool has_primitive_and_conservative_vars = false;
   static constexpr size_t volume_dim = 3;
   static constexpr bool is_in_flux_conservative_form = false;
   static constexpr bool shifting_shift = false;
-  static constexpr double kreiss_oliger_epsilon = 0.1;
 
-  // Later we may want to make these databox options
-  // Unclear what to set these to for now
-  static constexpr double kappa_1 = 0.6;
-  static constexpr double kappa_2 = 0.;
-  static constexpr double kappa_3 = 0.5;
   // The free parameter f in the Gamma-driver condition.
   static constexpr double f = 0.75;
 

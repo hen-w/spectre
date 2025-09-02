@@ -177,7 +177,8 @@ static void apply(
     const tnsr::i<DataVector, Dim>& d_trace_extrinsic_curvature,
     const tnsr::i<DataVector, Dim>& d_theta,
     const tnsr::iJ<DataVector, Dim>& d_gamma_hat,
-    const tnsr::iJ<DataVector, Dim>& d_b, const bool shifting_shift) {
+    const tnsr::iJ<DataVector, Dim>& d_b, const bool shifting_shift,
+    const bool evolve_lapse_and_shift) {
   constexpr double one_third = 1.0 / 3.0;
   // quantities we need for computing eq 4, 13 - 27
 
@@ -399,7 +400,7 @@ static void apply(
           (*inv_tau_times_conformal_metric)(ti::i, ti::j) *
               ((*det_conformal_spatial_metric)() - 1.0));
 
-  if (System::evolve_lapse_and_shift) {
+  if (evolve_lapse_and_shift) {
     // time derivative of the lapse
     ::tenex::evaluate<>(dt_lapse, (shift(ti::K) * field_a(ti::k) -
                                    (*lapse_times_slicing_condition)() *
@@ -511,7 +512,7 @@ static void apply(
                                  (*contracted_symmetrized_d_field_b)(ti::k));
 
   // time derivative b^i
-  if (System::evolve_lapse_and_shift) {
+  if (evolve_lapse_and_shift) {
     ::tenex::evaluate<ti::I>(dt_b, (*dt_gamma_hat)(ti::I)-eta() * b(ti::I));
     if (shifting_shift) {
       ::tenex::update<ti::I>(
@@ -578,13 +579,19 @@ struct SoTimeDerivative {
       }
     }
 
-    if (System::kreiss_oliger_epsilon > 0.0) {
+    const bool evolve_lapse_and_shift =
+        get<::Ccz4::fd::Tags::EvolveLapseAndShift>(*box);
+    const double kreiss_oliger_epsilon =
+        db::get<Ccz4::fd::Tags::KreissOligerEpsilon>(*box);
+
+    if (kreiss_oliger_epsilon > 0.0) {
       db::mutate<System::variables_tag>(
-          [&subcell_mesh](const auto evolved_vars_ptr, const auto& ghost_data) {
+          [&subcell_mesh, evolve_lapse_and_shift, kreiss_oliger_epsilon](
+              const auto evolved_vars_ptr, const auto& ghost_data) {
             typename evolved_vars_tag::type filtered_vars = *evolved_vars_ptr;
             Ccz4::fd::ccz4_kreiss_oliger_filter(
                 make_not_null(&filtered_vars), *evolved_vars_ptr, ghost_data,
-                subcell_mesh, 4, System::kreiss_oliger_epsilon);
+                evolve_lapse_and_shift, subcell_mesh, 4, kreiss_oliger_epsilon);
             *evolved_vars_ptr = filtered_vars;
           },
           box,
@@ -740,9 +747,9 @@ struct SoTimeDerivative {
     const Scalar<DataVector>& eta = get<::Ccz4::Tags::Eta<DataVector>>(*box);
     const double f = Ccz4::fd::System::f;
     const Scalar<DataVector>& k_0 = get<::Ccz4::Tags::K0<DataVector>>(*box);
-    const double kappa_1 = Ccz4::fd::System::kappa_1;
-    const double kappa_2 = Ccz4::fd::System::kappa_2;
-    const double kappa_3 = Ccz4::fd::System::kappa_3;
+    const double kappa_1 = get<::Ccz4::Tags::Kappa1>(*box);
+    const double kappa_2 = get<::Ccz4::Tags::Kappa2>(*box);
+    const double kappa_3 = get<::Ccz4::Tags::Kappa3>(*box);
     const double one_over_relaxation_time = 0.0;  // \tau^{-1} = 0 in SO-CCZ4
     const bool shifting_shift = Ccz4::fd::System::shifting_shift;
 
@@ -907,7 +914,7 @@ struct SoTimeDerivative {
               get<::Tags::deriv<::Ccz4::Tags::AuxiliaryShiftB<DataVector, Dim>,
                                 tmpl::size_t<Dim>, Frame::Inertial>>(
                   cell_centered_Ccz4_derivs),
-              shifting_shift);
+              shifting_shift, evolve_lapse_and_shift);
 
           *upper_spatial_z4_constraint_ptr =
               std::move(upper_spatial_z4_constraint);

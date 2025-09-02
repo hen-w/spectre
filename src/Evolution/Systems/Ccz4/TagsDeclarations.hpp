@@ -71,6 +71,9 @@ struct GammaDriverParam;
 struct Kappa1;
 struct Kappa2;
 struct Kappa3;
+struct EvolveLapseAndShift;
+struct ConstrainedEvolution;
+struct KreissOligerEpsilon;
 
 // Temporary expressions for computing above quantities of interest
 template <typename DataType, size_t Dim, typename Frame = Frame::Inertial>
