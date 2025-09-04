@@ -591,7 +591,7 @@ struct SoTimeDerivative {
             typename evolved_vars_tag::type filtered_vars = *evolved_vars_ptr;
             Ccz4::fd::ccz4_kreiss_oliger_filter(
                 make_not_null(&filtered_vars), *evolved_vars_ptr, ghost_data,
-                evolve_lapse_and_shift, subcell_mesh, 2 * fd_order,
+                evolve_lapse_and_shift, subcell_mesh, fd_order + 2,
                 kreiss_oliger_epsilon);
             *evolved_vars_ptr = filtered_vars;
           },

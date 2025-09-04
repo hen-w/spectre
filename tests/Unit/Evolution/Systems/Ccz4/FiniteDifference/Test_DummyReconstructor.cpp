@@ -20,7 +20,7 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Fd.DummyReconstructor",
       dynamic_cast<const Ccz4::fd::DummyReconstructor*>(
           dummy_from_options_base.get());
   REQUIRE(dummy_from_options != nullptr);
-  CHECK(dummy_from_options->ghost_zone_size() == 2);
+  CHECK(dummy_from_options->ghost_zone_size() == 3);
 }
 
 }  // namespace
