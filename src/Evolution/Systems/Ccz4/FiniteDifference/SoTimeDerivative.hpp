@@ -586,12 +586,13 @@ struct SoTimeDerivative {
 
     if (kreiss_oliger_epsilon > 0.0) {
       db::mutate<System::variables_tag>(
-          [&subcell_mesh, evolve_lapse_and_shift, kreiss_oliger_epsilon](
-              const auto evolved_vars_ptr, const auto& ghost_data) {
+          [&subcell_mesh, evolve_lapse_and_shift, kreiss_oliger_epsilon,
+           fd_order](const auto evolved_vars_ptr, const auto& ghost_data) {
             typename evolved_vars_tag::type filtered_vars = *evolved_vars_ptr;
             Ccz4::fd::ccz4_kreiss_oliger_filter(
                 make_not_null(&filtered_vars), *evolved_vars_ptr, ghost_data,
-                evolve_lapse_and_shift, subcell_mesh, 4, kreiss_oliger_epsilon);
+                evolve_lapse_and_shift, subcell_mesh, 2 * fd_order,
+                kreiss_oliger_epsilon);
             *evolved_vars_ptr = filtered_vars;
           },
           box,

@@ -30,8 +30,9 @@ spectre_target_headers(
   GhostData.hpp
   Reconstructor.hpp
   RegisterDerivedWithCharm.hpp
+  ResizeTimeDerivatives.hpp
   SetInitialEta.hpp
-  SetInitialK0.hpp
+  SetK0.hpp
   SoTimeDerivative.hpp
   System.hpp
   Tags.hpp

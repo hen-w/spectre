@@ -33,7 +33,8 @@ class DummyReconstructor : public Reconstructor {
 
   void pup(PUP::er& p) override;
 
-  size_t ghost_zone_size() const override { return 2; }
+  // 4 ghost pts needed for 8th order KO filter
+  size_t ghost_zone_size() const override { return 4; }
 };
 
 }  // namespace Ccz4::fd

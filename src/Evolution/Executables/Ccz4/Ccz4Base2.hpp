@@ -32,6 +32,7 @@
 #include "Evolution/Systems/Ccz4/FiniteDifference/EnforceConstrainedEvolution.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/GhostData.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Reconstructor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/ResizeTimeDerivatives.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/SetInitialEta.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/SetK0.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/SoTimeDerivative.hpp"
@@ -264,7 +265,8 @@ struct EvolutionMetavars {
               evolution::dg::subcell::Actions::SetSubcellGrid<volume_dim,
                                                               system, false>,
               Actions::MutateApply<evolution::dg::subcell::SetInterpolators<
-                  volume_dim, Ccz4::fd::Tags::Reconstructor>>>,
+                  volume_dim, Ccz4::fd::Tags::Reconstructor>>,
+              Actions::MutateApply<Ccz4::fd::ResizeTimeDerivatives>>,
           tmpl::list<>>,
 
       Initialization::Actions::AddComputeTags<

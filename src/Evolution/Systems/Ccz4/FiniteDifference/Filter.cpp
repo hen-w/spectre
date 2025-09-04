@@ -31,11 +31,12 @@ void ccz4_kreiss_oliger_filter(
         all_ghost_data,
     const bool evolve_lapse_and_shift, const Mesh<3>& volume_mesh,
     const size_t order, const double epsilon) {
-  if (volume_evolved_variables.number_of_grid_points() < 2 * order + 1) {
+  if (volume_evolved_variables.number_of_grid_points() < order / 2) {
     ERROR(
-        "The Kreiss-Oliger filter requires at least 2*order+1 points in each "
-        "direction. The current mesh has "
-        << volume_mesh.extents() << " points but order is " << order);
+        "The Kreiss-Oliger filter requires at least order+1 points in each "
+        "direction, i.e. order / 2 points in each element. The current mesh "
+        "has extents "
+        << volume_mesh.extents() << " but order is " << order);
   }
   // The result is assumed to be initialized to the volume_evolved_variables
   ASSERT(result->number_of_grid_points() ==
