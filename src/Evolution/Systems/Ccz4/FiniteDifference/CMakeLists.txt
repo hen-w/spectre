@@ -22,6 +22,7 @@ spectre_target_headers(
   INCLUDE_DIRECTORY ${CMAKE_SOURCE_DIR}/src
   HEADERS
   AddUpperSpatialZ4Constraint.hpp
+  ApplyFilter.hpp
   BoundaryConditionGhostData.hpp
   Derivatives.hpp
   DummyReconstructor.hpp

@@ -28,6 +28,7 @@
 #include "Evolution/Initialization/NonconservativeSystem.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/AddUpperSpatialZ4Constraint.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/ApplyFilter.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/EnforceConstrainedEvolution.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/GhostData.hpp"
@@ -241,7 +242,7 @@ struct EvolutionMetavars {
       Actions::RecordTimeStepperData<system>,
       evolution::Actions::RunEventsAndDenseTriggers<
           events_and_dense_triggers_subcell_postprocessors>,
-      Actions::UpdateU<system>,
+      Actions::UpdateU<system>, Actions::MutateApply<::Ccz4::fd::ApplyFilter>,
       Actions::CleanHistory<system, local_time_stepping>,
       Actions::Label<evolution::dg::subcell::Actions::Labels::EndOfSolvers>>>;
 

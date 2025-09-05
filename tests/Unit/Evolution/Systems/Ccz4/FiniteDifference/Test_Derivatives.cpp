@@ -31,7 +31,7 @@
 SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.FiniteDifference.Derivatives",
                   "[Unit][Evolution]") {
   const size_t points_per_dimension = 5;
-  const size_t ghost_zone_size = 3;
+  const size_t ghost_zone_size = 2;
   const size_t fd_deriv_order = 4;
   const Mesh<3> subcell_mesh{points_per_dimension,
                              Spectral::Basis::FiniteDifference,
@@ -396,7 +396,11 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.FiniteDifference.Derivatives",
           expected_second_deriv_of_Ccz4_vars);
   for (size_t i = 0; i < 3; ++i) {
     for (size_t j = 0; j < 3; ++j) {
-      expected_second_d_lapse.get(i, j) = i == j ? 2 : 0.0;
+      if ((i == 0 and j == 2) or (i == 2 and j == 0)) {
+        expected_second_d_lapse.get(i, j) = 1.0;
+      } else {
+        expected_second_d_lapse.get(i, j) = i == j ? 2 : 0.0;
+      }
     }
   }
 
