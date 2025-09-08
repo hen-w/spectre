@@ -45,6 +45,9 @@ struct ApplyFilter : tt::ConformsTo<db::protocols::Mutator> {
                                           fd_order + 2, kreiss_oliger_epsilon);
 
       *evolved_vars_ptr = filtered_vars;
+    } else {
+      ERROR("Kreiss-Oliger epsilon should be in the interval (0, 1). Got "
+            << kreiss_oliger_epsilon << " instead.");
     }
   }
 };

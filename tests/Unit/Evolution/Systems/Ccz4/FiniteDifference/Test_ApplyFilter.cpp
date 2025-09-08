@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "DataStructures/DataBox/DataBox.hpp"
 #include "DataStructures/DataBox/PrefixHelpers.hpp"
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
@@ -17,8 +18,12 @@
 #include "Domain/Structure/ElementId.hpp"
 #include "Evolution/DgSubcell/GhostData.hpp"
 #include "Evolution/DgSubcell/SliceData.hpp"
+#include "Evolution/DgSubcell/Tags/GhostDataForReconstruction.hpp"
+#include "Evolution/DgSubcell/Tags/Mesh.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/ApplyFilter.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Filter.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Framework/TestHelpers.hpp"
 #include "Helpers/Evolution/Systems/Ccz4/PrimReconstructor.hpp"
@@ -120,7 +125,7 @@ void set_solution(
 }
 
 void test(const bool evolve_lapse_and_shift) {
-  const size_t points_per_dimension = 5;
+  const size_t points_per_dimension = 6;
   const Mesh<3> subcell_mesh{points_per_dimension,
                              Spectral::Basis::FiniteDifference,
                              Spectral::Quadrature::CellCentered};
@@ -137,45 +142,111 @@ void test(const bool evolve_lapse_and_shift) {
 
   set_solution<System>(&volume_evolved_variables,
                        &neighbor_data_for_reconstruction, subcell_mesh,
-                       logical_coords, 4, 3);
-  Variables<System::variables_tag_list> result = volume_evolved_variables;
+                       logical_coords, 6, 5);
 
-  Ccz4::fd::ccz4_kreiss_oliger_filter(
-      make_not_null(&result), volume_evolved_variables,
-      neighbor_data_for_reconstruction, evolve_lapse_and_shift, subcell_mesh, 4,
-      1.0);
+  // Store the original variables for comparison
+  Variables<System::variables_tag_list> original_variables =
+      volume_evolved_variables;
+
+  // Set up the DataBox with all required tags
+  const double kreiss_oliger_epsilon = 0.5;  // Use valid epsilon value
+
+  auto box = db::create<db::AddSimpleTags<
+      System::variables_tag, evolution::dg::subcell::Tags::Mesh<3>,
+      Ccz4::fd::Tags::EvolveLapseAndShift, Ccz4::fd::Tags::KreissOligerEpsilon,
+      evolution::dg::subcell::Tags::GhostDataForReconstruction<3>>>(
+      std::move(volume_evolved_variables), std::move(subcell_mesh),
+      evolve_lapse_and_shift, kreiss_oliger_epsilon,
+      std::move(neighbor_data_for_reconstruction));
+
+  // Apply the filter through the mutator
+  db::mutate_apply<Ccz4::fd::ApplyFilter>(make_not_null(&box));
+
+  // Get the result from the box
+  const auto& result = get<System::variables_tag>(box);
 
   if (not evolve_lapse_and_shift) {
     CHECK(get<gr::Tags::Lapse<DataVector>>(result) ==
-          get<gr::Tags::Lapse<DataVector>>(volume_evolved_variables));
+          get<gr::Tags::Lapse<DataVector>>(original_variables));
     CHECK(get<gr::Tags::Shift<DataVector, 3>>(result) ==
-          get<gr::Tags::Shift<DataVector, 3>>(volume_evolved_variables));
-    CHECK(get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(result) ==
-          get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(
-              volume_evolved_variables));
+          get<gr::Tags::Shift<DataVector, 3>>(original_variables));
+    CHECK(
+        get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(result) ==
+        get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(original_variables));
   }
 
-  tmpl::for_each<System::variables_tag_list>(
-      [&result, &volume_evolved_variables](auto tag_v) {
-        using tag = tmpl::type_from<decltype(tag_v)>;
-        auto& result_tensor = get<tag>(result);
-        auto& volume_tensor = get<tag>(volume_evolved_variables);
-        CAPTURE(pretty_type::name<tag>());
-        Approx custom_approx = Approx::custom().epsilon(1.0e-12).scale(1.0);
-        for (size_t tensor_index = 0; tensor_index < result_tensor.size();
-             ++tensor_index) {
-          result_tensor[tensor_index] -= volume_tensor[tensor_index];
-          CHECK_ITERABLE_CUSTOM_APPROX(
-              result_tensor[tensor_index],
-              DataVector(result_tensor[tensor_index].size(), 0.0),
-              custom_approx);
-        }
-      });
+  tmpl::for_each<System::variables_tag_list>([&result,
+                                              &original_variables](auto tag_v) {
+    using tag = tmpl::type_from<decltype(tag_v)>;
+    const auto& result_tensor = get<tag>(result);
+    const auto& volume_tensor = get<tag>(original_variables);
+    CAPTURE(pretty_type::name<tag>());
+    Approx custom_approx = Approx::custom().epsilon(1.0e-12).scale(1.0);
+    for (size_t tensor_index = 0; tensor_index < result_tensor.size();
+         ++tensor_index) {
+      CHECK_ITERABLE_CUSTOM_APPROX(result_tensor[tensor_index],
+                                   volume_tensor[tensor_index], custom_approx);
+    }
+  });
 }
 
-SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Fd.Filters",
+void test_error_when_epsilon_out_of_range() {
+  const size_t points_per_dimension = 6;
+  const Mesh<3> subcell_mesh{points_per_dimension,
+                             Spectral::Basis::FiniteDifference,
+                             Spectral::Quadrature::CellCentered};
+  const auto logical_coords =
+      TestHelpers::Ccz4::fd::detail::set_logical_coordinates(subcell_mesh);
+
+  using System = ::Ccz4::fd::System;
+
+  Variables<System::variables_tag_list> volume_evolved_variables{
+      subcell_mesh.number_of_grid_points()};
+
+  DirectionalIdMap<3, evolution::dg::subcell::GhostData>
+      neighbor_data_for_reconstruction{};
+
+  set_solution<System>(&volume_evolved_variables,
+                       &neighbor_data_for_reconstruction, subcell_mesh,
+                       logical_coords, 6, 5);
+
+  // Test with epsilon = 0.0 (should throw error)
+  {
+    auto box = db::create<db::AddSimpleTags<
+        System::variables_tag, evolution::dg::subcell::Tags::Mesh<3>,
+        Ccz4::fd::Tags::EvolveLapseAndShift,
+        Ccz4::fd::Tags::KreissOligerEpsilon,
+        evolution::dg::subcell::Tags::GhostDataForReconstruction<3>>>(
+        volume_evolved_variables, subcell_mesh, true, -0.1,
+        neighbor_data_for_reconstruction);
+
+    CHECK_THROWS_WITH(
+        db::mutate_apply<Ccz4::fd::ApplyFilter>(make_not_null(&box)),
+        Catch::Matchers::ContainsSubstring(
+            "Kreiss-Oliger epsilon should be in the interval (0, 1)"));
+  }
+
+  // Test with epsilon = 1.0 (should throw error)
+  {
+    auto box = db::create<db::AddSimpleTags<
+        System::variables_tag, evolution::dg::subcell::Tags::Mesh<3>,
+        Ccz4::fd::Tags::EvolveLapseAndShift,
+        Ccz4::fd::Tags::KreissOligerEpsilon,
+        evolution::dg::subcell::Tags::GhostDataForReconstruction<3>>>(
+        volume_evolved_variables, subcell_mesh, true, 1.1,
+        neighbor_data_for_reconstruction);
+
+    CHECK_THROWS_WITH(
+        db::mutate_apply<Ccz4::fd::ApplyFilter>(make_not_null(&box)),
+        Catch::Matchers::ContainsSubstring(
+            "Kreiss-Oliger epsilon should be in the interval (0, 1)"));
+  }
+}
+
+SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Fd.ApplyFilter",
                   "[Unit][Evolution]") {
   test(true);
   test(false);
+  test_error_when_epsilon_out_of_range();
 }
 }  // namespace
