@@ -1,7 +1,7 @@
 // Distributed under the MIT License.
 // See LICENSE.txt for details.
 
-#include "Evolution/Executables/Ccz4/Ccz4Base2.hpp"
+#include "Evolution/Executables/Ccz4/EvolveCcz4.hpp"
 
 #include <vector>
 

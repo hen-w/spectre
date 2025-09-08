@@ -6,7 +6,7 @@ set(EXECUTABLE EvolveCcz4)
 add_spectre_executable(
   ${EXECUTABLE}
   EXCLUDE_FROM_ALL
-  Ccz4Base2.cpp
+  EvolveCcz4.cpp
   )
 
 target_link_libraries(
