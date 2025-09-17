@@ -223,7 +223,7 @@ void test_error_when_epsilon_out_of_range() {
     CHECK_THROWS_WITH(
         db::mutate_apply<Ccz4::fd::ApplyFilter>(make_not_null(&box)),
         Catch::Matchers::ContainsSubstring(
-            "Kreiss-Oliger epsilon should be in the interval (0, 1)"));
+            "Kreiss-Oliger epsilon should be in the interval [0, 1]"));
   }
 
   // Test with epsilon = 1.0 (should throw error)
@@ -239,7 +239,7 @@ void test_error_when_epsilon_out_of_range() {
     CHECK_THROWS_WITH(
         db::mutate_apply<Ccz4::fd::ApplyFilter>(make_not_null(&box)),
         Catch::Matchers::ContainsSubstring(
-            "Kreiss-Oliger epsilon should be in the interval (0, 1)"));
+            "Kreiss-Oliger epsilon should be in the interval [0, 1]"));
   }
 }
 

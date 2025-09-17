@@ -3,8 +3,6 @@
 
 #pragma once
 
-#include <limits>
-
 #include "DataStructures/DataBox/Protocols/Mutator.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
@@ -28,7 +26,7 @@ struct AddUpperSpatialZ4Constraint : tt::ConformsTo<db::protocols::Mutator> {
     // This is a dummy initial value. The actual Z4 constraint of the initial
     // data is printed at the first time step
     *upper_spatial_z4_constraint = make_with_value<tnsr::I<DataVector, 3>>(
-        get(lapse).size(), std::numeric_limits<double>::signaling_NaN());
+        get(lapse).size(), 0.0);
   }
 };
 }  // namespace Ccz4::fd

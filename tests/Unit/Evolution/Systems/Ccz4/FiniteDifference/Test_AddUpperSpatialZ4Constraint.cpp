@@ -32,7 +32,7 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Fd.AddUpperSpatialZ4Constraint",
       db::get<::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>>(box);
   for (size_t i = 0; i < 3; ++i) {
     for (auto& val : initial_spatial_z4_constraint.get(i)) {
-      REQUIRE(std::isnan(val));
+      CHECK(val == 0.0);
     }
   }
 }

@@ -36,7 +36,9 @@ struct ApplyFilter : tt::ConformsTo<db::protocols::Mutator> {
           ghost_data) {
     constexpr size_t fd_order =
         4;  // probably want to specify this in System for all
-    if (kreiss_oliger_epsilon > 0.0 and kreiss_oliger_epsilon < 1.0) {
+    if (kreiss_oliger_epsilon == 0.0) {
+      return;
+    } else if (kreiss_oliger_epsilon > 0.0 and kreiss_oliger_epsilon <= 1.0) {
       typename System::variables_tag::type filtered_vars = *evolved_vars_ptr;
 
       Ccz4::fd::ccz4_kreiss_oliger_filter(make_not_null(&filtered_vars),
@@ -46,7 +48,7 @@ struct ApplyFilter : tt::ConformsTo<db::protocols::Mutator> {
 
       *evolved_vars_ptr = filtered_vars;
     } else {
-      ERROR("Kreiss-Oliger epsilon should be in the interval (0, 1). Got "
+      ERROR("Kreiss-Oliger epsilon should be in the interval [0, 1]. Got "
             << kreiss_oliger_epsilon << " instead.");
     }
   }
