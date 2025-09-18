@@ -266,7 +266,7 @@ Ccz4WrappedGr<SolutionType>::variables(
                              one_over_f * dt_shift(ti::I));
   }
 
-  return {auxiliary_shift_b};
+  return {std::move(auxiliary_shift_b)};
 }
 
 template <typename SolutionType>
