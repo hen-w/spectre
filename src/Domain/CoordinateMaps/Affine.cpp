@@ -11,6 +11,12 @@
 #include "Utilities/GenerateInstantiations.hpp"
 #include "Utilities/MakeWithValue.hpp"
 
+#ifdef SPECTRE_AUTODIFF
+#include <autodiff/forward/dual.hpp>
+#include <autodiff/forward/real.hpp>
+#include <autodiff/reverse/var.hpp>
+#endif  // SPECTRE_AUTODIFF
+
 namespace domain::CoordinateMaps {
 
 Affine::Affine(const double A, const double B, const double a, const double b)
@@ -85,9 +91,11 @@ bool operator==(const CoordinateMaps::Affine& lhs,
 // Explicit instantiations
 #define DTYPE(data) BOOST_PP_TUPLE_ELEM(0, data)
 
-#define INSTANTIATE(_, data)                                                 \
-  template std::array<tt::remove_cvref_wrap_t<DTYPE(data)>, 1>               \
-  Affine::operator()(const std::array<DTYPE(data), 1>& source_coords) const; \
+#define INSTANTIATE(_, data)                                   \
+  template std::array<tt::remove_cvref_wrap_t<DTYPE(data)>, 1> \
+  Affine::operator()(const std::array<DTYPE(data), 1>& source_coords) const;
+
+#define INSTANTIATE_JAC(_, data)                                             \
   template tnsr::Ij<tt::remove_cvref_wrap_t<DTYPE(data)>, 1, Frame::NoFrame> \
   Affine::jacobian(const std::array<DTYPE(data), 1>& source_coords) const;   \
   template tnsr::Ij<tt::remove_cvref_wrap_t<DTYPE(data)>, 1, Frame::NoFrame> \
@@ -96,6 +104,20 @@ bool operator==(const CoordinateMaps::Affine& lhs,
 GENERATE_INSTANTIATIONS(INSTANTIATE, (double, DataVector,
                                       std::reference_wrapper<const double>,
                                       std::reference_wrapper<const DataVector>))
+GENERATE_INSTANTIATIONS(INSTANTIATE_JAC,
+                        (double, DataVector,
+                         std::reference_wrapper<const double>,
+                         std::reference_wrapper<const DataVector>))
+
+#ifdef SPECTRE_AUTODIFF
+GENERATE_INSTANTIATIONS(INSTANTIATE,
+                        (autodiff::dual, autodiff::real, autodiff::var,
+                         std::reference_wrapper<const autodiff::dual>,
+                         std::reference_wrapper<const autodiff::real>,
+                         std::reference_wrapper<const autodiff::var>))
+#endif  // SPECTRE_AUTODIFF
+
 #undef DTYPE
 #undef INSTANTIATE
+#undef INSTANTIATE_JAC
 }  // namespace domain::CoordinateMaps

@@ -59,6 +59,7 @@ add_test_library(${LIBRARY} "${LIBRARY_SOURCES}")
 target_link_libraries(
   ${LIBRARY}
   PRIVATE
+  CoordinateMaps
   DataStructures
   DataStructuresHelpers
   Domain

@@ -22,6 +22,12 @@
 #include "Utilities/MakeWithValue.hpp"
 #include "Utilities/Serialization/PupStlCpp17.hpp"
 
+#ifdef SPECTRE_AUTODIFF
+#include <autodiff/forward/dual.hpp>
+#include <autodiff/forward/real.hpp>
+#include <autodiff/reverse/var.hpp>
+#endif  // SPECTRE_AUTODIFF
+
 namespace domain::CoordinateMaps {
 namespace {
 template <size_t Dim>
@@ -1045,11 +1051,11 @@ GENERATE_INSTANTIATIONS(INSTANTIATE_DTYPE_JAC, (2, 3),
                          std::reference_wrapper<const DataVector>))
 
 #ifdef SPECTRE_AUTODIFF
-#include <autodiff/forward/dual.hpp>
-#include <autodiff/forward/real.hpp>
-#include <autodiff/reverse/var.hpp>
 GENERATE_INSTANTIATIONS(INSTANTIATE_DTYPE, (2, 3),
-                        (autodiff::dual, autodiff::real, autodiff::var))
+                        (autodiff::dual, autodiff::real, autodiff::var,
+                         std::reference_wrapper<const autodiff::dual>,
+                         std::reference_wrapper<const autodiff::real>,
+                         std::reference_wrapper<const autodiff::var>))
 #endif  // SPECTRE_AUTODIFF
 
 #undef DIM

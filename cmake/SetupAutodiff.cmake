@@ -28,9 +28,11 @@ if (NOT autodiff_FOUND)
   message(STATUS "Fetching autodiff")
   include(FetchContent)
   FetchContent_Declare(autodiff
-    GIT_REPOSITORY https://github.com/autodiff/autodiff/
-    GIT_TAG v1.1.2
-    GIT_SHALLOW TRUE
+    GIT_REPOSITORY https://github.com/nilsvu/autodiff/
+    # Choose an unreleased version on top of v1.1.2 that makes dependence on
+    # Eigen optional. Also include a fix from this PR:
+    # https://github.com/autodiff/autodiff/pull/366
+    GIT_TAG 060193aee2a926922b80b1da2cb085aa24cc19cb
     ${SPECTRE_FETCHCONTENT_BASE_ARGS}
   )
   set(AUTODIFF_BUILD_TESTS OFF CACHE BOOL "Build autodiff tests")

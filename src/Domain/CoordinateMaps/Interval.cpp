@@ -17,6 +17,12 @@
 #include "Utilities/GenerateInstantiations.hpp"
 #include "Utilities/MakeWithValue.hpp"
 
+#ifdef SPECTRE_AUTODIFF
+#include <autodiff/forward/dual.hpp>
+#include <autodiff/forward/real.hpp>
+#include <autodiff/reverse/var.hpp>
+#endif  // SPECTRE_AUTODIFF
+
 namespace domain::CoordinateMaps {
 
 Interval::Interval(const double A, const double B, const double a,
@@ -273,11 +279,11 @@ GENERATE_INSTANTIATIONS(INSTANTIATE_JAC,
                          std::reference_wrapper<const DataVector>))
 
 #ifdef SPECTRE_AUTODIFF
-#include <autodiff/forward/dual.hpp>
-#include <autodiff/forward/real.hpp>
-#include <autodiff/reverse/var.hpp>
 GENERATE_INSTANTIATIONS(INSTANTIATE,
-                        (autodiff::dual, autodiff::real, autodiff::var))
+                        (autodiff::dual, autodiff::real, autodiff::var,
+                         std::reference_wrapper<const autodiff::dual>,
+                         std::reference_wrapper<const autodiff::real>,
+                         std::reference_wrapper<const autodiff::var>))
 #endif  // SPECTRE_AUTODIFF
 
 #undef DTYPE
