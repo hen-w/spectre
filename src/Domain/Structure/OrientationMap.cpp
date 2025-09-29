@@ -296,8 +296,13 @@ GENERATE_INSTANTIATIONS(INSTANTIATION, (1, 2, 3),
 #include <autodiff/forward/dual.hpp>
 #include <autodiff/forward/real.hpp>
 #include <autodiff/reverse/var.hpp>
+#include <xsimd/xsimd.hpp>
+using b_type = xsimd::batch<double>;
+// alias the complicated template so the macro never sees the comma
+using dual_b_type = autodiff::detail::Dual<b_type, b_type>;
 GENERATE_INSTANTIATIONS(INSTANTIATION, (1, 2, 3),
-                        (autodiff::dual, autodiff::real, autodiff::var))
+                        (autodiff::dual, autodiff::real, autodiff::var,
+                         b_type, dual_b_type))
 #endif  // SPECTRE_AUTODIFF
 
 #undef INSTANTIATION

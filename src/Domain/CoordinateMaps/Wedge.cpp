@@ -26,6 +26,7 @@
 #include <autodiff/forward/dual.hpp>
 #include <autodiff/forward/real.hpp>
 #include <autodiff/reverse/var.hpp>
+#include <xsimd/xsimd.hpp>
 #endif  // SPECTRE_AUTODIFF
 
 namespace domain::CoordinateMaps {
@@ -722,8 +723,17 @@ tnsr::Ij<tt::remove_cvref_wrap_t<T>, Dim, Frame::NoFrame> Wedge<Dim>::jacobian(
   const std::array<ReturnType, Dim> d_generalized_z =
       get_d_generalized_z(zeta, one_over_rho, s_factor, cap_deriv, rho_vec);
 
-  auto jacobian_matrix =
+  tnsr::Ij<ReturnType, Dim, Frame::NoFrame> jacobian_matrix;
+  if constexpr (std::is_same_v<ReturnType, xsimd::batch<double>>) {
+    // For xsimd::batch<double>, create a DataVector to determine size
+    const DataVector size_helper(1);
+    jacobian_matrix =
+      make_with_value<tnsr::Ij<ReturnType, Dim, Frame::NoFrame>>
+      (size_helper, 0.0);
+  } else {
+    jacobian_matrix =
       make_with_value<tnsr::Ij<ReturnType, Dim, Frame::NoFrame>>(xi, 0.0);
+  }
 
   // Derivative by polar angle
   std::array<ReturnType, Dim> dxyz_dxi{};
@@ -840,8 +850,17 @@ Wedge<Dim>::inv_jacobian(const std::array<T, Dim>& source_coords) const {
   const ReturnType scaled_z_frustum =
       scaled_frustum_zero_ + scaled_frustum_rate_ * zeta;
 
-  auto inv_jacobian_matrix =
+  tnsr::Ij<ReturnType, Dim, Frame::NoFrame> inv_jacobian_matrix;
+  if constexpr (std::is_same_v<ReturnType, xsimd::batch<double>>) {
+    // For xsimd::batch<double>, create a DataVector to determine size
+    const DataVector size_helper(1);
+    inv_jacobian_matrix =
+      make_with_value<tnsr::Ij<ReturnType, Dim, Frame::NoFrame>>
+        (size_helper, 0.0);
+  } else {
+    inv_jacobian_matrix =
       make_with_value<tnsr::Ij<ReturnType, Dim, Frame::NoFrame>>(xi, 0.0);
+  }
 
   // Derivatives of polar angle
   std::array<ReturnType, Dim> dxi_dxyz{};
@@ -1048,15 +1067,23 @@ GENERATE_INSTANTIATIONS(INSTANTIATE_DTYPE, (2, 3),
 GENERATE_INSTANTIATIONS(INSTANTIATE_DTYPE_JAC, (2, 3),
                         (double, DataVector,
                          std::reference_wrapper<const double>,
-                         std::reference_wrapper<const DataVector>))
+                         std::reference_wrapper<const DataVector>,
+                         xsimd::batch<double>))
 
 #ifdef SPECTRE_AUTODIFF
+using b_type = xsimd::batch<double>;
+// alias the complicated template so the macro never sees the comma
+using dual_b_type = autodiff::detail::Dual<b_type, b_type>;
 GENERATE_INSTANTIATIONS(INSTANTIATE_DTYPE, (2, 3),
                         (autodiff::dual, autodiff::real, autodiff::var,
                          std::reference_wrapper<const autodiff::dual>,
                          std::reference_wrapper<const autodiff::real>,
-                         std::reference_wrapper<const autodiff::var>))
+                         std::reference_wrapper<const autodiff::var>,
+                         std::reference_wrapper<const b_type>,
+                         dual_b_type,
+                         std::reference_wrapper<const dual_b_type>))
 #endif  // SPECTRE_AUTODIFF
+
 
 #undef DIM
 #undef DTYPE
