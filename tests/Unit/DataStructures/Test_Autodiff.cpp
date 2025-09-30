@@ -64,11 +64,68 @@ blaze::DynamicVector<autodiff::real> f5(
 }  // namespace
 
 SPECTRE_TEST_CASE("Unit.DataStructures.Autodiff", "[Unit][DataStructures]") {
-  // Test that autodiff works with the autodiff::real type in forward mode.
-  // The autodiff::dual type supports higher cross-derivatives in forward mode.
-  // Reverse mode with the autodiff::var type needs some adaptors to work with
-  // Blaze vectors and tensors, similar to how it is implemented for Eigen in
-  // the autodiff library (it works fine with single numbers though, if needed).
+  {
+    INFO("Profiling Forward Mode");
+    const size_t points_per_dimension = 40;
+    const Mesh<3> mesh{points_per_dimension, Spectral::Basis::FiniteDifference,
+                       Spectral::Quadrature::CellCentered};
+    std::array<DataVector, 3> logical_coords{};
+    for (size_t i = 0; i < 3; ++i) {
+      logical_coords[i] = logical_coordinates(mesh).get(i);
+    }
+    // const auto coord_map =
+    //   Affine3D{Affine{-1.0, 1.0, -1.0, 1.0}, Affine{-1.0, 1.0, 0.0, 2.0},
+    //            Affine{-1.0, 1.0, -2.0, 2.0}};
+    // const auto coord_map =
+    //   Interval3D{Interval{-1.0, 1.0, -1.0, 1.0, Distribution::Equiangular},
+    //              Interval{-1.0, 1.0, 0.0, 2.0, Distribution::Equiangular},
+    //              Interval{-1.0, 1.0, -2.0, 2.0, Distribution::Equiangular}};
+    const auto coord_map =
+        Wedge3D{1.0, 2.0, 0.0, 1.0, OrientationMap<3>::create_aligned(), true};
+
+auto total_start = std::chrono::high_resolution_clock::now();
+    const auto expected_jacobian = coord_map.jacobian(logical_coords);
+auto total_end = std::chrono::high_resolution_clock::now();
+auto total_time = std::chrono::duration_cast<std::chrono::microseconds>(
+    total_end - total_start);
+std::cout << "SpECTRE jacobian - Total time: " << total_time.count() / 1000.0
+          << " ms" << std::endl;
+
+total_start = std::chrono::high_resolution_clock::now();
+    auto actual_jacobian =
+        make_with_value<tnsr::Ij<DataVector, 3>>(expected_jacobian, 0.0);
+
+    using b_type = xsimd::batch<double>;
+
+    for (size_t i = 0; i < logical_coords[0].size(); i += b_type::size) {
+      std::array<b_type, 3> log_coords{
+          b_type::load_aligned(&logical_coords[0][i]),
+          b_type::load_aligned(&logical_coords[1][i]),
+          b_type::load_aligned(&logical_coords[2][i])};
+
+      const auto J = coord_map.jacobian(log_coords);
+
+      for (size_t j = 0; j < 3; ++j) {
+        for (size_t k = 0; k < 3; ++k) {
+          J.get(j, k).store_aligned(&actual_jacobian.get(j, k)[i]);
+        }
+      }
+    }
+
+total_end = std::chrono::high_resolution_clock::now();
+total_time = std::chrono::duration_cast<std::chrono::microseconds>(
+        total_end - total_start);
+
+std::cout << "Vectorized SpECTOR jacobian " << total_time.count() / 1000.0
+          << " ms" << std::endl;
+
+    for (size_t i = 0; i < 3; ++i) {
+      for (size_t j = 0; j < 3; ++j) {
+        CHECK_ITERABLE_APPROX(actual_jacobian.get(i, j),
+                              expected_jacobian.get(i, j));
+      }
+    }
+  }
   {
     INFO("Profiling Forward Mode");
     const size_t points_per_dimension = 40;
