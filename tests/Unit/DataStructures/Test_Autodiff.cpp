@@ -96,18 +96,23 @@ total_start = std::chrono::high_resolution_clock::now();
         make_with_value<tnsr::Ij<DataVector, 3>>(expected_jacobian, 0.0);
 
     using b_type = xsimd::batch<double>;
+    using FirstOrderDual = autodiff::HigherOrderDual<1, b_type>;
 
     for (size_t i = 0; i < logical_coords[0].size(); i += b_type::size) {
-      std::array<b_type, 3> log_coords{
-          b_type::load_aligned(&logical_coords[0][i]),
-          b_type::load_aligned(&logical_coords[1][i]),
-          b_type::load_aligned(&logical_coords[2][i])};
+      for (size_t k = 0; k < 3; ++k) {
+        std::array<FirstOrderDual, 3> log_coords{
+            b_type::load_aligned(&logical_coords[0][i]),
+            b_type::load_aligned(&logical_coords[1][i]),
+            b_type::load_aligned(&logical_coords[2][i])};
 
-      const auto J = coord_map.jacobian(log_coords);
+        // Seed the k-th coordinate for differentiation
+        autodiff::detail::seed<1>(log_coords[k], 1.0);
 
-      for (size_t j = 0; j < 3; ++j) {
-        for (size_t k = 0; k < 3; ++k) {
-          J.get(j, k).store_aligned(&actual_jacobian.get(j, k)[i]);
+        const auto y = coord_map(log_coords);
+        for (size_t j = 0; j < 3; ++j) {
+          // Extract the derivative part directly from the coordinate map
+          const auto deriv_jk = autodiff::derivative(gsl::at(y, j));
+          deriv_jk.store_aligned(&actual_jacobian.get(j, k)[i]);
         }
       }
     }
@@ -116,14 +121,14 @@ total_end = std::chrono::high_resolution_clock::now();
 total_time = std::chrono::duration_cast<std::chrono::microseconds>(
         total_end - total_start);
 
-std::cout << "Vectorized SpECTOR jacobian " << total_time.count() / 1000.0
+std::cout << "Forward Mode - Total time: " << total_time.count() / 1000.0
           << " ms" << std::endl;
 
-    for (size_t i = 0; i < 3; ++i) {
-      for (size_t j = 0; j < 3; ++j) {
-        CHECK_ITERABLE_APPROX(actual_jacobian.get(i, j),
-                              expected_jacobian.get(i, j));
-      }
+for (size_t i = 0; i < 3; ++i) {
+  for (size_t j = 0; j < 3; ++j) {
+    CHECK_ITERABLE_APPROX(actual_jacobian.get(i, j),
+                          expected_jacobian.get(i, j));
+  }
     }
   }
   {
@@ -158,23 +163,18 @@ total_start = std::chrono::high_resolution_clock::now();
         make_with_value<tnsr::Ij<DataVector, 3>>(expected_jacobian, 0.0);
 
     using b_type = xsimd::batch<double>;
-    using FirstOrderDual = autodiff::HigherOrderDual<1, b_type>;
 
     for (size_t i = 0; i < logical_coords[0].size(); i += b_type::size) {
-      for (size_t k = 0; k < 3; ++k) {
-        std::array<FirstOrderDual, 3>
-          log_coords{b_type::load_aligned(&logical_coords[0][i]),
-                    b_type::load_aligned(&logical_coords[1][i]),
-                    b_type::load_aligned(&logical_coords[2][i])};
+      std::array<b_type, 3> log_coords{
+          b_type::load_aligned(&logical_coords[0][i]),
+          b_type::load_aligned(&logical_coords[1][i]),
+          b_type::load_aligned(&logical_coords[2][i])};
 
-        // Seed the k-th coordinate for differentiation
-        autodiff::detail::seed<1>(log_coords[k], 1.0);
+      const auto J = coord_map.jacobian(log_coords);
 
-        const auto y = coord_map(log_coords);
-        for (size_t j = 0; j < 3; ++j) {
-          // Extract the derivative part directly from the coordinate map
-          const auto deriv_jk = autodiff::derivative(gsl::at(y, j));
-          deriv_jk.store_aligned(&actual_jacobian.get(j, k)[i]);
+      for (size_t j = 0; j < 3; ++j) {
+        for (size_t k = 0; k < 3; ++k) {
+          J.get(j, k).store_aligned(&actual_jacobian.get(j, k)[i]);
         }
       }
     }
@@ -183,14 +183,14 @@ total_end = std::chrono::high_resolution_clock::now();
 total_time = std::chrono::duration_cast<std::chrono::microseconds>(
         total_end - total_start);
 
-std::cout << "Forward Mode - Total time: " << total_time.count() / 1000.0
+std::cout << "Vectorized SpECTRE jacobian " << total_time.count() / 1000.0
           << " ms" << std::endl;
 
-    for (size_t i = 0; i < 3; ++i) {
-      for (size_t j = 0; j < 3; ++j) {
-        CHECK_ITERABLE_APPROX(actual_jacobian.get(i, j),
-                              expected_jacobian.get(i, j));
-      }
+for (size_t i = 0; i < 3; ++i) {
+  for (size_t j = 0; j < 3; ++j) {
+    CHECK_ITERABLE_APPROX(actual_jacobian.get(i, j),
+                          expected_jacobian.get(i, j));
+  }
     }
   }
 }

@@ -727,6 +727,7 @@ tnsr::Ij<tt::remove_cvref_wrap_t<T>, Dim, Frame::NoFrame> Wedge<Dim>::jacobian(
   if constexpr (std::is_same_v<ReturnType, xsimd::batch<double>>) {
     // For xsimd::batch<double>, create a DataVector to determine size
     const DataVector size_helper(1);
+    ASSERT(Dim == 3, "haha");
     jacobian_matrix =
       make_with_value<tnsr::Ij<ReturnType, Dim, Frame::NoFrame>>
       (size_helper, 0.0);

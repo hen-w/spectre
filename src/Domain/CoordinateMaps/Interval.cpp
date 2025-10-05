@@ -141,9 +141,19 @@ std::optional<std::array<double, 1>> Interval::inverse(
 template <typename T>
 tnsr::Ij<tt::remove_cvref_wrap_t<T>, 1, Frame::NoFrame> Interval::jacobian(
     const std::array<T, 1>& source_coords) const {
-  auto jacobian_matrix =
-      make_with_value<tnsr::Ij<tt::remove_cvref_wrap_t<T>, 1, Frame::NoFrame>>(
-          dereference_wrapper(source_coords[0]), 0.0);
+  tnsr::Ij<tt::remove_cvref_wrap_t<T>, 1, Frame::NoFrame> jacobian_matrix{};
+  if constexpr (std::is_same_v<tt::remove_cvref_wrap_t<T>,
+                               xsimd::batch<double>>) {
+    // For xsimd::batch<double>, create a DataVector to determine size
+    jacobian_matrix = tnsr::Ij<tt::remove_cvref_wrap_t<T>, 1, Frame::NoFrame>{
+        xsimd::batch<double>{0.0}};
+  } else {
+    jacobian_matrix =
+        tnsr::Ij<tt::remove_cvref_wrap_t<T>, 1, Frame::NoFrame>{make_with_value<
+            tnsr::Ij<tt::remove_cvref_wrap_t<T>, 1, Frame::NoFrame>>(
+            dereference_wrapper(source_coords[0]), 0.0)};
+  }
+
   switch (distribution_) {
     case Distribution::Linear: {
       get<0, 0>(jacobian_matrix) = (b_ - a_) / (B_ - A_);
@@ -188,9 +198,20 @@ tnsr::Ij<tt::remove_cvref_wrap_t<T>, 1, Frame::NoFrame> Interval::jacobian(
 template <typename T>
 tnsr::Ij<tt::remove_cvref_wrap_t<T>, 1, Frame::NoFrame> Interval::inv_jacobian(
     const std::array<T, 1>& source_coords) const {
-  auto inv_jacobian_matrix =
-      make_with_value<tnsr::Ij<tt::remove_cvref_wrap_t<T>, 1, Frame::NoFrame>>(
-          dereference_wrapper(source_coords[0]), 0.0);
+  tnsr::Ij<tt::remove_cvref_wrap_t<T>, 1, Frame::NoFrame> inv_jacobian_matrix{};
+  if constexpr (std::is_same_v<tt::remove_cvref_wrap_t<T>,
+                               xsimd::batch<double>>) {
+    // For xsimd::batch<double>, create a DataVector to determine size
+    inv_jacobian_matrix =
+        tnsr::Ij<tt::remove_cvref_wrap_t<T>, 1, Frame::NoFrame>{
+            xsimd::batch<double>{0.0}};
+  } else {
+    inv_jacobian_matrix =
+        tnsr::Ij<tt::remove_cvref_wrap_t<T>, 1, Frame::NoFrame>{make_with_value<
+            tnsr::Ij<tt::remove_cvref_wrap_t<T>, 1, Frame::NoFrame>>(
+            dereference_wrapper(source_coords[0]), 0.0)};
+  }
+
   switch (distribution_) {
     case Distribution::Linear: {
       get<0, 0>(inv_jacobian_matrix) = (B_ - A_) / (b_ - a_);
@@ -276,14 +297,20 @@ GENERATE_INSTANTIATIONS(INSTANTIATE, (double, DataVector,
 GENERATE_INSTANTIATIONS(INSTANTIATE_JAC,
                         (double, DataVector,
                          std::reference_wrapper<const double>,
-                         std::reference_wrapper<const DataVector>))
+                         std::reference_wrapper<const DataVector>,
+                         std::reference_wrapper<const xsimd::batch<double>>))
 
 #ifdef SPECTRE_AUTODIFF
+using b_type = xsimd::batch<double>;
+// alias the complicated template so the macro never sees the comma
+using dual_b_type = autodiff::detail::Dual<b_type, b_type>;
 GENERATE_INSTANTIATIONS(INSTANTIATE,
                         (autodiff::dual, autodiff::real, autodiff::var,
                          std::reference_wrapper<const autodiff::dual>,
                          std::reference_wrapper<const autodiff::real>,
-                         std::reference_wrapper<const autodiff::var>))
+                         std::reference_wrapper<const autodiff::var>,
+                         std::reference_wrapper<const b_type>, dual_b_type,
+                         std::reference_wrapper<const dual_b_type>))
 #endif  // SPECTRE_AUTODIFF
 
 #undef DTYPE

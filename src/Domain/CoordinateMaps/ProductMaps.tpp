@@ -17,6 +17,33 @@
 #include "Utilities/MakeWithValue.hpp"
 #include "Utilities/TMPL.hpp"
 
+
+#include <climits>
+#include <cmath>
+#include <cstddef>
+#include <optional>
+#include <pup.h>
+
+#include "DataStructures/Tensor/EagerMath/Determinant.hpp"
+#include "DataStructures/Tensor/Tensor.hpp"
+#include "Domain/CoordinateMaps/Distribution.hpp"
+#include "Domain/Structure/OrientationMap.hpp"
+#include "Utilities/Algorithm.hpp"
+#include "Utilities/ConstantExpressions.hpp"
+#include "Utilities/DereferenceWrapper.hpp"
+#include "Utilities/EqualWithinRoundoff.hpp"
+#include "Utilities/ErrorHandling/Assert.hpp"
+#include "Utilities/GenerateInstantiations.hpp"
+#include "Utilities/MakeWithValue.hpp"
+#include "Utilities/Serialization/PupStlCpp17.hpp"
+
+#ifdef SPECTRE_AUTODIFF
+#include <autodiff/forward/dual.hpp>
+#include <autodiff/forward/real.hpp>
+#include <autodiff/reverse/var.hpp>
+#include <xsimd/xsimd.hpp>
+#endif  // SPECTRE_AUTODIFF
+
 namespace domain {
 namespace CoordinateMaps {
 
@@ -234,8 +261,17 @@ tnsr::Ij<tt::remove_cvref_wrap_t<T>, ProductOf3Maps<Map1, Map2, Map3>::dim,
 ProductOf3Maps<Map1, Map2, Map3>::jacobian(
     const std::array<T, dim>& source_coords) const {
   using UnwrappedT = tt::remove_cvref_wrap_t<T>;
-  tnsr::Ij<UnwrappedT, dim, Frame::NoFrame> jacobian_matrix{
-      make_with_value<UnwrappedT>(dereference_wrapper(source_coords[0]), 0.0)};
+
+  tnsr::Ij<UnwrappedT, dim, Frame::NoFrame> jacobian_matrix;
+  if constexpr (std::is_same_v<UnwrappedT, xsimd::batch<double>>) {
+    // For xsimd::batch<double>, create a DataVector to determine size
+    jacobian_matrix =
+      tnsr::Ij<UnwrappedT, dim, Frame::NoFrame>{xsimd::batch<double>{0.0}};
+  } else {
+    jacobian_matrix =
+      tnsr::Ij<UnwrappedT, dim, Frame::NoFrame>{make_with_value<UnwrappedT>(
+        dereference_wrapper(source_coords[0]), 0.0)};
+  }
   get<0, 0>(jacobian_matrix) = get<0, 0>(
       map1_.jacobian(std::array<std::reference_wrapper<const UnwrappedT>, 1>{
           {source_coords[0]}}));
