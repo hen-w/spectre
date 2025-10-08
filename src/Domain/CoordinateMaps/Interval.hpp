@@ -125,4 +125,19 @@ inline bool operator!=(const CoordinateMaps::Interval& lhs,
   return not(lhs == rhs);
 }
 
+// Clad-compatible free functions that take double instead of std::array
+// These allow automatic differentiation to work properly
+
+double interval_linear_map(double A, double B, double a, double b,
+                           double source_coord);
+
+double interval_equiangular_map(double A, double B, double a, double b,
+                                double source_coord);
+
+double interval_logarithmic_map(double A, double B, double a, double b,
+                                double singularity_pos, double source_coord);
+
+double interval_inverse_map(double A, double B, double a, double b,
+                            double singularity_pos, double source_coord);
+
 }  // namespace domain::CoordinateMaps

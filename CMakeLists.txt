@@ -201,6 +201,8 @@ if(BUILD_DOCS)
 endif()
 include(CodeCoverageDetection)
 include(SpectreAddLibraries)
+include(SetupClad)
+include(SetupEnzyme)
 
 include(SpectreSetupTesting)
 if(BUILD_TESTING)

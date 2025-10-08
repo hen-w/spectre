@@ -267,4 +267,40 @@ GENERATE_INSTANTIATIONS(INSTANTIATE, (double, DataVector,
                                       std::reference_wrapper<const DataVector>))
 #undef DTYPE
 #undef INSTANTIATE
+
+// Clad-compatible free functions that take double instead of std::array
+// These allow automatic differentiation to work properly
+
+double interval_linear_map(double A, double B, double a, double b,
+                           double source_coord) {
+  return ((b - a) * source_coord + a * B - b * A) / (B - A);
+}
+
+double interval_equiangular_map(double A, double B, double a, double b,
+                                double source_coord) {
+  return 0.5 * (a + b +
+                (b - a) * tan(M_PI_4 * (2.0 * source_coord - B - A) / (B - A)));
+}
+
+double interval_logarithmic_map(double A, double B, double a, double b,
+                                double singularity_pos, double source_coord) {
+  const double logarithmic_zero =
+      0.5 * (log((b - singularity_pos) * (a - singularity_pos)));
+  const double logarithmic_rate =
+      0.5 * (log((b - singularity_pos) / (a - singularity_pos)));
+  const double singularity_sign = std::min(a, b) > singularity_pos ? 1. : -1.;
+  return singularity_sign *
+             exp(logarithmic_zero +
+                 logarithmic_rate * (2.0 * source_coord - B - A) / (B - A)) +
+         singularity_pos;
+}
+
+double interval_inverse_map(double A, double B, double a, double b,
+                            double singularity_pos, double source_coord) {
+  return 2.0 * (a - singularity_pos) * (b - singularity_pos) /
+             (a + b - 2.0 * singularity_pos -
+              (b - a) / (B - A) * (2.0 * source_coord - B - A)) +
+         singularity_pos;
+}
+
 }  // namespace domain::CoordinateMaps

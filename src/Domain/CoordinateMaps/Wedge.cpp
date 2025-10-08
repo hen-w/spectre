@@ -1040,4 +1040,64 @@ GENERATE_INSTANTIATIONS(INSTANTIATE_DTYPE, (2, 3),
 #undef DTYPE
 #undef INSTANTIATE_DIM
 #undef INSTANTIATE_DTYPE
+
+// Clad-compatible free function for 3D Wedge coordinate transformation
+// Returns [∂x/∂ξ, ∂y/∂ξ, ∂z/∂ξ] when differentiated with respect to xi
+std::array<double, 3> wedge_3d_map(double xi, double eta, double zeta,
+                                   double radius_inner, double radius_outer,
+                                   double sphericity_inner,
+                                   double sphericity_outer) {
+  // Simple spherical wedge configuration for Clad compatibility
+  constexpr size_t radial_coord = 2;
+  constexpr size_t polar_coord = 0;
+  constexpr size_t azimuth_coord = 1;
+
+  // Basic wedge transformation for spherical case
+  // Using simplified linear distribution and no orientation/offset
+
+  // Cap angular functions (simplified without equiangular mapping)
+  const double cap_xi = xi;
+  const double cap_eta = eta;
+
+  // Rho vector components for zero offset case
+  const double rho_polar = cap_xi;
+  const double rho_azimuth = cap_eta;
+  const double rho_radial = 1.0;
+
+  // Calculate one_over_rho
+  const double rho_magnitude =
+      sqrt(rho_radial * rho_radial + rho_polar * rho_polar +
+           rho_azimuth * rho_azimuth);
+  const double one_over_rho = 1.0 / rho_magnitude;
+
+  // S-factor for linear distribution
+  const double sphere_zero =
+      0.5 * (sphericity_outer * radius_outer + sphericity_inner * radius_inner);
+  const double sphere_rate =
+      0.5 * (sphericity_outer * radius_outer - sphericity_inner * radius_inner);
+  const double s_factor = sphere_zero + sphere_rate * zeta;
+
+  // Scaled frustum for linear distribution
+  const double sqrt_dim = sqrt(3.0);
+  const double scaled_frustum_zero = 0.5 / sqrt_dim *
+                                     ((1.0 - sphericity_outer) * radius_outer +
+                                      (1.0 - sphericity_inner) * radius_inner);
+  const double scaled_frustum_rate = 0.5 / sqrt_dim *
+                                     ((1.0 - sphericity_outer) * radius_outer -
+                                      (1.0 - sphericity_inner) * radius_inner);
+
+  // Generalized Z coordinate
+  const double generalized_z =
+      s_factor * one_over_rho +
+      (scaled_frustum_zero + scaled_frustum_rate * zeta);
+
+  // Physical coordinates (no rotation for simplicity)
+  std::array<double, 3> physical_coords;
+  physical_coords[polar_coord] = generalized_z * cap_xi;     // x
+  physical_coords[azimuth_coord] = generalized_z * cap_eta;  // y
+  physical_coords[radial_coord] = generalized_z;             // z
+
+  return physical_coords;
+}
+
 }  // namespace domain::CoordinateMaps

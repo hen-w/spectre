@@ -1316,4 +1316,13 @@ class Wedge {
 
 template <size_t Dim>
 bool operator!=(const Wedge<Dim>& lhs, const Wedge<Dim>& rhs);
+
+// Clad-compatible free function for 3D Wedge coordinate transformation
+// Returns [x, y, z] coordinates, can be differentiated by Clad to get partial
+// derivatives
+std::array<double, 3> wedge_3d_map(double xi, double eta, double zeta,
+                                   double radius_inner, double radius_outer,
+                                   double sphericity_inner = 1.0,
+                                   double sphericity_outer = 1.0);
+
 }  // namespace domain::CoordinateMaps

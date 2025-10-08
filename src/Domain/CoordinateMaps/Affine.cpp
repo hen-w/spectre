@@ -3,6 +3,8 @@
 
 #include "Domain/CoordinateMaps/Affine.hpp"
 
+#include <clad/Differentiator/Differentiator.h>
+#include <clad/Differentiator/STLBuiltins.h>
 #include <pup.h>
 
 #include "DataStructures/DataVector.hpp"
@@ -20,8 +22,14 @@ Affine::Affine(const double A, const double B, const double a, const double b)
       b_(b),
       length_of_domain_(B - A),
       length_of_range_(b - a),
-      jacobian_(length_of_range_ / length_of_domain_),
-      inverse_jacobian_(length_of_domain_ / length_of_range_),
+      // Avoid division-by-zero when AD constructs a zero-tangent Affine
+      // (e.g. A=B=0 and a=b=0). In that case these values are not used for a
+      // valid map evaluation, so set them to 0 to prevent FPE.
+      jacobian_(length_of_domain_ == 0.0
+                    ? 0.0
+                    : length_of_range_ / length_of_domain_),
+      inverse_jacobian_(
+          length_of_range_ == 0.0 ? 0.0 : length_of_domain_ / length_of_range_),
       is_identity_(A == a and B == b) {}
 
 template <typename T>
