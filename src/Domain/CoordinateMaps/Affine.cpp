@@ -7,6 +7,9 @@
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
+#ifdef SPECTRE_AUTODIFF
+#include "Utilities/Autodiff/Autodiff.hpp"
+#endif
 #include "Utilities/DereferenceWrapper.hpp"
 #include "Utilities/GenerateInstantiations.hpp"
 #include "Utilities/MakeWithValue.hpp"
@@ -93,9 +96,19 @@ bool operator==(const CoordinateMaps::Affine& lhs,
   template tnsr::Ij<tt::remove_cvref_wrap_t<DTYPE(data)>, 1, Frame::NoFrame> \
   Affine::inv_jacobian(const std::array<DTYPE(data), 1>& source_coords) const;
 
-GENERATE_INSTANTIATIONS(INSTANTIATE, (double, DataVector,
-                                      std::reference_wrapper<const double>,
-                                      std::reference_wrapper<const DataVector>))
+GENERATE_INSTANTIATIONS(
+    INSTANTIATE, (double, DataVector,
+                  std::reference_wrapper<const double>,
+                  std::reference_wrapper<const DataVector>))
+
+#ifdef SPECTRE_AUTODIFF
+GENERATE_INSTANTIATIONS(
+    INSTANTIATE, (autodiff::SecondOrderDual,
+                  autodiff::SecondOrderDualNum,
+                  std::reference_wrapper<const autodiff::SecondOrderDual>,
+                  std::reference_wrapper<const autodiff::SecondOrderDualNum>))
+#endif  // SPECTRE_AUTODIFF
+
 #undef DTYPE
 #undef INSTANTIATE
 }  // namespace domain::CoordinateMaps

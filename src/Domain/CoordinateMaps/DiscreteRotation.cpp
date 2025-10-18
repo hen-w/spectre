@@ -8,6 +8,9 @@
 #include "Domain/Structure/Direction.hpp"
 #include "Domain/Structure/OrientationMap.hpp"
 #include "Domain/Structure/Side.hpp"
+#ifdef SPECTRE_AUTODIFF
+#include "Utilities/Autodiff/Autodiff.hpp"
+#endif
 #include "Utilities/DereferenceWrapper.hpp"
 #include "Utilities/GenerateInstantiations.hpp"
 #include "Utilities/MakeWithValue.hpp"
@@ -112,10 +115,20 @@ template class DiscreteRotation<3>;
   DiscreteRotation<DIM(data)>::inv_jacobian(                           \
       const std::array<DTYPE(data), DIM(data)>& source_coords) const;
 
-GENERATE_INSTANTIATIONS(INSTANTIATE, (1, 2, 3),
-                        (double, DataVector,
-                         std::reference_wrapper<const double>,
-                         std::reference_wrapper<const DataVector>))
+GENERATE_INSTANTIATIONS(
+    INSTANTIATE, (1, 2, 3),
+    (double, DataVector,
+     std::reference_wrapper<const double>,
+     std::reference_wrapper<const DataVector>))
+
+#ifdef SPECTRE_AUTODIFF
+GENERATE_INSTANTIATIONS(
+    INSTANTIATE, (1, 2, 3),
+    (autodiff::SecondOrderDual,
+     autodiff::SecondOrderDualNum,
+     std::reference_wrapper<const autodiff::SecondOrderDualNum>,
+     std::reference_wrapper<const autodiff::SecondOrderDual>))
+#endif  // SPECTRE_AUTODIFF
 
 #undef DTYPE
 #undef INSTANTIATE

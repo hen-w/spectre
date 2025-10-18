@@ -216,6 +216,8 @@ class FlatEndcap {
 
   static bool is_identity() { return false; }
 
+  static constexpr bool supports_autodiff{false};
+
  private:
   friend bool operator==(const FlatEndcap& lhs, const FlatEndcap& rhs);
   std::array<double, 3> center_{};

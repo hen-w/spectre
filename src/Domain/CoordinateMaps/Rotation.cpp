@@ -6,6 +6,9 @@
 #include <cmath>
 #include <pup.h>
 
+#ifdef SPECTRE_AUTODIFF
+#include "Utilities/Autodiff/Autodiff.hpp"
+#endif
 #include "Utilities/DereferenceWrapper.hpp"
 #include "Utilities/GenerateInstantiations.hpp"
 #include "Utilities/MakeWithValue.hpp"
@@ -219,10 +222,21 @@ bool operator!=(const Rotation<3>& lhs, const Rotation<3>& rhs) {
   Rotation<DIM(data)>::inv_jacobian(                                   \
       const std::array<DTYPE(data), DIM(data)>& source_coords) const;
 
-GENERATE_INSTANTIATIONS(INSTANTIATE, (2, 3),
-                        (double, DataVector,
-                         std::reference_wrapper<const double>,
-                         std::reference_wrapper<const DataVector>))
+GENERATE_INSTANTIATIONS(
+    INSTANTIATE, (2, 3),
+    (double, DataVector,
+     std::reference_wrapper<const double>,
+     std::reference_wrapper<const DataVector>))
+
+#ifdef SPECTRE_AUTODIFF
+GENERATE_INSTANTIATIONS(
+    INSTANTIATE, (2, 3),
+    (autodiff::SecondOrderDual,
+     autodiff::SecondOrderDualNum,
+     std::reference_wrapper<const autodiff::SecondOrderDual>,
+     std::reference_wrapper<const autodiff::SecondOrderDualNum>))
+#endif  // SPECTRE_AUTODIFF
+
 #undef DIM
 #undef DTYPE
 #undef INSTANTIATE

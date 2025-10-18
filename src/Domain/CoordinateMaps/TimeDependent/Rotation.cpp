@@ -15,6 +15,9 @@
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "Domain/CoordinateMaps/TimeDependent/RotationMatrixHelpers.hpp"
 #include "Domain/FunctionsOfTime/FunctionOfTime.hpp"
+#ifdef SPECTRE_AUTODIFF
+#include "Utilities/Autodiff/Autodiff.hpp"
+#endif
 #include "Utilities/DereferenceWrapper.hpp"
 #include "Utilities/GenerateInstantiations.hpp"
 #include "Utilities/MakeWithValue.hpp"
@@ -215,10 +218,20 @@ GENERATE_INSTANTIATIONS(INSTANTIATE, (2, 3))
           std::unique_ptr<domain::FunctionsOfTime::FunctionOfTime>>&        \
           functions_of_time) const;
 
-GENERATE_INSTANTIATIONS(INSTANTIATE, (2, 3),
-                        (double, DataVector,
-                         std::reference_wrapper<const double>,
-                         std::reference_wrapper<const DataVector>))
+GENERATE_INSTANTIATIONS(
+    INSTANTIATE, (2, 3),
+    (double, DataVector,
+     std::reference_wrapper<const double>,
+     std::reference_wrapper<const DataVector>))
+
+#ifdef SPECTRE_AUTODIFF
+GENERATE_INSTANTIATIONS(
+    INSTANTIATE, (2, 3),
+    (autodiff::SecondOrderDual,
+     autodiff::SecondOrderDualNum,
+     std::reference_wrapper<const autodiff::SecondOrderDual>,
+     std::reference_wrapper<const autodiff::SecondOrderDualNum>))
+#endif  // SPECTRE_AUTODIFF
 
 #undef DIM
 #undef DTYPE
