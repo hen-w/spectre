@@ -560,6 +560,9 @@ struct SoTimeDerivative {
     const auto& cell_centered_logical_to_inertial_inv_jacobian =
         db::get<evolution::dg::subcell::fd::Tags::
                     InverseJacobianLogicalToInertial<Dim>>(*box);
+    const auto& cell_centered_logical_to_inertial_inv_hessian = db::get<
+        evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertial<Dim>>(
+        *box);
 
     constexpr bool subcell_enabled_at_external_boundary =
         std::decay_t<decltype(db::get<Parallel::Tags::Metavariables>(
@@ -626,7 +629,8 @@ struct SoTimeDerivative {
         make_not_null(&cell_centered_Ccz4_second_derivs), evolved_vars,
         db::get<evolution::dg::subcell::Tags::GhostDataForReconstruction<Dim>>(
             *box),
-        fd_order, subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian);
+        fd_order, subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
+        cell_centered_logical_to_inertial_inv_hessian);
 
     // compute spatial derivative of the four auxiliary fields
     const auto& d_d_lapse =

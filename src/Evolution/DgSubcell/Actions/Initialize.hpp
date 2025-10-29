@@ -131,7 +131,13 @@ struct SetSubcellGrid {
                  fd::Tags::DetInverseJacobianLogicalToInertialCompute<
                      ::domain::CoordinateMaps::Tags::CoordinateMap<
                          Dim, Frame::Grid, Frame::Inertial>,
-                     Dim>>;
+                     Dim>/*,
+                 fd::Tags::InverseHessianLogicalToGridCompute<
+                     ::domain::Tags::ElementMap<Dim, Frame::Grid>, Dim>,
+                 fd::Tags::InverseHessianLogicalToInertialCompute<
+                     ::domain::CoordinateMaps::Tags::CoordinateMap<
+                         Dim, Frame::Grid, Frame::Inertial>,
+                     Dim>*/>;
 
   template <typename DbTagsList, typename... InboxTags, typename ArrayIndex,
             typename ActionList, typename ParallelComponent,

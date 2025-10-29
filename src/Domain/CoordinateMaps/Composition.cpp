@@ -73,6 +73,27 @@ Composition<Frames, Dim, std::index_sequence<Is...>>::operator()(
   return call_impl(std::move(source_point), time, functions_of_time);
 }
 
+#ifdef SPECTRE_AUTODIFF
+template <typename Frames, size_t Dim, size_t... Is>
+tnsr::I<autodiff::HigherOrderDual<2, double>, Dim, tmpl::back<Frames>>
+Composition<Frames, Dim, std::index_sequence<Is...>>::operator()(
+    tnsr::I<autodiff::HigherOrderDual<2, double>, Dim, SourceFrame>
+        source_point,
+    const double time, const FuncOfTimeMap& functions_of_time) const {
+  return call_impl(std::move(source_point), time, functions_of_time);
+}
+
+template <typename Frames, size_t Dim, size_t... Is>
+tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, Dim,
+        tmpl::back<Frames>>
+Composition<Frames, Dim, std::index_sequence<Is...>>::operator()(
+    tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, Dim, SourceFrame>
+        source_point,
+    const double time, const FuncOfTimeMap& functions_of_time) const {
+  return call_impl(std::move(source_point), time, functions_of_time);
+}
+#endif
+
 template <typename Frames, size_t Dim, size_t... Is>
 std::optional<tnsr::I<double, Dim, tmpl::front<Frames>>>
 Composition<Frames, Dim, std::index_sequence<Is...>>::inverse(

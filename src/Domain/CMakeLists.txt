@@ -22,6 +22,7 @@ spectre_target_sources(
   ExcisionSphere.cpp
   FaceNormal.cpp
   FlatLogicalMetric.cpp
+  Hessian.cpp
   InterfaceLogicalCoordinates.cpp
   JacobianDiagnostic.cpp
   MinimumGridSpacing.cpp
@@ -49,6 +50,7 @@ spectre_target_headers(
   ExcisionSphere.hpp
   FaceNormal.hpp
   FlatLogicalMetric.hpp
+  Hessian.hpp
   InterfaceComputeTags.hpp
   InterfaceHelpers.hpp
   InterfaceLogicalCoordinates.hpp
@@ -80,6 +82,10 @@ target_link_libraries(
   RootFinding
   SphericalHarmonics
 )
+
+if (SPECTRE_AUTODIFF)
+  target_link_libraries(${LIBRARY} PUBLIC Autodiff)
+endif()
 
 add_subdirectory(Amr)
 add_subdirectory(BoundaryConditions)

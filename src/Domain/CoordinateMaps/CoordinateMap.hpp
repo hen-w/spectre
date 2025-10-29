@@ -25,6 +25,10 @@
 #include "Utilities/Serialization/CharmPupable.hpp"
 #include "Utilities/TMPL.hpp"
 #include "Utilities/TypeTraits/CreateIsCallable.hpp"
+#ifdef SPECTRE_AUTODIFF
+#include "Utilities/Autodiff/Autodiff.hpp"
+#include "Utilities/Simd/Simd.hpp"
+#endif
 
 /// \cond
 class DataVector;
@@ -138,6 +142,28 @@ class CoordinateMapBase : public PUP::able {
       tnsr::I<DataVector, Dim, SourceFrame> source_point,
       double time = std::numeric_limits<double>::signaling_NaN(),
       const FunctionsOfTimeMap& functions_of_time = {}) const = 0;
+#ifdef SPECTRE_AUTODIFF
+  virtual tnsr::I<autodiff::HigherOrderDual<2, double>, Dim, TargetFrame>
+  operator()(tnsr::I<autodiff::HigherOrderDual<2, double>, Dim, SourceFrame>
+             /*source_point*/,
+             double /*time*/,
+             const FunctionsOfTimeMap& /*functions_of_time*/) const {
+    ERROR(
+        "CoordinateMapBase::operator() for autodiff types "
+        "must be overridden in derived classes.");
+  }
+  virtual tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, Dim,
+                  TargetFrame>
+  operator()(tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, Dim,
+                     SourceFrame>
+             /*source_point*/,
+             double /*time*/,
+             const FunctionsOfTimeMap& /*functions_of_time*/ = {}) const {
+    ERROR(
+        "CoordinateMapBase::operator() for autodiff types "
+        "must be overridden in derived classes.");
+  }
+#endif
   /// @}
 
   /// @{

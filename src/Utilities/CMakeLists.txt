@@ -97,6 +97,7 @@ spectre_target_headers(
 target_link_libraries(
   ${LIBRARY}
   PUBLIC
+  Autodiff
   BLAS::BLAS
   Blaze
   Boost::boost

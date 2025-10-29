@@ -21,6 +21,7 @@
 #include "DataStructures/Tensor/EagerMath/DeterminantAndInverse.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
 #include "DataStructures/Variables.hpp"
+#include "Domain/Hessian.hpp"
 #include "Domain/Structure/Direction.hpp"
 #include "Domain/Structure/Element.hpp"
 #include "Utilities/GetOutput.hpp"
@@ -143,6 +144,52 @@ struct InverseJacobianCompute
       const tnsr::I<DataVector, MapTag::dim, typename MapTag::source_frame>&
           source_coords) {
     *inv_jacobian = element_map.inv_jacobian(source_coords);
+  }
+};
+
+/// \ingroup DataBoxTagsGroup
+/// \ingroup ComputationalDomainGroup
+/// \brief The inverse Hessian from the source frame to the target frame.
+///
+/// Specifically, \f$\partial x^{\bar{i}} / {\partial x^i \partial x^j}\f$,
+/// where \f$\bar{i}\f$ denotes the source frame and \f$i\f$ denotes the target
+/// frame.
+template <size_t Dim, typename SourceFrame, typename TargetFrame>
+struct InverseHessian : db::SimpleTag {
+  static std::string name() {
+    return "InverseHessian(" + get_output(SourceFrame{}) + "," +
+           get_output(TargetFrame{}) + ")";
+  }
+  using type = ::InverseHessian<DataVector, Dim, SourceFrame, TargetFrame>;
+};
+
+/// \ingroup DataBoxTagsGroup
+/// \ingroup ComputationalDomainGroup
+/// Computes the inverse Hessian of the map held by `MapTag` at the coordinates
+/// held by `SourceCoordsTag`. The coordinates must be in the source frame of
+/// the map.
+template <typename MapTag, typename SourceCoordsTag>
+struct InverseHessianCompute
+    : InverseHessian<MapTag::dim, typename MapTag::source_frame,
+                     typename MapTag::target_frame>,
+      db::ComputeTag {
+  using base = InverseHessian<MapTag::dim, typename MapTag::source_frame,
+                              typename MapTag::target_frame>;
+  using return_type = typename base::type;
+  using argument_tags =
+      tmpl::list<MapTag,
+                 InverseJacobian<MapTag::dim, typename MapTag::source_frame,
+                                 typename MapTag::target_frame>,
+                 SourceCoordsTag>;
+  static constexpr auto function(
+      const gsl::not_null<return_type*> inv_hessian,
+      const typename MapTag::type& element_map,
+      const ::InverseJacobian<DataVector, MapTag::dim,
+                              typename MapTag::source_frame,
+                              typename MapTag::target_frame>& inv_jac,
+      const tnsr::I<DataVector, MapTag::dim, typename MapTag::source_frame>&
+          source_coords) {
+    *inv_hessian = Hessian::inv_hessian(element_map, inv_jac, source_coords);
   }
 };
 

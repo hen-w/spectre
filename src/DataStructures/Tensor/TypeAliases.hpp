@@ -501,8 +501,8 @@ using InverseHessian =
  * \frac{\partial x^i}{\partial \xi^\hat{j} \partial \xi^\hat{k}}$
  *
  * The first (upper) index is in the \p TargetFrame with coordinates $x^i$
- * (often "inertial"), and the second and third (lower) indices are in the \p
- * SourceFrame with coordinates $\xi^\hat{j}$ (often "logical").
+ * (often "inertial"), and the second and third (lower) indices are in the
+ * \p SourceFrame with coordinates $\xi^\hat{j}$ (often "logical").
  */
 template <typename DataType, size_t Dim, typename SourceFrame,
           typename TargetFrame>

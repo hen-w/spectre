@@ -35,6 +35,7 @@
 #include "DataStructures/Tensor/IndexType.hpp"
 #include "DataStructures/Tensor/Structure.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
+#include "Utilities/Autodiff/Autodiff.hpp"
 #include "Utilities/ErrorHandling/Error.hpp"
 #include "Utilities/ForceInline.hpp"
 #include "Utilities/Gsl.hpp"
@@ -105,6 +106,9 @@ class Tensor<X, Symm, IndexList<Indices...>> {
                 "SpECTRE.");
   static_assert(
       std::is_same_v<X, std::complex<double>> or std::is_same_v<X, double> or
+          std::is_same_v<X,
+                         autodiff::HigherOrderDual<2, simd::batch<double>>> or
+          std::is_same_v<X, autodiff::HigherOrderDual<2, double>> or
           std::is_same_v<X, ComplexDataVector> or
           std::is_same_v<X, ComplexModalVector> or
           std::is_same_v<X, DataVector> or std::is_same_v<X, ModalVector> or
@@ -623,6 +627,28 @@ struct MakeWithValueImpl<Tensor<std::complex<double>, Structure...>, T> {
   static SPECTRE_ALWAYS_INLINE Tensor<std::complex<double>, Structure...> apply(
       const T& /*input*/, const std::complex<double> value) {
     return Tensor<std::complex<double>, Structure...>(value);
+  }
+};
+
+template <typename... Structure, typename T>
+struct MakeWithValueImpl<
+    Tensor<autodiff::HigherOrderDual<2, double>, Structure...>, T> {
+  static SPECTRE_ALWAYS_INLINE
+      Tensor<autodiff::HigherOrderDual<2, double>, Structure...>
+      apply(const T& /*input*/, const double value) {
+    return Tensor<autodiff::HigherOrderDual<2, double>, Structure...>(value);
+  }
+};
+
+template <typename... Structure, typename T>
+struct MakeWithValueImpl<
+    Tensor<autodiff::HigherOrderDual<2, simd::batch<double>>, Structure...>,
+    T> {
+  static SPECTRE_ALWAYS_INLINE
+      Tensor<autodiff::HigherOrderDual<2, simd::batch<double>>, Structure...>
+      apply(const T& /*input*/, const double value) {
+    return Tensor<autodiff::HigherOrderDual<2, simd::batch<double>>,
+                  Structure...>(value);
   }
 };
 }  // namespace MakeWithValueImpls

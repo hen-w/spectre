@@ -18,6 +18,10 @@
 #include "Domain/FunctionsOfTime/FunctionOfTime.hpp"
 #include "Utilities/Serialization/CharmPupable.hpp"
 #include "Utilities/TMPL.hpp"
+#ifdef SPECTRE_AUTODIFF
+#include "Utilities/Autodiff/Autodiff.hpp"
+#include "Utilities/Simd/Simd.hpp"
+#endif
 
 namespace domain::CoordinateMaps {
 
@@ -130,6 +134,20 @@ struct Composition<Frames, Dim, std::index_sequence<Is...>>
       tnsr::I<DataVector, Dim, SourceFrame> source_point,
       double time = std::numeric_limits<double>::signaling_NaN(),
       const FuncOfTimeMap& functions_of_time = {}) const override;
+
+#ifdef SPECTRE_AUTODIFF
+  tnsr::I<autodiff::HigherOrderDual<2, double>, Dim, TargetFrame> operator()(
+      tnsr::I<autodiff::HigherOrderDual<2, double>, Dim, SourceFrame>
+          source_point,
+      double time = std::numeric_limits<double>::signaling_NaN(),
+      const FuncOfTimeMap& functions_of_time = {}) const override;
+  tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, Dim, TargetFrame>
+  operator()(tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, Dim,
+                     SourceFrame>
+                 source_point,
+             double time = std::numeric_limits<double>::signaling_NaN(),
+             const FuncOfTimeMap& functions_of_time = {}) const override;
+#endif
 
   std::optional<tnsr::I<double, Dim, SourceFrame>> inverse(
       tnsr::I<double, Dim, TargetFrame> target_point,
