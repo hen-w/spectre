@@ -11,7 +11,7 @@
 #include "Utilities/Simd/Simd.hpp"
 #include "Utilities/TMPL.hpp"
 
-using ad_supported_maps = tmpl::list<domain::CoordinateMaps::Affine>;
+using ad_supported_maps = tmpl::list<>;
 
 namespace autodiff::detail {
 /// Template specialization for simd::batch<double> to treat it as arithmetic.

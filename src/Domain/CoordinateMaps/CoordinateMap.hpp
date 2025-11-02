@@ -145,18 +145,6 @@ class CoordinateMapBase : public PUP::able {
       tnsr::I<DataVector, Dim, SourceFrame> source_point,
       double time = std::numeric_limits<double>::signaling_NaN(),
       const FunctionsOfTimeMap& functions_of_time = {}) const = 0;
-  virtual tnsr::I<autodiff::HigherOrderDual<2, double>, Dim, TargetFrame>
-  operator()(tnsr::I<autodiff::HigherOrderDual<2, double>, Dim, SourceFrame>
-                 source_point,
-             double time = std::numeric_limits<double>::signaling_NaN(),
-             const FunctionsOfTimeMap& functions_of_time = {}) const = 0;
-  virtual tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, Dim,
-                  TargetFrame>
-  operator()(tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, Dim,
-                     SourceFrame>
-                 source_point,
-             double time = std::numeric_limits<double>::signaling_NaN(),
-             const FunctionsOfTimeMap& functions_of_time = {}) const = 0;
   /// @}
 
   /// @{
@@ -342,31 +330,6 @@ class CoordinateMap
     return call_impl(std::move(source_point), time, functions_of_time,
                      std::make_index_sequence<sizeof...(Maps)>{});
   }
-  tnsr::I<autodiff::HigherOrderDual<2, double>, dim, TargetFrame> operator()(
-      tnsr::I<autodiff::HigherOrderDual<2, double>, dim, SourceFrame>
-          source_point,
-      const double time = std::numeric_limits<double>::signaling_NaN(),
-      const FunctionsOfTimeMap& functions_of_time = {}) const override {
-    if (supports_autodiff()) {
-      return call_impl(std::move(source_point), time, functions_of_time,
-                       std::make_index_sequence<sizeof...(Maps)>{});
-    } else {
-      ERROR("At least one of the Maps does not support autodiff");
-    }
-  }
-  tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, dim, TargetFrame>
-  operator()(tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, dim,
-                     SourceFrame>
-                 source_point,
-             const double time = std::numeric_limits<double>::signaling_NaN(),
-             const FunctionsOfTimeMap& functions_of_time = {}) const override {
-    if (supports_autodiff()) {
-      return call_impl(std::move(source_point), time, functions_of_time,
-                       std::make_index_sequence<sizeof...(Maps)>{});
-    } else {
-      ERROR("At least one of the Maps does not support autodiff");
-    }
-  }
   /// @}
 
   /// @{
@@ -412,7 +375,9 @@ class CoordinateMap
           inverse_jac,
       const double time = std::numeric_limits<double>::signaling_NaN(),
       const FunctionsOfTimeMap& functions_of_time = {}) const override {
-    if (supports_autodiff()) {
+    if constexpr ((brigand::lazy::list_contains<ad_supported_maps,
+                                                Maps>::type::value &&
+                   ...)) {
       return inv_hessian_impl(std::move(source_point), inverse_jac, time,
                               functions_of_time);
     } else {

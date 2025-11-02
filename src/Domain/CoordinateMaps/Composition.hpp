@@ -137,19 +137,6 @@ struct Composition<Frames, Dim, std::index_sequence<Is...>>
       double time = std::numeric_limits<double>::signaling_NaN(),
       const FuncOfTimeMap& functions_of_time = {}) const override;
 
-  tnsr::I<autodiff::HigherOrderDual<2, double>, Dim, TargetFrame> operator()(
-      tnsr::I<autodiff::HigherOrderDual<2, double>, Dim, SourceFrame>
-          source_point,
-      double time = std::numeric_limits<double>::signaling_NaN(),
-      const FuncOfTimeMap& functions_of_time = {}) const override;
-
-  tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, Dim, TargetFrame>
-  operator()(tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, Dim,
-                     SourceFrame>
-                 source_point,
-             double time = std::numeric_limits<double>::signaling_NaN(),
-             const FuncOfTimeMap& functions_of_time = {}) const override;
-
   std::optional<tnsr::I<double, Dim, SourceFrame>> inverse(
       tnsr::I<double, Dim, TargetFrame> target_point,
       double time = std::numeric_limits<double>::signaling_NaN(),
@@ -173,7 +160,7 @@ struct Composition<Frames, Dim, std::index_sequence<Is...>>
   InverseHessian<DataVector, Dim, SourceFrame, TargetFrame> inv_hessian(
       tnsr::I<DataVector, Dim, SourceFrame> source_point,
       const InverseJacobian<DataVector, Dim, SourceFrame, TargetFrame>&
-          inverse_jac,
+      /*inverse_jac*/,
       double time = std::numeric_limits<double>::signaling_NaN(),
       const FuncOfTimeMap& functions_of_time = {}) const override;
 
@@ -235,8 +222,6 @@ struct Composition<Frames, Dim, std::index_sequence<Is...>>
   template <typename DataType>
   InverseHessian<DataType, Dim, SourceFrame, TargetFrame> inv_hessian_impl(
       tnsr::I<DataType, Dim, SourceFrame> source_point,
-      const InverseJacobian<DataType, Dim, SourceFrame, TargetFrame>&
-          inverse_jac,
       const double time = std::numeric_limits<double>::signaling_NaN(),
       const FuncOfTimeMap& functions_of_time = {}) const;
 
