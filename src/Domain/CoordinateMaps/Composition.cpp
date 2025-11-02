@@ -38,6 +38,15 @@ bool Composition<Frames, Dim, std::index_sequence<Is...>>::is_identity() const {
 }
 
 template <typename Frames, size_t Dim, size_t... Is>
+bool Composition<Frames, Dim, std::index_sequence<Is...>>::supports_autodiff()
+    const {
+  bool result = true;
+  EXPAND_PACK_LEFT_TO_RIGHT(
+      (result = result and get<Is>(maps_)->supports_autodiff()));
+  return result;
+}
+
+template <typename Frames, size_t Dim, size_t... Is>
 bool Composition<Frames, Dim,
                  std::index_sequence<Is...>>::inv_jacobian_is_time_dependent()
     const {
@@ -73,14 +82,17 @@ Composition<Frames, Dim, std::index_sequence<Is...>>::operator()(
   return call_impl(std::move(source_point), time, functions_of_time);
 }
 
-#ifdef SPECTRE_AUTODIFF
 template <typename Frames, size_t Dim, size_t... Is>
 tnsr::I<autodiff::HigherOrderDual<2, double>, Dim, tmpl::back<Frames>>
 Composition<Frames, Dim, std::index_sequence<Is...>>::operator()(
     tnsr::I<autodiff::HigherOrderDual<2, double>, Dim, SourceFrame>
         source_point,
     const double time, const FuncOfTimeMap& functions_of_time) const {
-  return call_impl(std::move(source_point), time, functions_of_time);
+  if (supports_autodiff()) {
+    return call_impl(std::move(source_point), time, functions_of_time);
+  } else {
+    ERROR("At least one of the Maps does not support autodiff");
+  }
 }
 
 template <typename Frames, size_t Dim, size_t... Is>
@@ -90,9 +102,12 @@ Composition<Frames, Dim, std::index_sequence<Is...>>::operator()(
     tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, Dim, SourceFrame>
         source_point,
     const double time, const FuncOfTimeMap& functions_of_time) const {
-  return call_impl(std::move(source_point), time, functions_of_time);
+  if (supports_autodiff()) {
+    return call_impl(std::move(source_point), time, functions_of_time);
+  } else {
+    ERROR("At least one of the Maps does not support autodiff");
+  }
 }
-#endif
 
 template <typename Frames, size_t Dim, size_t... Is>
 std::optional<tnsr::I<double, Dim, tmpl::front<Frames>>>
@@ -116,6 +131,29 @@ Composition<Frames, Dim, std::index_sequence<Is...>>::inv_jacobian(
     tnsr::I<DataVector, Dim, SourceFrame> source_point, const double time,
     const FuncOfTimeMap& functions_of_time) const {
   return inv_jacobian_impl(std::move(source_point), time, functions_of_time);
+}
+
+// template <typename Frames, size_t Dim, size_t... Is>
+// InverseHessian<double, Dim, tmpl::front<Frames>, tmpl::back<Frames>>
+// Composition<Frames, Dim, std::index_sequence<Is...>>::inv_hessian(
+//     tnsr::I<double, Dim, SourceFrame> source_point, const double time,
+//     const FuncOfTimeMap& functions_of_time) const {
+//   return inv_hessian_impl(std::move(source_point), time, functions_of_time);
+// }
+
+template <typename Frames, size_t Dim, size_t... Is>
+InverseHessian<DataVector, Dim, tmpl::front<Frames>, tmpl::back<Frames>>
+Composition<Frames, Dim, std::index_sequence<Is...>>::inv_hessian(
+    tnsr::I<DataVector, Dim, SourceFrame> source_point,
+    const InverseJacobian<DataVector, Dim, SourceFrame, TargetFrame>&
+        inverse_jac,
+    const double time, const FuncOfTimeMap& functions_of_time) const {
+  if (supports_autodiff()) {
+    return inv_hessian_impl(std::move(source_point), inverse_jac, time,
+                            functions_of_time);
+  } else {
+    ERROR("At least one of the Maps does not support autodiff");
+  }
 }
 
 template <typename Frames, size_t Dim, size_t... Is>
@@ -318,6 +356,84 @@ Composition<Frames, Dim, std::index_sequence<Is...>>::inv_jacobian_impl(
   EXPAND_PACK_LEFT_TO_RIGHT(apply_inv_jacobian(tmpl::size_t<Is>{}));
   return get<InverseJacobian<DataType, Dim, SourceFrame, TargetFrame>>(
       inv_jacobians);
+}
+
+template <typename Frames, size_t Dim, size_t... Is>
+template <typename DataType>
+InverseHessian<DataType, Dim, tmpl::front<Frames>, tmpl::back<Frames>>
+Composition<Frames, Dim, std::index_sequence<Is...>>::inv_hessian_impl(
+    tnsr::I<DataType, Dim, SourceFrame> source_point,
+    const InverseJacobian<DataType, Dim, SourceFrame, TargetFrame>& inverse_jac,
+    const double time, const FuncOfTimeMap& functions_of_time) const {
+  // first compute hessian
+  using BatchType = simd::batch<double>;
+  using SecondOrderDual = autodiff::HigherOrderDual<2, BatchType>;
+  using SecondOrderDualNum = autodiff::HigherOrderDual<2, double>;
+
+  const size_t num_pts = get<0>(source_point).size();
+  ::Hessian<DataVector, Dim, SourceFrame, TargetFrame> hessian{num_pts};
+  ::InverseHessian<DataVector, Dim, SourceFrame, TargetFrame> inverse_hessian{
+      num_pts};
+
+  // manual vectorization with xsimd
+  const size_t vec_end = (num_pts / BatchType::size) * BatchType::size;
+  for (size_t pts_index = 0; pts_index < vec_end;
+       pts_index += BatchType::size) {
+    tnsr::I<SecondOrderDual, Dim, SourceFrame> dual_source_coords;
+
+    for (size_t i = 0; i < Dim; ++i) {
+      for (size_t j = i; j < Dim; ++j) {
+        [&]<std::size_t... Ins>(std::index_sequence<Ins...>) {
+          ((get<Ins>(dual_source_coords) =
+                BatchType::load_aligned(&(get<Ins>(source_point))[pts_index])),
+           ...);
+        }
+        (std::make_index_sequence<Dim>{});
+
+        autodiff::seed<1>(dual_source_coords.get(i), 1.0);
+        autodiff::seed<2>(dual_source_coords.get(j), 1.0);
+
+        const auto dual_target_coords = call_impl(dual_source_coords);
+        for (size_t k = 0; k < Dim; ++k) {
+          const auto deriv_kij =
+              autodiff::derivative<2>(dual_target_coords.get(k));
+          deriv_kij.store_aligned(&hessian.get(k, i, j)[pts_index]);
+        }
+      }
+    }
+  }
+  // dealing with the tail
+  for (size_t pts_index = vec_end; pts_index < num_pts; ++pts_index) {
+    tnsr::I<SecondOrderDualNum, Dim, SourceFrame> dual_source_coords;
+
+    for (size_t i = 0; i < Dim; ++i) {
+      for (size_t j = i; j < Dim; ++j) {
+        [&]<std::size_t... Ins>(std::index_sequence<Ins...>) {
+          ((get<Ins>(dual_source_coords) =
+                gsl::at(get<Ins>(source_point), pts_index)),
+           ...);
+        }
+        (std::make_index_sequence<Dim>{});
+        autodiff::seed<1>(dual_source_coords.get(i), 1.0);
+        autodiff::seed<2>(dual_source_coords.get(j), 1.0);
+
+        const auto dual_target_coords =
+            call_impl(dual_source_coords, time, functions_of_time);
+        for (size_t k = 0; k < Dim; ++k) {
+          hessian.get(k, i, j)[pts_index] =
+              autodiff::derivative<2>(dual_target_coords.get(k));
+        }
+      }
+    }
+  }
+
+  // piece together the inverse hessian from hessian and inverse jacobian
+  ::tenex::evaluate<ti::I, ti::m, ti::n>(
+      make_not_null(&inverse_hessian),
+      -1.0 * inverse_jac(ti::I, ti::j) * inverse_jac(ti::K, ti::m) *
+          inverse_jac(ti::L, ti::n) * hessian(ti::J, ti::k, ti::l));
+
+  return inverse_hessian;
 }
 
 template <typename Frames, size_t Dim, size_t... Is>

@@ -7,7 +7,11 @@
 #include <autodiff/forward/dual.hpp>
 #include <autodiff/reverse/var.hpp>
 
+#include "Domain/CoordinateMaps/Affine.hpp"
 #include "Utilities/Simd/Simd.hpp"
+#include "Utilities/TMPL.hpp"
+
+using ad_supported_maps = tmpl::list<domain::CoordinateMaps::Affine>;
 
 namespace autodiff::detail {
 /// Template specialization for simd::batch<double> to treat it as arithmetic.
@@ -19,52 +23,3 @@ struct ArithmeticTraits<simd::batch<double>> {
   static constexpr bool isArithmetic = true;
 };
 }  // namespace autodiff::detail
-
-namespace MakeWithValueImpls {
-template <typename T>
-struct MakeWithValueImpl<autodiff::HigherOrderDual<2, simd::batch<double>>, T> {
-  static SPECTRE_ALWAYS_INLINE autodiff::HigherOrderDual<2, simd::batch<double>>
-  apply(const T& /* input */, const double value) {
-    return {value};
-  }
-};
-
-template <typename T>
-struct MakeWithValueImpl<autodiff::HigherOrderDual<2, double>, T> {
-  static SPECTRE_ALWAYS_INLINE autodiff::HigherOrderDual<2, double> apply(
-      const T& /* input */, const double value) {
-    return {value};
-  }
-};
-}  // namespace MakeWithValueImpls
-
-SPECTRE_ALWAYS_INLINE size_t
-get_size(const autodiff::HigherOrderDual<2, simd::batch<double>>& /*t*/) {
-  return 1;
-}
-
-SPECTRE_ALWAYS_INLINE size_t
-get_size(const autodiff::HigherOrderDual<2, double>& /*t*/) {
-  return 1;
-}
-
-SPECTRE_ALWAYS_INLINE decltype(auto) get_element(
-    const autodiff::HigherOrderDual<2, simd::batch<double>>& t,
-    const size_t /*i*/) {
-  return t;
-}
-
-SPECTRE_ALWAYS_INLINE decltype(auto) get_element(
-    autodiff::HigherOrderDual<2, simd::batch<double>>& t, const size_t /*i*/) {
-  return t;
-}
-
-SPECTRE_ALWAYS_INLINE decltype(auto) get_element(
-    const autodiff::HigherOrderDual<2, double>& t, const size_t /*i*/) {
-  return t;
-}
-
-SPECTRE_ALWAYS_INLINE decltype(auto) get_element(
-    autodiff::HigherOrderDual<2, double>& t, const size_t /*i*/) {
-  return t;
-}

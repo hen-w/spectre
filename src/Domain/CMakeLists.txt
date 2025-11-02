@@ -22,7 +22,6 @@ spectre_target_sources(
   ExcisionSphere.cpp
   FaceNormal.cpp
   FlatLogicalMetric.cpp
-  Hessian.cpp
   InterfaceLogicalCoordinates.cpp
   JacobianDiagnostic.cpp
   MinimumGridSpacing.cpp
@@ -50,7 +49,6 @@ spectre_target_headers(
   ExcisionSphere.hpp
   FaceNormal.hpp
   FlatLogicalMetric.hpp
-  Hessian.hpp
   InterfaceComputeTags.hpp
   InterfaceHelpers.hpp
   InterfaceLogicalCoordinates.hpp
