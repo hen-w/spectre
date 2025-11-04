@@ -138,9 +138,16 @@ bool operator!=(const SpecialMobius& lhs, const SpecialMobius& rhs) {
   SpecialMobius::inv_jacobian(const std::array<DTYPE(data), 3>& source_coords) \
       const;
 
-GENERATE_INSTANTIATIONS(INSTANTIATE, (double, DataVector,
-                                      std::reference_wrapper<const double>,
-                                      std::reference_wrapper<const DataVector>))
+using BatchType = simd::batch<double>;
+using SecondOrderDual = autodiff::HigherOrderDual<2, BatchType>;
+using SecondOrderDualNum = autodiff::HigherOrderDual<2, double>;
+GENERATE_INSTANTIATIONS(INSTANTIATE,
+                        (double, DataVector, SecondOrderDual,
+                         SecondOrderDualNum,
+                         std::reference_wrapper<const SecondOrderDual>,
+                         std::reference_wrapper<const SecondOrderDualNum>,
+                         std::reference_wrapper<const double>,
+                         std::reference_wrapper<const DataVector>))
 
 #undef DTYPE
 #undef INSTANTIATE

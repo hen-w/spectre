@@ -620,13 +620,12 @@ class CoordinateMap
       tnsr::I<T, dim, SourceFrame>&& source_point, double time,
       const FunctionsOfTimeMap& functions_of_time) const;
 
-  // for now time dependent hessian is not implemented
   template <typename T>
   InverseHessian<T, dim, SourceFrame, TargetFrame> inv_hessian_impl(
       tnsr::I<T, dim, SourceFrame>&& source_point,
       const ::InverseJacobian<T, dim, SourceFrame, TargetFrame>& inverse_jac,
       double time, const FunctionsOfTimeMap& functions_of_time) const;
-  // for now time dependent hessian is not implemented
+
   template <typename T>
   InverseHessian<T, dim, SourceFrame, TargetFrame> inv_hessian_impl(
       tnsr::I<T, dim, SourceFrame>&& source_point, double time,

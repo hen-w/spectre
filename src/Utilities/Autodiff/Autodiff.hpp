@@ -10,6 +10,10 @@
 #include "Utilities/MakeWithValue.hpp"
 #include "Utilities/Simd/Simd.hpp"
 
+using BatchType = simd::batch<double>;
+using SecondOrderDual = autodiff::HigherOrderDual<2, BatchType>;
+using SecondOrderDualNum = autodiff::HigherOrderDual<2, double>;
+
 namespace autodiff::detail {
 /// Template specialization for simd::batch<double> to treat it as arithmetic.
 // The major difficulty we have with DataVector working with autodiff is

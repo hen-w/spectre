@@ -15,6 +15,7 @@
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "Domain/CoordinateMaps/TimeDependent/RotationMatrixHelpers.hpp"
 #include "Domain/FunctionsOfTime/FunctionOfTime.hpp"
+#include "Utilities/Autodiff/Autodiff.hpp"
 #include "Utilities/DereferenceWrapper.hpp"
 #include "Utilities/GenerateInstantiations.hpp"
 #include "Utilities/MakeWithValue.hpp"
@@ -216,7 +217,10 @@ GENERATE_INSTANTIATIONS(INSTANTIATE, (2, 3))
           functions_of_time) const;
 
 GENERATE_INSTANTIATIONS(INSTANTIATE, (2, 3),
-                        (double, DataVector,
+                        (double, DataVector, SecondOrderDual,
+                         SecondOrderDualNum,
+                         std::reference_wrapper<const SecondOrderDual>,
+                         std::reference_wrapper<const SecondOrderDualNum>,
                          std::reference_wrapper<const double>,
                          std::reference_wrapper<const DataVector>))
 

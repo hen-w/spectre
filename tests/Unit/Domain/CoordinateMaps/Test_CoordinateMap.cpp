@@ -798,7 +798,7 @@ void test_coordinate_map_with_rotation_wedge() {
   const auto alt_inv_hessian = composed_map.inv_hessian(test_point_vector);
   CHECK_ITERABLE_APPROX(inv_hessian, alt_inv_hessian);
   for (auto& component : inv_hessian) {
-    CHECK(not(0.0 == approx(component)));
+    CHECK_FALSE(0.0 == approx(component));
   }
 
   const auto coords_jacs_velocity =
@@ -1254,19 +1254,18 @@ void test_time_dependent_map() {
   CHECK(time_dependent_map_first
             .jacobian(tnsr_double_logical, final_time, functions_of_time)
             .get(0, 0) == 1.5);
-  CHECK(time_dependent_map_first
-            .inv_jacobian(tnsr_double_logical, final_time, functions_of_time)
-            .get(0, 0) == 2. / 3.);
+  const auto inv_jac_double = time_dependent_map_first.inv_jacobian(
+      tnsr_double_logical, final_time, functions_of_time);
+  CHECK(inv_jac_double.get(0, 0) == 2. / 3.);
   CHECK_ITERABLE_APPROX(
       time_dependent_map_first
           .jacobian(tnsr_datavector_logical, final_time, functions_of_time)
           .get(0, 0),
       (DataVector{1.5, 1.5, 1.5}));
-  CHECK_ITERABLE_APPROX(
-      time_dependent_map_first
-          .inv_jacobian(tnsr_datavector_logical, final_time, functions_of_time)
-          .get(0, 0),
-      (DataVector{2. / 3., 2. / 3., 2. / 3.}));
+  const auto inv_jac_datavector = time_dependent_map_first.inv_jacobian(
+      tnsr_datavector_logical, final_time, functions_of_time);
+  CHECK_ITERABLE_APPROX(inv_jac_datavector.get(0, 0),
+                        (DataVector{2. / 3., 2. / 3., 2. / 3.}));
 
   test_serialization(time_dependent_map_first);
 
@@ -1344,6 +1343,94 @@ void test_time_dependent_map() {
                           (tnsr::I<DataVector, 1, Frame::Inertial>{DataVector{
                               tnsr_datavector_logical.get(0).size(),
                               1.5 * velocity[velocity.size() - 1]}}));
+  }
+}
+
+void test_time_dependent_map_for_hessian() {
+  INFO("Time dependent CoordinateMap for hessian");
+  // define vars for FunctionOfTime::PiecewisePolynomial f(t) = t**2.
+  const double initial_time = -1.;
+  const double final_time = 4.4;
+  constexpr size_t deriv_order = 3;
+
+  const std::array<DataVector, deriv_order + 1> init_func{
+      {{1.0}, {-2.0}, {2.0}, {0.0}}};
+  using Polynomial = domain::FunctionsOfTime::PiecewisePolynomial<deriv_order>;
+  std::unordered_map<std::string,
+                     std::unique_ptr<domain::FunctionsOfTime::FunctionOfTime>>
+      functions_of_time{};
+  functions_of_time["Rotation"] =
+      std::make_unique<Polynomial>(initial_time, init_func, final_time);
+
+  const CoordinateMaps::TimeDependent::Rotation<2> rot_map{"Rotation"};
+
+  // affine(x) = 1.5 * x + 5.5
+  using Affine2D = CoordinateMaps::ProductOf2Maps<CoordinateMaps::Affine,
+                                                  CoordinateMaps::Affine>;
+  const auto affine_map =
+      Affine2D{Affine{-1.0, 1.0, -1.0, 1.0}, Affine{-1.0, 1.0, 0.0, 2.0}};
+
+  const auto time_dependent_map_first =
+      make_coordinate_map<Frame::BlockLogical, Frame::Inertial>(rot_map,
+                                                                affine_map);
+
+  const tnsr::I<double, 2, Frame::BlockLogical> tnsr_double_logical{
+      {{3.2, -4.3}}};
+  const tnsr::I<DataVector, 2, Frame::BlockLogical> tnsr_datavector_logical{
+      {{{0.1, -4.3, 10.0}, {1.2, 10.1, -3.5}}}};
+
+  const auto inv_jac_double = time_dependent_map_first.inv_jacobian(
+      tnsr_double_logical, final_time, functions_of_time);
+  const auto inv_jac_datavector = time_dependent_map_first.inv_jacobian(
+      tnsr_datavector_logical, final_time, functions_of_time);
+
+  auto inv_hessian_double = time_dependent_map_first.inv_hessian(
+      tnsr_double_logical, final_time, functions_of_time);
+  for (const auto& component : inv_hessian_double) {
+    CHECK(component == 0.0);
+  }
+  inv_hessian_double = time_dependent_map_first.inv_hessian(
+      tnsr_double_logical, inv_jac_double, final_time, functions_of_time);
+  for (const auto& component : inv_hessian_double) {
+    CHECK(component == 0.0);
+  }
+  auto inv_hessian_datavector = time_dependent_map_first.inv_hessian(
+      tnsr_datavector_logical, final_time, functions_of_time);
+  for (const auto& component : inv_hessian_datavector) {
+    CHECK_ITERABLE_APPROX(component, (DataVector{0.0, 0.0, 0.0}));
+  }
+  inv_hessian_datavector = time_dependent_map_first.inv_hessian(
+      tnsr_datavector_logical, inv_jac_datavector, final_time,
+      functions_of_time);
+  for (const auto& component : inv_hessian_datavector) {
+    CHECK_ITERABLE_APPROX(component, (DataVector{0.0, 0.0, 0.0}));
+  }
+
+  test_serialization(time_dependent_map_first);
+
+  const auto serialized_map =
+      serialize_and_deserialize(time_dependent_map_first);
+
+  inv_hessian_double = serialized_map.inv_hessian(
+      tnsr_double_logical, final_time, functions_of_time);
+  for (const auto& component : inv_hessian_double) {
+    CHECK(component == 0.0);
+  }
+  inv_hessian_double = serialized_map.inv_hessian(
+      tnsr_double_logical, inv_jac_double, final_time, functions_of_time);
+  for (const auto& component : inv_hessian_double) {
+    CHECK(component == 0.0);
+  }
+  inv_hessian_datavector = serialized_map.inv_hessian(
+      tnsr_datavector_logical, final_time, functions_of_time);
+  for (const auto& component : inv_hessian_datavector) {
+    CHECK_ITERABLE_APPROX(component, (DataVector{0.0, 0.0, 0.0}));
+  }
+  inv_hessian_datavector =
+      serialized_map.inv_hessian(tnsr_datavector_logical, inv_jac_datavector,
+                                 final_time, functions_of_time);
+  for (const auto& component : inv_hessian_datavector) {
+    CHECK_ITERABLE_APPROX(component, (DataVector{0.0, 0.0, 0.0}));
   }
 }
 
@@ -1596,6 +1683,7 @@ SPECTRE_TEST_CASE("Unit.Domain.CoordinateMap", "[Domain][Unit]") {
   test_make_vector_coordinate_map_base();
   test_coordinate_maps_are_identity();
   test_time_dependent_map();
+  test_time_dependent_map_for_hessian();
   test_push_back();
   test_jacobian_is_time_dependent();
   test_coords_frame_velocity_jacobians();
