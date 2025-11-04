@@ -156,8 +156,7 @@ struct Composition<Frames, Dim, std::index_sequence<Is...>>
   // and jacobian
   InverseHessian<double, Dim, SourceFrame, TargetFrame> inv_hessian(
       tnsr::I<double, Dim, SourceFrame> source_point,
-      const InverseJacobian<double, Dim, SourceFrame, TargetFrame>&
-      /*inverse_jac*/,
+      const InverseJacobian<double, Dim, SourceFrame, TargetFrame>& inverse_jac,
       double time = std::numeric_limits<double>::signaling_NaN(),
       const FuncOfTimeMap& functions_of_time = {}) const override;
 
@@ -166,7 +165,19 @@ struct Composition<Frames, Dim, std::index_sequence<Is...>>
   InverseHessian<DataVector, Dim, SourceFrame, TargetFrame> inv_hessian(
       tnsr::I<DataVector, Dim, SourceFrame> source_point,
       const InverseJacobian<DataVector, Dim, SourceFrame, TargetFrame>&
-      /*inverse_jac*/,
+          inverse_jac,
+      double time = std::numeric_limits<double>::signaling_NaN(),
+      const FuncOfTimeMap& functions_of_time = {}) const override;
+
+  // compute inverse hessian by calling operator()
+  InverseHessian<double, Dim, SourceFrame, TargetFrame> inv_hessian(
+      tnsr::I<double, Dim, SourceFrame> source_point,
+      double time = std::numeric_limits<double>::signaling_NaN(),
+      const FuncOfTimeMap& functions_of_time = {}) const override;
+
+  // compute inverse hessian by calling operator()
+  InverseHessian<DataVector, Dim, SourceFrame, TargetFrame> inv_hessian(
+      tnsr::I<DataVector, Dim, SourceFrame> source_point,
       double time = std::numeric_limits<double>::signaling_NaN(),
       const FuncOfTimeMap& functions_of_time = {}) const override;
 
@@ -229,7 +240,7 @@ struct Composition<Frames, Dim, std::index_sequence<Is...>>
   InverseHessian<DataType, Dim, SourceFrame, TargetFrame> inv_hessian_impl(
       tnsr::I<DataType, Dim, SourceFrame> source_point,
       const ::InverseJacobian<DataType, Dim, SourceFrame, TargetFrame>&
-      /*inverse_jac*/,
+          inverse_jac,
       const double time = std::numeric_limits<double>::signaling_NaN(),
       const FuncOfTimeMap& functions_of_time = {}) const;
 

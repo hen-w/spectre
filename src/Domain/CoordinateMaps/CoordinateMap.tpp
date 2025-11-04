@@ -349,7 +349,8 @@ auto CoordinateMap<SourceFrame, TargetFrame, Maps...>::inv_hessian_impl(
         for (size_t j = i; j < dim; ++j) {
           [&]<std::size_t... Is>(std::index_sequence<Is...>) {
             ((get<Is>(dual_source_coords) =
-                  BatchType::load_aligned(&(get<Is>(source_point))[pts_index])),
+                  BatchType::load_unaligned(
+                    &(get<Is>(source_point))[pts_index])),
              ...);
           }(std::make_index_sequence<dim>{});
 
@@ -362,7 +363,7 @@ auto CoordinateMap<SourceFrame, TargetFrame, Maps...>::inv_hessian_impl(
           for (size_t k = 0; k < dim; ++k) {
             const auto deriv_kij =
                 autodiff::derivative<2>(dual_target_coords.get(k));
-            deriv_kij.store_aligned(&hessian.get(k, i, j)[pts_index]);
+            deriv_kij.store_unaligned(&hessian.get(k, i, j)[pts_index]);
           }
         }
       }
@@ -440,7 +441,7 @@ auto CoordinateMap<SourceFrame, TargetFrame, Maps...>::inv_hessian_impl(
 
       [&]<std::size_t... Is>(std::index_sequence<Is...>) {
         ((get<Is>(dual_source_coords) =
-              BatchType::load_aligned(&(get<Is>(source_point))[pts_index])),
+              BatchType::load_unaligned(&(get<Is>(source_point))[pts_index])),
          ...);
       }(std::make_index_sequence<dim>{});
 
@@ -461,7 +462,7 @@ auto CoordinateMap<SourceFrame, TargetFrame, Maps...>::inv_hessian_impl(
               const auto deriv_kli =
                   autodiff::derivative<1>(dual_inverse_jac.get(k, i));
               inv_hessian_kij += inv_jac_lj * deriv_kli;
-              inv_hessian_kij.store_aligned(
+              inv_hessian_kij.store_unaligned(
                   &inverse_hessian.get(k, i, j)[pts_index]);
             }
           }

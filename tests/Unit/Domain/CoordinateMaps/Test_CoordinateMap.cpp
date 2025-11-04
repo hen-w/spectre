@@ -4,8 +4,10 @@
 #include "Framework/TestingFramework.hpp"
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <pup.h>
@@ -789,13 +791,37 @@ void test_coordinate_map_with_rotation_wedge() {
       compose_jacobians(first_map, second_map, test_point_array);
   CHECK_ITERABLE_APPROX(jac, expected_jac);
 
+  auto start0 = std::chrono::high_resolution_clock::now();
   const auto inv_jac = composed_map.inv_jacobian(test_point_vector);
+  auto end0 = std::chrono::high_resolution_clock::now();
+  auto duration0_us =
+      std::chrono::duration_cast<std::chrono::microseconds>(end0 - start0)
+          .count();
   const auto expected_inv_jac =
       compose_inv_jacobians(first_map, second_map, test_point_array);
   CHECK_ITERABLE_APPROX(inv_jac, expected_inv_jac);
 
+  auto start1 = std::chrono::high_resolution_clock::now();
   const auto inv_hessian = composed_map.inv_hessian(test_point_vector, inv_jac);
+  auto end1 = std::chrono::high_resolution_clock::now();
+  auto duration1_us =
+      std::chrono::duration_cast<std::chrono::microseconds>(end1 - start1)
+          .count();
+
+  auto start2 = std::chrono::high_resolution_clock::now();
   const auto alt_inv_hessian = composed_map.inv_hessian(test_point_vector);
+  auto end2 = std::chrono::high_resolution_clock::now();
+  auto duration2_us =
+      std::chrono::duration_cast<std::chrono::microseconds>(end2 - start2)
+          .count();
+
+  std::cout << "inv_jacobian(test_point_vector) took: " << duration0_us
+            << " us\n";
+  std::cout << "inv_hessian(test_point_vector, inv_jac) took: " << duration1_us
+            << " us\n";
+  std::cout << "inv_hessian(test_point_vector) took: " << duration2_us
+            << " us\n";
+
   CHECK_ITERABLE_APPROX(inv_hessian, alt_inv_hessian);
   for (auto& component : inv_hessian) {
     CHECK_FALSE(0.0 == approx(component));
