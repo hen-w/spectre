@@ -140,6 +140,14 @@ void test_single_coordinate_map() {
     CHECK_ITERABLE_APPROX(map_base->inv_jacobian(local_source_points),
                           local_expected_inv_jac);
 
+    const auto local_expected_inv_hessian = make_with_value<
+        InverseHessian<double, dim, Frame::BlockLogical, Frame::Grid>>(
+        get<0>(local_source_points), 0.0);
+    CHECK_ITERABLE_APPROX(
+        map_base->inv_hessian(local_source_points,
+                              map_base->inv_jacobian(local_source_points)),
+        local_expected_inv_hessian);
+
     const auto coords_jacs_velocity =
         map_base->coords_frame_velocity_jacobians(local_source_points);
     CHECK_ITERABLE_APPROX(std::get<0>(coords_jacs_velocity),
@@ -346,8 +354,11 @@ void test_coordinate_map_with_affine_map() {
           approx(map.inverse(tnsr::I<double, 1, Frame::Grid>{1.0 / i + -0.5})
                      .value()[0]));
 
-    CHECK(approx(map.inv_jacobian(source_points).get(0, 0)) == 2.0);
+    const auto inv_jac = map.inv_jacobian(source_points);
+    CHECK(approx(inv_jac.get(0, 0)) == 2.0);
     CHECK(approx(map.jacobian(source_points).get(0, 0)) == 0.5);
+    CHECK(approx(map.inv_hessian(source_points, inv_jac).get(0, 0, 0)) == 0.0);
+    CHECK(approx(map.inv_hessian(source_points).get(0, 0, 0)) == 0.0);
 
     const auto coords_jacs_velocity =
         map.coords_frame_velocity_jacobians(source_points);
@@ -398,6 +409,15 @@ void test_coordinate_map_with_affine_map() {
     CHECK(0.0 == approx(get<1, 0>(jac)));
     CHECK(0.0 == approx(get<0, 1>(jac)));
     CHECK(4.0 == approx(get<1, 1>(jac)));
+
+    auto inv_hessian = prod_map2d.inv_hessian(source_points, inv_jac);
+    for (auto& component : inv_hessian) {
+      CHECK(0.0 == approx(component));
+    }
+    inv_hessian = prod_map2d.inv_hessian(source_points);
+    for (auto& component : inv_hessian) {
+      CHECK(0.0 == approx(component));
+    }
 
     const auto coords_jacs_velocity =
         prod_map2d.coords_frame_velocity_jacobians(source_points);
@@ -466,6 +486,15 @@ void test_coordinate_map_with_affine_map() {
     CHECK(0.0 == approx(get<2, 1>(jac)));
     CHECK(10.0 == approx(get<2, 2>(jac)));
 
+    auto inv_hessian = prod_map3d.inv_hessian(source_points, inv_jac);
+    for (auto& component : inv_hessian) {
+      CHECK(0.0 == approx(component));
+    }
+    inv_hessian = prod_map3d.inv_hessian(source_points);
+    for (auto& component : inv_hessian) {
+      CHECK(0.0 == approx(component));
+    }
+
     const auto coords_jacs_velocity =
         prod_map3d.coords_frame_velocity_jacobians(source_points);
     CHECK_ITERABLE_APPROX(std::get<0>(coords_jacs_velocity),
@@ -521,6 +550,15 @@ void test_coordinate_map_with_rotation_map() {
         first_rotated2d, second_rotated2d, gsl::at(coords2d, i));
     CHECK_ITERABLE_APPROX(inv_jac, expected_inv_jac);
 
+    auto inv_hessian = double_rotated2d.inv_hessian(source_points, inv_jac);
+    for (auto& component : inv_hessian) {
+      CHECK(0.0 == approx(component));
+    }
+    inv_hessian = double_rotated2d.inv_hessian(source_points);
+    for (auto& component : inv_hessian) {
+      CHECK(0.0 == approx(component));
+    }
+
     const auto coords_jacs_velocity =
         double_rotated2d.coords_frame_velocity_jacobians(source_points);
     CHECK_ITERABLE_APPROX(std::get<0>(coords_jacs_velocity),
@@ -569,6 +607,15 @@ void test_coordinate_map_with_rotation_map() {
     const auto expected_inv_jac = compose_inv_jacobians(
         first_rotated3d, second_rotated3d, gsl::at(coords3d, i));
     CHECK_ITERABLE_APPROX(inv_jac, expected_inv_jac);
+
+    auto inv_hessian = double_rotated3d.inv_hessian(source_points, inv_jac);
+    for (auto& component : inv_hessian) {
+      CHECK(0.0 == approx(component));
+    }
+    inv_hessian = double_rotated3d.inv_hessian(source_points);
+    for (auto& component : inv_hessian) {
+      CHECK(0.0 == approx(component));
+    }
 
     const auto coords_jacs_velocity =
         double_rotated3d.coords_frame_velocity_jacobians(source_points);
@@ -620,6 +667,16 @@ void test_coordinate_map_with_rotation_map_datavector() {
     const auto expected_inv_jac = compose_inv_jacobians(
         first_rotated2d, second_rotated2d, coords2d_array);
     CHECK_ITERABLE_APPROX(inv_jac, expected_inv_jac);
+
+    DataVector expected_zero{get<0>(coords2d).size(), 0.0};
+    auto inv_hessian = double_rotated2d.inv_hessian(coords2d, inv_jac);
+    for (auto& component : inv_hessian) {
+      CHECK_ITERABLE_APPROX(component, expected_zero);
+    }
+    inv_hessian = double_rotated2d.inv_hessian(coords2d);
+    for (auto& component : inv_hessian) {
+      CHECK_ITERABLE_APPROX(component, expected_zero);
+    }
 
     const auto coords_jacs_velocity =
         double_rotated2d.coords_frame_velocity_jacobians(coords2d);
@@ -675,6 +732,16 @@ void test_coordinate_map_with_rotation_map_datavector() {
         first_rotated3d, second_rotated3d, coords3d_array);
     CHECK_ITERABLE_APPROX(inv_jac, expected_inv_jac);
 
+    DataVector expected_zero{get<0>(coords3d).size(), 0.0};
+    auto inv_hessian = double_rotated3d.inv_hessian(coords3d, inv_jac);
+    for (auto& component : inv_hessian) {
+      CHECK_ITERABLE_APPROX(component, expected_zero);
+    }
+    inv_hessian = double_rotated3d.inv_hessian(coords3d);
+    for (auto& component : inv_hessian) {
+      CHECK_ITERABLE_APPROX(component, expected_zero);
+    }
+
     // Check inequivalence operator
     CHECK_FALSE(double_rotated3d_full != double_rotated3d_full);
     test_serialization(double_rotated3d_full);
@@ -726,6 +793,13 @@ void test_coordinate_map_with_rotation_wedge() {
   const auto expected_inv_jac =
       compose_inv_jacobians(first_map, second_map, test_point_array);
   CHECK_ITERABLE_APPROX(inv_jac, expected_inv_jac);
+
+  const auto inv_hessian = composed_map.inv_hessian(test_point_vector, inv_jac);
+  const auto alt_inv_hessian = composed_map.inv_hessian(test_point_vector);
+  CHECK_ITERABLE_APPROX(inv_hessian, alt_inv_hessian);
+  for (auto& component : inv_hessian) {
+    CHECK(not(0.0 == approx(component)));
+  }
 
   const auto coords_jacs_velocity =
       composed_map.coords_frame_velocity_jacobians(test_point_vector);

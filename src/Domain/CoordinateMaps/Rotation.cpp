@@ -6,6 +6,7 @@
 #include <cmath>
 #include <pup.h>
 
+#include "Utilities/Autodiff/Autodiff.hpp"
 #include "Utilities/DereferenceWrapper.hpp"
 #include "Utilities/GenerateInstantiations.hpp"
 #include "Utilities/MakeWithValue.hpp"
@@ -219,8 +220,14 @@ bool operator!=(const Rotation<3>& lhs, const Rotation<3>& rhs) {
   Rotation<DIM(data)>::inv_jacobian(                                   \
       const std::array<DTYPE(data), DIM(data)>& source_coords) const;
 
+using BatchType = simd::batch<double>;
+using SecondOrderDual = autodiff::HigherOrderDual<2, BatchType>;
+using SecondOrderDualNum = autodiff::HigherOrderDual<2, double>;
 GENERATE_INSTANTIATIONS(INSTANTIATE, (2, 3),
-                        (double, DataVector,
+                        (double, DataVector, SecondOrderDual,
+                         SecondOrderDualNum,
+                         std::reference_wrapper<const SecondOrderDual>,
+                         std::reference_wrapper<const SecondOrderDualNum>,
                          std::reference_wrapper<const double>,
                          std::reference_wrapper<const DataVector>))
 #undef DIM

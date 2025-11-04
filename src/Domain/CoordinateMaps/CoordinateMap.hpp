@@ -21,14 +21,13 @@
 #include <vector>
 
 #include "DataStructures/Tensor/Tensor.hpp"
+#include "Domain/AdSupportedMaps.hpp"
 #include "Domain/FunctionsOfTime/FunctionOfTime.hpp"
+#include "Utilities/Autodiff/Autodiff.hpp"
 #include "Utilities/Serialization/CharmPupable.hpp"
+#include "Utilities/Simd/Simd.hpp"
 #include "Utilities/TMPL.hpp"
 #include "Utilities/TypeTraits/CreateIsCallable.hpp"
-#ifdef SPECTRE_AUTODIFF
-#include "Utilities/Autodiff/Autodiff.hpp"
-#include "Utilities/Simd/Simd.hpp"
-#endif
 
 /// \cond
 class DataVector;
@@ -145,6 +144,21 @@ class CoordinateMapBase : public PUP::able {
       tnsr::I<DataVector, Dim, SourceFrame> source_point,
       double time = std::numeric_limits<double>::signaling_NaN(),
       const FunctionsOfTimeMap& functions_of_time = {}) const = 0;
+  virtual tnsr::I<autodiff::HigherOrderDual<2, double>, Dim, TargetFrame>
+  operator()(tnsr::I<autodiff::HigherOrderDual<2, double>, Dim,
+                     SourceFrame> /*source_point*/,
+             double /*time*/ = std::numeric_limits<double>::signaling_NaN(),
+             const FunctionsOfTimeMap& /*functions_of_time*/ = {}) const {
+    ERROR("Call operator for autodiff types must be overriden.");
+  }
+  virtual tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, Dim,
+                  TargetFrame>
+  operator()(tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, Dim,
+                     SourceFrame> /*source_point*/,
+             double /*time*/ = std::numeric_limits<double>::signaling_NaN(),
+             const FunctionsOfTimeMap& /*functions_of_time*/ = {}) const {
+    ERROR("Call operator for autodiff types must be overriden.");
+  }
   /// @}
 
   /// @{
@@ -179,16 +193,29 @@ class CoordinateMapBase : public PUP::able {
   /// @{
   /// Compute the inverse Hessian of the `Maps` at the point(s)
   /// `source_point`
-  // virtual InverseHessian<double, Dim, SourceFrame, TargetFrame> inv_hessian(
-  //     tnsr::I<double, Dim, SourceFrame> source_point,
-  //     double time = std::numeric_limits<double>::signaling_NaN(),
-  //     const FunctionsOfTimeMap& functions_of_time = {}) const = 0;
+  virtual InverseHessian<double, Dim, SourceFrame, TargetFrame> inv_hessian(
+      tnsr::I<double, Dim, SourceFrame> source_point,
+      const InverseJacobian<double, Dim, SourceFrame, TargetFrame>& inverse_jac,
+      double time = std::numeric_limits<double>::signaling_NaN(),
+      const FunctionsOfTimeMap& functions_of_time = {}) const = 0;
   virtual InverseHessian<DataVector, Dim, SourceFrame, TargetFrame> inv_hessian(
       tnsr::I<DataVector, Dim, SourceFrame> source_point,
       const InverseJacobian<DataVector, Dim, SourceFrame, TargetFrame>&
           inverse_jac,
       double time = std::numeric_limits<double>::signaling_NaN(),
       const FunctionsOfTimeMap& functions_of_time = {}) const = 0;
+  virtual InverseHessian<double, Dim, SourceFrame, TargetFrame> inv_hessian(
+      tnsr::I<double, Dim, SourceFrame> /*source_point*/,
+      double /*time*/ = std::numeric_limits<double>::signaling_NaN(),
+      const FunctionsOfTimeMap& /*functions_of_time*/ = {}) const {
+    ERROR("Call to virtual inv_hessian should be overriden.");
+  }
+  virtual InverseHessian<DataVector, Dim, SourceFrame, TargetFrame> inv_hessian(
+      tnsr::I<DataVector, Dim, SourceFrame> /*source_point*/,
+      double /*time*/ = std::numeric_limits<double>::signaling_NaN(),
+      const FunctionsOfTimeMap& /*functions_of_time*/ = {}) const {
+    ERROR("Call to virtual inv_hessian should be overriden.");
+  }
   /// @}
 
   /// @{
@@ -330,6 +357,35 @@ class CoordinateMap
     return call_impl(std::move(source_point), time, functions_of_time,
                      std::make_index_sequence<sizeof...(Maps)>{});
   }
+  tnsr::I<autodiff::HigherOrderDual<2, double>, dim, TargetFrame> operator()(
+      tnsr::I<autodiff::HigherOrderDual<2, double>, dim, SourceFrame>
+          source_point,
+      const double time = std::numeric_limits<double>::signaling_NaN(),
+      const FunctionsOfTimeMap& functions_of_time = {}) const override {
+    if constexpr ((brigand::lazy::list_contains<ad_supported_maps,
+                                                Maps>::type::value &&
+                   ...)) {
+      return call_impl(std::move(source_point), time, functions_of_time,
+                       std::make_index_sequence<sizeof...(Maps)>{});
+    } else {
+      ERROR("At least one of the Maps does not support autodiff");
+    }
+  }
+  tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, dim, TargetFrame>
+  operator()(tnsr::I<autodiff::HigherOrderDual<2, simd::batch<double>>, dim,
+                     SourceFrame>
+                 source_point,
+             const double time = std::numeric_limits<double>::signaling_NaN(),
+             const FunctionsOfTimeMap& functions_of_time = {}) const override {
+    if constexpr ((brigand::lazy::list_contains<ad_supported_maps,
+                                                Maps>::type::value &&
+                   ...)) {
+      return call_impl(std::move(source_point), time, functions_of_time,
+                       std::make_index_sequence<sizeof...(Maps)>{});
+    } else {
+      ERROR("At least one of the Maps does not support autodiff");
+    }
+  }
   /// @}
 
   /// @{
@@ -362,13 +418,27 @@ class CoordinateMap
 
   /// @{
   /// Compute the inverse Hessian of the `Maps...` at the point(s)
-  /// `source_point`
-  /* InverseHessian<double, dim, SourceFrame, TargetFrame> inv_jacobian(
+  /// `source_point` by computing the Hessian of the map and
+  /// compose it with inverse Jacobians.
+  InverseHessian<double, dim, SourceFrame, TargetFrame> inv_hessian(
       tnsr::I<double, dim, SourceFrame> source_point,
+      const ::InverseJacobian<double, dim, SourceFrame, TargetFrame>&
+          inverse_jac,
       const double time = std::numeric_limits<double>::signaling_NaN(),
       const FunctionsOfTimeMap& functions_of_time = {}) const override {
-    return inv_jacobian_impl(std::move(source_point), time, functions_of_time);
-  } */
+    if constexpr ((brigand::lazy::list_contains<ad_supported_maps,
+                                                Maps>::type::value &&
+                   ...)) {
+      return inv_hessian_impl(std::move(source_point), inverse_jac, time,
+                              functions_of_time);
+    } else {
+      ERROR("At least one of the Maps does not support autodiff");
+    }
+  }
+
+  /// Compute the inverse Hessian of the `Maps...` at the point(s)
+  /// `source_point` by computing the Hessian of the map and
+  /// compose it with inverse Jacobians.
   InverseHessian<DataVector, dim, SourceFrame, TargetFrame> inv_hessian(
       tnsr::I<DataVector, dim, SourceFrame> source_point,
       const ::InverseJacobian<DataVector, dim, SourceFrame, TargetFrame>&
@@ -380,6 +450,38 @@ class CoordinateMap
                    ...)) {
       return inv_hessian_impl(std::move(source_point), inverse_jac, time,
                               functions_of_time);
+    } else {
+      ERROR("At least one of the Maps does not support autodiff");
+    }
+  }
+
+  /// Compute the inverse Hessian of the `Maps...` at the point(s)
+  /// `source_point` by computing the derivatives of the inverse
+  /// Jacobian.
+  InverseHessian<double, dim, SourceFrame, TargetFrame> inv_hessian(
+      tnsr::I<double, dim, SourceFrame> source_point,
+      const double time = std::numeric_limits<double>::signaling_NaN(),
+      const FunctionsOfTimeMap& functions_of_time = {}) const override {
+    if constexpr ((brigand::lazy::list_contains<ad_supported_maps,
+                                                Maps>::type::value &&
+                   ...)) {
+      return inv_hessian_impl(std::move(source_point), time, functions_of_time);
+    } else {
+      ERROR("At least one of the Maps does not support autodiff");
+    }
+  }
+
+  /// Compute the inverse Hessian of the `Maps...` at the point(s)
+  /// `source_point` by computing the derivatives of the inverse
+  /// Jacobian.
+  InverseHessian<DataVector, dim, SourceFrame, TargetFrame> inv_hessian(
+      tnsr::I<DataVector, dim, SourceFrame> source_point,
+      const double time = std::numeric_limits<double>::signaling_NaN(),
+      const FunctionsOfTimeMap& functions_of_time = {}) const override {
+    if constexpr ((brigand::lazy::list_contains<ad_supported_maps,
+                                                Maps>::type::value &&
+                   ...)) {
+      return inv_hessian_impl(std::move(source_point), time, functions_of_time);
     } else {
       ERROR("At least one of the Maps does not support autodiff");
     }
@@ -522,9 +624,13 @@ class CoordinateMap
   template <typename T>
   InverseHessian<T, dim, SourceFrame, TargetFrame> inv_hessian_impl(
       tnsr::I<T, dim, SourceFrame>&& source_point,
-      const ::InverseJacobian<DataVector, dim, SourceFrame, TargetFrame>&
-          inverse_jac,
+      const ::InverseJacobian<T, dim, SourceFrame, TargetFrame>& inverse_jac,
       double time, const FunctionsOfTimeMap& functions_of_time) const;
+  // for now time dependent hessian is not implemented
+  template <typename T>
+  InverseHessian<T, dim, SourceFrame, TargetFrame> inv_hessian_impl(
+      tnsr::I<T, dim, SourceFrame>&& source_point, double time,
+      const FunctionsOfTimeMap& functions_of_time) const;
 
   template <typename T>
   Jacobian<T, dim, SourceFrame, TargetFrame> jacobian_impl(

@@ -106,13 +106,18 @@ Composition<Frames, Dim, std::index_sequence<Is...>>::inv_jacobian(
   return inv_jacobian_impl(std::move(source_point), time, functions_of_time);
 }
 
-// template <typename Frames, size_t Dim, size_t... Is>
-// InverseHessian<double, Dim, tmpl::front<Frames>, tmpl::back<Frames>>
-// Composition<Frames, Dim, std::index_sequence<Is...>>::inv_hessian(
-//     tnsr::I<double, Dim, SourceFrame> source_point, const double time,
-//     const FuncOfTimeMap& functions_of_time) const {
-//   return inv_hessian_impl(std::move(source_point), time, functions_of_time);
-// }
+template <typename Frames, size_t Dim, size_t... Is>
+InverseHessian<double, Dim, tmpl::front<Frames>, tmpl::back<Frames>>
+Composition<Frames, Dim, std::index_sequence<Is...>>::inv_hessian(
+    tnsr::I<double, Dim, SourceFrame> source_point,
+    const InverseJacobian<double, Dim, SourceFrame, TargetFrame>&,
+    const double time, const FuncOfTimeMap& functions_of_time) const {
+  if (supports_autodiff()) {
+    return inv_hessian_impl(std::move(source_point), time, functions_of_time);
+  } else {
+    ERROR("At least one of the Maps does not support autodiff");
+  }
+}
 
 template <typename Frames, size_t Dim, size_t... Is>
 InverseHessian<DataVector, Dim, tmpl::front<Frames>, tmpl::back<Frames>>

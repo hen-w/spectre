@@ -26,6 +26,8 @@ SPECTRE_TEST_CASE("Unit.DataStructures.Autodiff", "[Unit][DataStructures]") {
     INFO("Single number forward mode");
     Dual x = 2.0;
     const double param = 3.0;
+    const auto fx = f1(x, param);
+    CHECK(autodiff::val(fx) == approx(12.0));
     const auto df_dx = autodiff::derivative(&f1<Dual>, wrt(x), at(x, param));
     CHECK(df_dx == approx(12.0));
   }
@@ -34,6 +36,7 @@ SPECTRE_TEST_CASE("Unit.DataStructures.Autodiff", "[Unit][DataStructures]") {
     const Var x = 2.0;
     const double param = 3.0;
     const Var u = f1<Var>(x, param);
+    CHECK(autodiff::val(u) == approx(12.0));
     const auto [df_dx] =
         autodiff::derivatives(u, wrt(x));
     CHECK(df_dx == approx(12.0));
@@ -49,6 +52,10 @@ SPECTRE_TEST_CASE("Unit.DataStructures.Autodiff", "[Unit][DataStructures]") {
     const auto fx = f1(x, param);
     const auto df_dx = autodiff::derivative<1>(fx);
     std::array<double, BatchType::size> lanes{};
+    autodiff::val(fx).store_unaligned(lanes.data());
+    for (const double lane : lanes) {
+      CHECK(lane == approx(12.0));
+    }
     df_dx.store_unaligned(lanes.data());
     for (const double lane : lanes) {
       CHECK(lane == approx(12.0));
@@ -69,6 +76,10 @@ SPECTRE_TEST_CASE("Unit.DataStructures.Autodiff", "[Unit][DataStructures]") {
     const auto [u_x] = derivativesx(u, wrt(x));
     const auto [u_xx] = derivativesx(u_x, wrt(x));
     std::array<double, BatchType::size> lanes{};
+    autodiff::val(u).store_unaligned(lanes.data());
+    for (const double lane : lanes) {
+      CHECK(lane == approx(12.0));
+    }
     autodiff::val(u_x).store_unaligned(lanes.data());
     for (const double lane : lanes) {
       CHECK(lane == approx(12.0));
@@ -81,6 +92,7 @@ SPECTRE_TEST_CASE("Unit.DataStructures.Autodiff", "[Unit][DataStructures]") {
   {
     INFO("Jacobian forward mode");
     std::array<Dual, 2> x = {2.0, 3.0};
+    std::array<double, 2> expected_f{12.0, 27.0};
     std::array<std::array<double, 2>, 2> expected_df_dx{
         {{12.0, 4.0}, {0.0, 27.0}}};
 
@@ -89,7 +101,9 @@ SPECTRE_TEST_CASE("Unit.DataStructures.Autodiff", "[Unit][DataStructures]") {
         autodiff::seed<1>(x.at(i), 1.0);
         autodiff::seed<1>(x.at((i + 1) % 2), 0.0);
         const std::array<Dual, 2> fx = f2(x);
-        const auto dfj_dxi = autodiff::derivative(gsl::at(fx, j));
+        const auto fj = gsl::at(fx, j);
+        CHECK(autodiff::val(fj) == approx(expected_f.at(j)));
+        const auto dfj_dxi = autodiff::derivative(fj);
         CHECK(dfj_dxi == approx(expected_df_dx.at(j).at(i)));
       }
     }
@@ -97,13 +111,15 @@ SPECTRE_TEST_CASE("Unit.DataStructures.Autodiff", "[Unit][DataStructures]") {
   {
     INFO("Jacobian reverse mode");
     std::array<Var, 2> x = {2.0, 3.0};
+    std::array<double, 2> expected_f{12.0, 27.0};
     std::array<std::array<double, 2>, 2> expected_df_dx{
         {{12.0, 4.0}, {0.0, 27.0}}};
     std::array<Var, 2> fx = f2(x);
 
     for (size_t j = 0; j < 2; ++j) {
-      const auto dfj_dxi = autodiff::derivatives(
-          gsl::at(fx, j), wrt(x[0], x[1]));
+      const auto fj = gsl::at(fx, j);
+      CHECK(autodiff::val(fj) == approx(expected_f.at(j)));
+      const auto dfj_dxi = autodiff::derivatives(fj, wrt(x[0], x[1]));
       for (size_t i = 0; i < 2; ++i) {
         CHECK(dfj_dxi.at(i) == approx(expected_df_dx.at(j).at(i)));
       }

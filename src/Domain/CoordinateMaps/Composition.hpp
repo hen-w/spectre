@@ -152,11 +152,17 @@ struct Composition<Frames, Dim, std::index_sequence<Is...>>
       double time = std::numeric_limits<double>::signaling_NaN(),
       const FuncOfTimeMap& functions_of_time = {}) const override;
 
-  //   InverseHessian<double, Dim, SourceFrame, TargetFrame> inv_hessian(
-  //       tnsr::I<double, Dim, SourceFrame> source_point,
-  //       double time = std::numeric_limits<double>::signaling_NaN(),
-  //       const FuncOfTimeMap& functions_of_time = {}) const override;
+  // compute inverse hessian by composing each inverse hessiand
+  // and jacobian
+  InverseHessian<double, Dim, SourceFrame, TargetFrame> inv_hessian(
+      tnsr::I<double, Dim, SourceFrame> source_point,
+      const InverseJacobian<double, Dim, SourceFrame, TargetFrame>&
+      /*inverse_jac*/,
+      double time = std::numeric_limits<double>::signaling_NaN(),
+      const FuncOfTimeMap& functions_of_time = {}) const override;
 
+  // compute inverse hessian by composing each inverse hessiand
+  // and jacobian
   InverseHessian<DataVector, Dim, SourceFrame, TargetFrame> inv_hessian(
       tnsr::I<DataVector, Dim, SourceFrame> source_point,
       const InverseJacobian<DataVector, Dim, SourceFrame, TargetFrame>&
@@ -216,6 +222,14 @@ struct Composition<Frames, Dim, std::index_sequence<Is...>>
   template <typename DataType>
   InverseJacobian<DataType, Dim, SourceFrame, TargetFrame> inv_jacobian_impl(
       tnsr::I<DataType, Dim, SourceFrame> source_point,
+      const double time = std::numeric_limits<double>::signaling_NaN(),
+      const FuncOfTimeMap& functions_of_time = {}) const;
+
+  template <typename DataType>
+  InverseHessian<DataType, Dim, SourceFrame, TargetFrame> inv_hessian_impl(
+      tnsr::I<DataType, Dim, SourceFrame> source_point,
+      const ::InverseJacobian<DataType, Dim, SourceFrame, TargetFrame>&
+      /*inverse_jac*/,
       const double time = std::numeric_limits<double>::signaling_NaN(),
       const FuncOfTimeMap& functions_of_time = {}) const;
 

@@ -310,16 +310,28 @@ GENERATE_INSTANTIATIONS(INSTANTIATION, (1, 2, 3))
       const OrientationMap<DIM(data)>& rotation,                       \
       std::array<DTYPE(data), DIM(data)> source_coords);
 
-GENERATE_INSTANTIATIONS(INSTANTIATION, (1, 2, 3),
-                        (double, DataVector, const double, const DataVector,
-                         std::reference_wrapper<double>,
-                         std::reference_wrapper<DataVector>,
-                         std::reference_wrapper<const double>,
-                         std::reference_wrapper<const DataVector>,
-                         std::reference_wrapper<double> const,
-                         std::reference_wrapper<DataVector> const,
-                         std::reference_wrapper<const double> const,
-                         std::reference_wrapper<const DataVector> const))
+using BatchType = simd::batch<double>;
+using SecondOrderDual = autodiff::HigherOrderDual<2, BatchType>;
+using SecondOrderDualNum = autodiff::HigherOrderDual<2, double>;
+GENERATE_INSTANTIATIONS(
+    INSTANTIATION, (1, 2, 3),
+    (double, DataVector, const double, const DataVector, SecondOrderDual,
+     SecondOrderDualNum, const SecondOrderDual, const SecondOrderDualNum,
+     std::reference_wrapper<double>, std::reference_wrapper<DataVector>,
+     std::reference_wrapper<const double>,
+     std::reference_wrapper<const DataVector>,
+     std::reference_wrapper<double> const,
+     std::reference_wrapper<DataVector> const,
+     std::reference_wrapper<const double> const,
+     std::reference_wrapper<const DataVector> const,
+     std::reference_wrapper<SecondOrderDual>,
+     std::reference_wrapper<SecondOrderDualNum>,
+     std::reference_wrapper<const SecondOrderDual>,
+     std::reference_wrapper<const SecondOrderDualNum>,
+     std::reference_wrapper<SecondOrderDual> const,
+     std::reference_wrapper<SecondOrderDualNum> const,
+     std::reference_wrapper<const SecondOrderDual> const,
+     std::reference_wrapper<const SecondOrderDualNum> const))
 
 #undef INSTANTIATION
 #undef DTYPE
