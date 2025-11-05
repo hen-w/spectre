@@ -185,7 +185,14 @@ void test_3d() {
           make_not_null(&generator), make_not_null(&logical_dist),
           DataVector(5));
   const auto jacobian = map.jacobian(xi);
+
+  auto start0 = std::chrono::high_resolution_clock::now();
   const auto inv_jacobian = map.inv_jacobian(xi);
+  auto end0 = std::chrono::high_resolution_clock::now();
+  auto duration0_us =
+      std::chrono::duration_cast<std::chrono::microseconds>(end0 - start0)
+          .count();
+
   const auto identity = tenex::evaluate<ti::I, ti::j>(
       jacobian(ti::I, ti::k) * inv_jacobian(ti::K, ti::j));
   CHECK_ITERABLE_APPROX((get<0, 0>(identity)), DataVector(5, 1.));
@@ -195,8 +202,27 @@ void test_3d() {
   CHECK_ITERABLE_APPROX((get<2, 0>(identity)), DataVector(5, 0.));
   CHECK_ITERABLE_APPROX((get<2, 1>(identity)), DataVector(5, 0.));
 
+  auto start1 = std::chrono::high_resolution_clock::now();
   const auto inv_hessian = map.inv_hessian(xi);
+  auto end1 = std::chrono::high_resolution_clock::now();
+  auto duration1_us =
+      std::chrono::duration_cast<std::chrono::microseconds>(end1 - start1)
+          .count();
+
+  auto start2 = std::chrono::high_resolution_clock::now();
   const auto alt_inv_hessian = map.inv_hessian(xi, inv_jacobian);
+  auto end2 = std::chrono::high_resolution_clock::now();
+  auto duration2_us =
+      std::chrono::duration_cast<std::chrono::microseconds>(end2 - start2)
+          .count();
+
+  std::cout << "inv_jacobian(xi) took: " << duration0_us << " us\n";
+  std::cout << "inv_hessian(xi) took: " << duration1_us << " us\n";
+  std::cout << "inv_hessian(xi, inv_jacobian) took: " << duration2_us
+            << " us\n";
+
+  std::cout << std::endl;
+
   CHECK_ITERABLE_APPROX(inv_hessian, alt_inv_hessian);
 }
 }  // namespace
