@@ -419,7 +419,7 @@ class CoordinateMap
   /// `source_point` by computing the Hessian of the map and
   /// compose it with inverse Jacobians.
   /// \note Preliminary profiling shows that this method is about
-  /// 2x slower than the overload with inverse_jac. This
+  /// 2x slower than the overload without inverse_jac. This
   /// implementation exists for testing purposes.
   InverseHessian<double, dim, SourceFrame, TargetFrame> inv_hessian(
       tnsr::I<double, dim, SourceFrame> source_point,
@@ -439,7 +439,7 @@ class CoordinateMap
   /// `source_point` by computing the Hessian of the `Maps...` and
   /// compose it with inverse Jacobians of the `Maps...`.
   /// \note Preliminary profiling shows that this method is about
-  /// 2x slower than the overload with inverse_jac. This
+  /// 2x slower than the overload without inverse_jac. This
   /// implementation exists for testing purposes.
   InverseHessian<DataVector, dim, SourceFrame, TargetFrame> inv_hessian(
       tnsr::I<DataVector, dim, SourceFrame> source_point,
