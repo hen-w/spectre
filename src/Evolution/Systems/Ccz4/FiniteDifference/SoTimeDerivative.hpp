@@ -2,8 +2,6 @@
 // See LICENSE.txt for details.
 #pragma once
 
-#include <iostream>
-
 #include <cmath>
 #include <cstddef>
 
@@ -321,7 +319,7 @@ static void apply(
 
   ::tenex::evaluate<ti::k, ti::j, ti::I>(
       symmetrized_d_field_b,
-     d_field_b(ti::k, ti::j, ti::I));
+      0.5 * (d_field_b(ti::k, ti::j, ti::I) + d_field_b(ti::j, ti::k, ti::I)));
 
   ::tenex::evaluate<ti::k>(contracted_symmetrized_d_field_b,
                            (*symmetrized_d_field_b)(ti::k, ti::i, ti::I));
@@ -464,7 +462,7 @@ static void apply(
                     2.0 * one_third * square(trace_extrinsic_curvature()) -
                     a_tilde(ti::i, ti::j) * (*inv_a_tilde)(ti::I, ti::J)) -
                c * theta() * trace_extrinsic_curvature() -
-               (*upper_spatial_z4_constraint)(ti::I) * field_a(ti::i) -
+               (*upper_spatial_z4_constraint)(ti::I)*field_a(ti::i) -
                kappa_1 * (2.0 + kappa_2) * theta()));
 
   // time derivative \hat{\Gamma}^i
@@ -473,33 +471,33 @@ static void apply(
       dt_gamma_hat,
       // terms without lapse nor s
       (*shift_times_deriv_gamma_hat)(ti::I) +
-      2.0 * one_third *
-            (*contracted_conformal_christoffel_second_kind)(ti::I) *
-            (*contracted_field_b)() -
-      (*contracted_conformal_christoffel_second_kind)(ti::K) * field_b(
+          2.0 * one_third *
+              (*contracted_conformal_christoffel_second_kind)(ti::I) *
+              (*contracted_field_b)() -
+          (*contracted_conformal_christoffel_second_kind)(ti::K)*field_b(
               ti::k, ti::I) +
-      2.0 * kappa_3 * (*spatial_z4_constraint)(ti::j) *
+          2.0 * kappa_3 * (*spatial_z4_constraint)(ti::j) *
               (2.0 * one_third * (*inv_conformal_spatial_metric)(ti::I, ti::J) *
                    (*contracted_field_b)() -
                (*inv_conformal_spatial_metric)(ti::J, ti::K) *
                    field_b(ti::k, ti::I)) +
-      // terms with lapse but not s
-      2.0 * (lapse)() *
-            (-2.0 * one_third *
-                (*inv_conformal_spatial_metric)(ti::I, ti::J) *
-                d_trace_extrinsic_curvature(ti::j) +
-            (*inv_conformal_spatial_metric)(ti::K, ti::I) * d_theta(ti::k) +
-            (*conformal_christoffel_second_kind)(ti::I, ti::j, ti::k) *
-                (*inv_a_tilde)(ti::J, ti::K) -
-            3.0 * (*inv_a_tilde)(ti::I, ti::J) * field_p(ti::j) -
-            (*inv_conformal_spatial_metric)(ti::K, ti::I) *
-                (theta() * field_a(ti::k) +
-                2.0 * one_third * trace_extrinsic_curvature() *
-                    (*spatial_z4_constraint)(ti::k)) -
-            (*inv_a_tilde)(ti::I, ti::J) * field_a(ti::j) -
-            kappa_1 * (*inv_conformal_spatial_metric)(ti::I, ti::J) *
-                (*spatial_z4_constraint)(ti::j)));
-
+          // terms with lapse but not s
+          2.0 * (lapse)() *
+              (-2.0 * one_third *
+                   (*inv_conformal_spatial_metric)(ti::I, ti::J) *
+                   d_trace_extrinsic_curvature(ti::j) +
+               (*inv_conformal_spatial_metric)(ti::K, ti::I) * d_theta(ti::k) +
+               (*conformal_christoffel_second_kind)(ti::I, ti::j, ti::k) *
+                   (*inv_a_tilde)(ti::J, ti::K) -
+               3.0 * (*inv_a_tilde)(ti::I, ti::J) * field_p(ti::j) -
+               (*inv_conformal_spatial_metric)(ti::K, ti::I) *
+                   (theta() * field_a(ti::k) +
+                    2.0 * one_third * trace_extrinsic_curvature() *
+                        (*spatial_z4_constraint)(ti::k)) -
+               (*inv_a_tilde)(ti::I, ti::J) * field_a(ti::j) -
+               kappa_1 * (*inv_conformal_spatial_metric)(ti::I, ti::J) *
+                   (*spatial_z4_constraint)(ti::j)));
+  // We add the following since s=1 (Gamma-driver gauge) is assumed in SoCcz4
   ::tenex::update<ti::I>(dt_gamma_hat,
                          (*dt_gamma_hat)(ti::I) +
                              // red terms should cancel
@@ -562,6 +560,9 @@ struct SoTimeDerivative {
     const auto& cell_centered_logical_to_inertial_inv_jacobian =
         db::get<evolution::dg::subcell::fd::Tags::
                     InverseJacobianLogicalToInertial<Dim>>(*box);
+    const auto& cell_centered_logical_to_inertial_inv_hessian = db::get<
+        evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertial<Dim>>(
+        *box);
 
     constexpr bool subcell_enabled_at_external_boundary =
         std::decay_t<decltype(db::get<Parallel::Tags::Metavariables>(
@@ -628,7 +629,8 @@ struct SoTimeDerivative {
         make_not_null(&cell_centered_Ccz4_second_derivs), evolved_vars,
         db::get<evolution::dg::subcell::Tags::GhostDataForReconstruction<Dim>>(
             *box),
-        fd_order, subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian);
+        fd_order, subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
+        cell_centered_logical_to_inertial_inv_hessian);
 
     // compute spatial derivative of the four auxiliary fields
     const auto& d_d_lapse =

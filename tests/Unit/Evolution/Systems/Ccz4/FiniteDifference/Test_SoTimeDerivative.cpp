@@ -96,11 +96,14 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
                   Frame::Inertial>
       cell_centered_logical_to_inertial_inv_jacobian{
           subcell_mesh.number_of_grid_points(), 0.0};
-
   for (size_t i = 0; i < SpatialDim; ++i) {
     cell_centered_logical_to_inertial_inv_jacobian.get(i, i) =
         2.0 / gsl::at(coords_range, i);
   }
+
+  InverseHessian<DataVector, SpatialDim, Frame::ElementLogical, Frame::Inertial>
+      cell_centered_logical_to_inertial_inv_hessian{
+          subcell_mesh.number_of_grid_points(), 0.0};
 
   const Element<SpatialDim> element =
       TestHelpers::Ccz4::fd::detail::set_element();
@@ -139,8 +142,7 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
 
   auto box = db::create<db::AddSimpleTags<
       ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
-      ::Ccz4::fd::Tags::EvolveLapseAndShift,
-      domain::Tags::Element<SpatialDim>,
+      ::Ccz4::fd::Tags::EvolveLapseAndShift, domain::Tags::Element<SpatialDim>,
       fd::Tags::Reconstructor,
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
@@ -148,6 +150,8 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
       ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
       evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
+          SpatialDim>,
+      evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertial<
           SpatialDim>,
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>>>(
       kappa_1, kappa_2, kappa_3, evolve_lapse_and_shift, element,
@@ -158,7 +162,7 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
-      all_ghost_data);
+      cell_centered_logical_to_inertial_inv_hessian, all_ghost_data);
 
   // Check that all time derivatives are 0
   ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
@@ -214,6 +218,10 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
     cell_centered_logical_to_inertial_inv_jacobian.get(i, i) =
         2.0 / gsl::at(coords_range, i);
   }
+
+  InverseHessian<DataVector, SpatialDim, Frame::ElementLogical, Frame::Inertial>
+      cell_centered_logical_to_inertial_inv_hessian{
+          subcell_mesh.number_of_grid_points(), 0.0};
 
   const Element<SpatialDim> element =
       TestHelpers::Ccz4::fd::detail::set_element();
@@ -272,8 +280,7 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
 
   auto box = db::create<db::AddSimpleTags<
       ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
-      ::Ccz4::fd::Tags::EvolveLapseAndShift,
-      domain::Tags::Element<SpatialDim>,
+      ::Ccz4::fd::Tags::EvolveLapseAndShift, domain::Tags::Element<SpatialDim>,
       fd::Tags::Reconstructor,
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
@@ -281,6 +288,8 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
       ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
       evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
+          SpatialDim>,
+      evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertial<
           SpatialDim>,
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>>>(
       kappa_1, kappa_2, kappa_3, evolve_lapse_and_shift, element,
@@ -291,7 +300,7 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
-      all_ghost_data);
+      cell_centered_logical_to_inertial_inv_hessian, all_ghost_data);
 
   // Check that all time derivatives are 0
   ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
@@ -365,6 +374,10 @@ void test_gauge_plane_wave(
         2.0 / gsl::at(coords_range, i);
   }
 
+  InverseHessian<DataVector, SpatialDim, Frame::ElementLogical, Frame::Inertial>
+      cell_centered_logical_to_inertial_inv_hessian{
+          subcell_mesh.number_of_grid_points(), 0.0};
+
   double omega = 0.0;
   for (const auto& k : wave_vector) {
     omega += square(k);
@@ -428,8 +441,7 @@ void test_gauge_plane_wave(
 
   auto box = db::create<db::AddSimpleTags<
       ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
-      ::Ccz4::fd::Tags::EvolveLapseAndShift,
-      domain::Tags::Element<SpatialDim>,
+      ::Ccz4::fd::Tags::EvolveLapseAndShift, domain::Tags::Element<SpatialDim>,
       fd::Tags::Reconstructor,
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
@@ -437,6 +449,8 @@ void test_gauge_plane_wave(
       ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
       evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
+          SpatialDim>,
+      evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertial<
           SpatialDim>,
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>>>(
       kappa_1, kappa_2, kappa_3, evolve_lapse_and_shift, element,
@@ -447,7 +461,7 @@ void test_gauge_plane_wave(
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
-      all_ghost_data);
+      cell_centered_logical_to_inertial_inv_hessian, all_ghost_data);
 
   // Check all time derivatives
   ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
