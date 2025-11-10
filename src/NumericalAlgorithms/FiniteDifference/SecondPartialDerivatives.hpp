@@ -84,7 +84,7 @@ void second_logical_partial_derivatives(
  * `fd::second_logical_partial_derivatives()` function.
  *
  * \note The `inverse_hessian` has not been implemented, so currently inertial
- * coordinates cannot mix logical coordinates.
+ * coordinates must be a linear function of logical coordinates.
  */
 template <typename DerivativeTags, size_t Dim, typename DerivativeFrame>
 void second_partial_derivatives(

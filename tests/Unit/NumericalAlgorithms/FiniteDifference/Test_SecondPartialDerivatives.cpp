@@ -351,6 +351,8 @@ void test(const size_t points_per_dimension, const size_t fd_order) {
       expected_second_partial_derivatives{mesh.number_of_grid_points()};
 
   // transform the expected derivs to inertial coords
+  // Note that we have not included the Hessian terms
+  // as they have not been implemented yet.
   gsl::at(expected_pure_second_d_var1, 0) =
       (1 + 2 * logical_coords.get(0) + logical_coords.get(1) +
        2 * logical_coords.get(2)) /
