@@ -66,16 +66,16 @@
 #include "PointwiseFunctions/InitialDataUtilities/Tags/InitialData.hpp"
 #include "Time/Actions/AdvanceTime.hpp"
 #include "Time/Actions/CleanHistory.hpp"
-#include "Time/Actions/RecordTimeStepperData.hpp"
 #include "Time/Actions/SelfStartActions.hpp"
-#include "Time/Actions/UpdateU.hpp"
 #include "Time/ChangeSlabSize/Action.hpp"
+#include "Time/RecordTimeStepperData.hpp"
 #include "Time/StepChoosers/Factory.hpp"
 #include "Time/Tags/TimeStepId.hpp"
 #include "Time/TimeSteppers/Factory.hpp"
 #include "Time/TimeSteppers/LtsTimeStepper.hpp"
 #include "Time/TimeSteppers/TimeStepper.hpp"
 #include "Time/Triggers/TimeTriggers.hpp"
+#include "Time/UpdateU.hpp"
 #include "Utilities/ProtocolHelpers.hpp"
 #include "Utilities/TMPL.hpp"
 
@@ -229,7 +229,7 @@ struct EvolutionMetavars {
           volume_dim, SubcellOptions::GhostVariables, local_time_stepping,
           use_dg_element_collection>,
       evolution::dg::subcell::Actions::ReceiveAndSendDataForReconstruction<
-          volume_dim, SubcellOptions::GhostVariables, local_time_stepping,
+          volume_dim, SubcellOptions::GhostVariables,
           use_dg_element_collection>,
       evolution::dg::subcell::Actions::ReceiveDataForReconstruction<volume_dim>,
 
@@ -239,10 +239,11 @@ struct EvolutionMetavars {
       // subcell actions
       evolution::dg::subcell::fd::Actions::TakeTimeStep<
           Ccz4::fd::SoTimeDerivative>,
-      Actions::RecordTimeStepperData<system>,
+      Actions::MutateApply<RecordTimeStepperData<system>>,
       evolution::Actions::RunEventsAndDenseTriggers<
           events_and_dense_triggers_subcell_postprocessors>,
-      Actions::UpdateU<system>, Actions::MutateApply<::Ccz4::fd::ApplyFilter>,
+      Actions::MutateApply<UpdateU<system, local_time_stepping>>,
+      Actions::MutateApply<::Ccz4::fd::ApplyFilter>,
       Actions::CleanHistory<system, local_time_stepping>,
       Actions::Label<evolution::dg::subcell::Actions::Labels::EndOfSolvers>>>;
 
@@ -303,7 +304,8 @@ struct EvolutionMetavars {
           Parallel::PhaseActions<
               Parallel::Phase::Evolve,
               tmpl::list<
-                  evolution::Actions::RunEventsAndTriggers<local_time_stepping>,
+                  evolution::Actions::RunEventsAndTriggers<
+                    Triggers::WhenToCheck::AtSlabs>,
                   Actions::ChangeSlabSize, step_actions, Actions::AdvanceTime,
                   PhaseControl::Actions::ExecutePhaseChange>>,
           Parallel::PhaseActions<

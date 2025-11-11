@@ -550,6 +550,13 @@ void test(const bool always_use_subcell, const bool interior_element,
       runner, self_id));
   CHECK(ActionTesting::tag_is_retrievable<
         comp,
+        evolution::dg::subcell::fd::Tags::InverseHessianLogicalToGrid<Dim>>(
+      runner, self_id));
+  CHECK(ActionTesting::tag_is_retrievable<
+        comp, evolution::dg::subcell::fd::Tags::
+                  InverseHessianLogicalToInertial<Dim>>(runner, self_id));
+  CHECK(ActionTesting::tag_is_retrievable<
+        comp,
         evolution::dg::subcell::Tags::Coordinates<Dim, Frame::ElementLogical>>(
       runner, self_id));
   CHECK(ActionTesting::tag_is_retrievable<

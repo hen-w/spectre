@@ -401,6 +401,9 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.FiniteDifference.Derivatives",
   for (size_t i = 0; i < 3; ++i) {
     for (size_t j = 0; j < 3; ++j) {
       expected_second_d_lapse.get(i, j) = i == j ? 2 : 0.0;
+      if ((i == 0 and j == 2) or (i == 2 and j == 0)) {
+        expected_second_d_lapse.get(i, j) += 1.0;
+      }
     }
   }
 
