@@ -282,12 +282,15 @@ struct InverseHessianLogicalToInertialCompute
       set_number_of_grid_points(inverse_hessian_logical_to_inertial,
                                 get<0>(grid_coords).size());
       // Get grid to inertial inverse jacobian
-      const auto& inverse_hessian_grid_to_inertial =
-          grid_to_inertial_map.inv_hessian(grid_coords, time,
-                                           functions_of_time);
       const auto& inverse_jacobian_grid_to_inertial =
           grid_to_inertial_map.inv_jacobian(grid_coords, time,
                                             functions_of_time);
+      // Get grid to inertial inverse hessian
+      const auto& inverse_hessian_grid_to_inertial =
+          grid_to_inertial_map.inv_hessian(grid_coords,
+                                           inverse_jacobian_grid_to_inertial,
+                                           time,
+                                           functions_of_time);
       for (size_t i = 0; i < Dim; i++) {
         for (size_t j = 0; j < Dim; j++) {
           for (size_t k = j; k < Dim; k++) {

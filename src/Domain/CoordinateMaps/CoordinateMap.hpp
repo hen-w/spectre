@@ -209,13 +209,13 @@ class CoordinateMapBase : public PUP::able {
       double time = std::numeric_limits<double>::signaling_NaN(),
       const FunctionsOfTimeMap& functions_of_time = {}) const = 0;
   virtual InverseHessian<double, Dim, SourceFrame, TargetFrame> inv_hessian(
-      tnsr::I<double, Dim, SourceFrame> /*source_point*/,
-      double /*time*/ = std::numeric_limits<double>::signaling_NaN(),
-      const FunctionsOfTimeMap& /*functions_of_time*/ = {}) const = 0;
+      tnsr::I<double, Dim, SourceFrame> source_point,
+      double time = std::numeric_limits<double>::signaling_NaN(),
+      const FunctionsOfTimeMap& functions_of_time = {}) const = 0;
   virtual InverseHessian<DataVector, Dim, SourceFrame, TargetFrame> inv_hessian(
-      tnsr::I<DataVector, Dim, SourceFrame> /*source_point*/,
-      double /*time*/ = std::numeric_limits<double>::signaling_NaN(),
-      const FunctionsOfTimeMap& /*functions_of_time*/ = {}) const = 0;
+      tnsr::I<DataVector, Dim, SourceFrame> source_point,
+      double time = std::numeric_limits<double>::signaling_NaN(),
+      const FunctionsOfTimeMap& functions_of_time = {}) const = 0;
   /// @}
 #endif  // SPECTRE_AUTODIFF
 
