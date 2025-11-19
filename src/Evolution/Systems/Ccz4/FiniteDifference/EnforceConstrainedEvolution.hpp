@@ -34,6 +34,11 @@ struct EnforceConstrainedEvolution : tt::ConformsTo<db::protocols::Mutator> {
       Scalar<DataVector> det_conformal_spatial_metric{};
       determinant(make_not_null(&det_conformal_spatial_metric),
                   *conformal_spatial_metric);
+      if (min(get(det_conformal_spatial_metric)) <= 0.0) {
+        ERROR(
+            "The determinant of the conformal spatial metric is non-positive: "
+            << get(det_conformal_spatial_metric));
+      }
       get(det_conformal_spatial_metric) =
           pow(get(det_conformal_spatial_metric), -1.0 / 3.0);
       ::tenex::update<ti::i, ti::j>(

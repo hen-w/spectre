@@ -18,7 +18,7 @@
 
 namespace {
 
-// Just linear for now, can be extended to higher order...
+/*// Just linear for now, can be extended to higher order...
 // Future optimization: it might be more efficient to use Blaze's sparse
 // matrices since the interpolation matrix is mostly zeros
 std::vector<double> fd_stencil(const DataVector& xi_source,
@@ -41,6 +41,87 @@ std::vector<double> fd_stencil(const DataVector& xi_source,
   *result_l = (*xi_u - xi_target) / (*xi_u - *xi_l);
   *result_u = (xi_target - *xi_l) / (*xi_u - *xi_l);
   return result;
+} */
+
+// Quadratic (three-point) finite-difference interpolation stencil.
+// Returns a weight vector with exactly three non-zero entries corresponding
+// to a chosen triplet of consecutive grid points. For interior targets we pick
+// the more centered of the two possible triplets bracketing the target.
+// Edge targets (or outside) use the first or last 3 points, yielding
+// one-sided quadratic extrapolation.
+std::vector<double> fd_stencil(const DataVector& xi_source,
+                               const double xi_target) {
+  ASSERT(std::is_sorted(std::begin(xi_source), std::end(xi_source)),
+         "xi_source = " << xi_source);
+  const size_t n = xi_source.size();
+  ASSERT(n >= 3, "Need at least 3 points for quadratic interpolation (got "
+                     << n << ")");
+
+  auto xi_u =
+      std::upper_bound(std::begin(xi_source), std::end(xi_source), xi_target);
+
+  // Determine the three indices to use.
+  size_t i0, i1, i2;  // ascending order
+
+  if (xi_u == std::begin(xi_source)) {
+    // Target at/below first point
+    i0 = 0;
+    i1 = 1;
+    i2 = 2;
+  } else if (xi_u == std::end(xi_source)) {
+    // Target above last point
+    i0 = n - 3;
+    i1 = n - 2;
+    i2 = n - 1;
+  } else {
+    const size_t iu =
+        static_cast<size_t>(std::distance(std::begin(xi_source), xi_u));
+    const size_t il = iu - 1;  // lower bracket index
+
+    if (il == 0) {
+      // Near lower boundary
+      i0 = 0;
+      i1 = 1;
+      i2 = 2;
+    } else if (iu == n - 1) {
+      // Near upper boundary (target between last two points)
+      i0 = n - 3;
+      i1 = n - 2;
+      i2 = n - 1;
+    } else {
+      // Interior: choose centered triplet
+      // Option A: (il-1, il, iu)
+      // Option B: (il, iu, iu+1)
+      const double x_il = xi_source[il];
+      const double x_iu = xi_source[iu];
+      // Compare proximity to pick more centered set
+      if (xi_target - x_il < x_iu - xi_target) {
+        i0 = il - 1;
+        i1 = il;
+        i2 = iu;
+      } else {
+        i0 = il;
+        i1 = iu;
+        i2 = iu + 1;
+      }
+    }
+  }
+
+  // Compute Lagrange weights for the selected three nodes.
+  const double x0 = xi_source[i0];
+  const double x1 = xi_source[i1];
+  const double x2 = xi_source[i2];
+
+  const double denom0 = (x0 - x1) * (x0 - x2);
+  const double denom1 = (x1 - x0) * (x1 - x2);
+  const double denom2 = (x2 - x0) * (x2 - x1);
+
+  std::vector<double> w(n, 0.0);
+  w[i0] = (xi_target - x1) * (xi_target - x2) / denom0;
+  w[i1] = (xi_target - x0) * (xi_target - x2) / denom1;
+  w[i2] = (xi_target - x0) * (xi_target - x1) / denom2;
+
+  return w;
 }
 
 template <size_t Dim, typename DataType>
