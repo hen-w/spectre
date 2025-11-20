@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <iterator>
+#include <limits>  // added for std::numeric_limits
 #include <vector>
 
 #include "DataStructures/DataVector.hpp"
@@ -179,7 +180,7 @@ std::vector<double> fd_stencil(const DataVector& xi_source,
   const double x3 = xi_source[i3];
 
   // Compute Lagrange weights for 4 points.
-  auto lagrange_weight = [&](double xj, const std::array<double, 4>& others) {
+  auto lagrange_weight = [&](double xj, const std::array<double, 3>& others) {
     double num = 1.0;
     double denom = 1.0;
     for (double xo : others) {
