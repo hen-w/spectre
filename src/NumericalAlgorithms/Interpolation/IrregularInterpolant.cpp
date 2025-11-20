@@ -43,7 +43,7 @@ std::vector<double> fd_stencil(const DataVector& xi_source,
   return result;
 } */
 
-// Quadratic (three-point) finite-difference interpolation stencil.
+/*// Quadratic (three-point) finite-difference interpolation stencil.
 // Returns a weight vector with exactly three non-zero entries corresponding
 // to a chosen triplet of consecutive grid points. For interior targets we pick
 // the more centered of the two possible triplets bracketing the target.
@@ -121,6 +121,79 @@ std::vector<double> fd_stencil(const DataVector& xi_source,
   w[i1] = (xi_target - x0) * (xi_target - x2) / denom1;
   w[i2] = (xi_target - x0) * (xi_target - x1) / denom2;
 
+  return w;
+}*/
+
+// Cubic (four-point) finite-difference interpolation stencil.
+// Uses four consecutive grid points to build a degree-3 Lagrange interpolant.
+// Boundary/out-of-domain targets use the first/last 4 points (one-sided cubic
+// extrapolation). Interior targets: choose among candidate 4-point windows that
+// contain the bracketing pair to best center the target (minimizing distance to
+// the window's midpoint).
+std::vector<double> fd_stencil(const DataVector& xi_source,
+                               const double xi_target) {
+  ASSERT(std::is_sorted(std::begin(xi_source), std::end(xi_source)),
+         "xi_source = " << xi_source);
+  const size_t n = xi_source.size();
+  ASSERT(n >= 4,
+         "Need at least 4 points for cubic interpolation (got " << n << ")");
+  auto xi_u =
+      std::upper_bound(std::begin(xi_source), std::end(xi_source), xi_target);
+
+  size_t start;  // start index of the 4-point window
+  if (xi_u == std::begin(xi_source)) {
+    // Below first point
+    start = 0;
+  } else if (xi_u == std::end(xi_source)) {
+    // Above last point
+    start = n - 4;
+  } else {
+    const size_t iu =
+        static_cast<size_t>(std::distance(std::begin(xi_source), xi_u));
+    const size_t il = iu - 1;  // lower bracket index
+    // Determine candidate window starts ensuring il >= s and iu <= s+3
+    size_t min_start = (il >= 2 ? il - 2 : 0);
+    size_t max_start = std::min(il, n - 4);
+    // Collect candidates
+    double best_dist = std::numeric_limits<double>::max();
+    size_t best_start = min_start;
+    for (size_t s = min_start; s <= max_start; ++s) {
+      // Midpoint of inner two nodes (s+1, s+2) gives a reasonable center
+      const double mid = 0.5 * (xi_source[s + 1] + xi_source[s + 2]);
+      const double dist = std::abs(xi_target - mid);
+      if (dist < best_dist) {
+        best_dist = dist;
+        best_start = s;
+      }
+    }
+    start = best_start;
+  }
+
+  const size_t i0 = start;
+  const size_t i1 = start + 1;
+  const size_t i2 = start + 2;
+  const size_t i3 = start + 3;
+  const double x0 = xi_source[i0];
+  const double x1 = xi_source[i1];
+  const double x2 = xi_source[i2];
+  const double x3 = xi_source[i3];
+
+  // Compute Lagrange weights for 4 points.
+  auto lagrange_weight = [&](double xj, const std::array<double, 4>& others) {
+    double num = 1.0;
+    double denom = 1.0;
+    for (double xo : others) {
+      num *= (xi_target - xo);
+      denom *= (xj - xo);
+    }
+    return num / denom;
+  };
+
+  std::vector<double> w(n, 0.0);
+  w[i0] = lagrange_weight(x0, {x1, x2, x3});
+  w[i1] = lagrange_weight(x1, {x0, x2, x3});
+  w[i2] = lagrange_weight(x2, {x0, x1, x3});
+  w[i3] = lagrange_weight(x3, {x0, x1, x2});
   return w;
 }
 
