@@ -71,6 +71,8 @@ class Affine {
 
   bool is_identity() const { return is_identity_; }
 
+  static constexpr bool supports_autodiff{true};
+
  private:
   friend bool operator==(const Affine& lhs, const Affine& rhs);
 

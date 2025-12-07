@@ -14,6 +14,9 @@
 #include "Domain/CoordinateMaps/Distribution.hpp"
 #include "Domain/Structure/OrientationMap.hpp"
 #include "Utilities/Algorithm.hpp"
+#ifdef SPECTRE_AUTODIFF
+#include "Utilities/Autodiff/Autodiff.hpp"
+#endif
 #include "Utilities/ConstantExpressions.hpp"
 #include "Utilities/DereferenceWrapper.hpp"
 #include "Utilities/EqualWithinRoundoff.hpp"
@@ -1031,10 +1034,21 @@ bool operator!=(const Wedge<Dim>& lhs, const Wedge<Dim>& rhs) {
       const std::array<DTYPE(data), DIM(data)>& source_coords) const;
 
 GENERATE_INSTANTIATIONS(INSTANTIATE_DIM, (2, 3))
-GENERATE_INSTANTIATIONS(INSTANTIATE_DTYPE, (2, 3),
-                        (double, DataVector,
-                         std::reference_wrapper<const double>,
-                         std::reference_wrapper<const DataVector>))
+
+GENERATE_INSTANTIATIONS(
+    INSTANTIATE_DTYPE, (2, 3),
+    (double, DataVector,
+     std::reference_wrapper<const double>,
+     std::reference_wrapper<const DataVector>))
+
+#ifdef SPECTRE_AUTODIFF
+GENERATE_INSTANTIATIONS(
+    INSTANTIATE_DTYPE, (2, 3),
+    (autodiff::SecondOrderDual,
+     autodiff::SecondOrderDualNum,
+     std::reference_wrapper<const autodiff::SecondOrderDualNum>,
+     std::reference_wrapper<const autodiff::SecondOrderDual>))
+#endif  // SPECTRE_AUTODIFF
 
 #undef DIM
 #undef DTYPE

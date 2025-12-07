@@ -7,4 +7,5 @@ spectre_target_sources(
   Ricci1.cpp
   Ricci2.cpp
   Ricci3.cpp
+  TimeStepping.cpp
   )

@@ -232,8 +232,8 @@ Domain<3> Sphere::create_domain() const {
           inner_radius_, outer_radius_,
           fill_interior_ ? std::get<InnerCube>(interior_).sphericity : 1.0, 1.0,
           use_equiangular_map_, std::nullopt, false, radial_partitioning_,
-          radial_distribution_, which_wedges_),
-      compression);
+          radial_distribution_, which_wedges_)
+      /*compression // compression needs to be changed to support autodiff*/);
 
   std::unordered_map<std::string, ExcisionSphere<3>> excision_spheres{};
 
