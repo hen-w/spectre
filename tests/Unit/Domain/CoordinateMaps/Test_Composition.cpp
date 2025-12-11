@@ -76,6 +76,9 @@ void test_composition() {
   const auto x = map(xi);
   const auto jacobian = map.jacobian(xi);
   const auto inv_jacobian = map.inv_jacobian(xi);
+#ifdef SPECTRE_AUTODIFF
+  const auto inv_hessian = map.inv_hessian(xi);
+#endif  // SPECTRE_AUTODIFF
   CHECK_ITERABLE_APPROX(get<0>(x), (get<0>(xi) + 1.) * 0.25);
   CHECK_ITERABLE_APPROX(get<1>(x), (get<1>(xi) + 2.));
   CHECK_ITERABLE_APPROX((get<0, 0>(jacobian)), DataVector(5, 0.25));
@@ -84,6 +87,11 @@ void test_composition() {
   CHECK_ITERABLE_APPROX((get<1, 1>(inv_jacobian)), DataVector(5, 1.));
   CHECK_ITERABLE_APPROX((get<1, 0>(jacobian)), DataVector(5, 0.));
   CHECK_ITERABLE_APPROX((get<1, 0>(inv_jacobian)), DataVector(5, 0.));
+#ifdef SPECTRE_AUTODIFF
+  for (const auto& component : inv_hessian) {
+    CHECK_ITERABLE_APPROX(component, DataVector(5, 0.0));
+  }
+#endif  // SPECTRE_AUTODIFF
   const auto x_target = tnsr::I<double, 2, Frame::Inertial>{{{0.5, 1.}}};
   const auto inv = map.inverse(x_target);
   REQUIRE(inv.has_value());
@@ -122,6 +130,9 @@ void test_identity() {
   const auto x = map(xi);
   const auto jacobian = map.jacobian(xi);
   const auto inv_jacobian = map.inv_jacobian(xi);
+#ifdef SPECTRE_AUTODIFF
+  const auto inv_hessian = map.inv_hessian(xi);
+#endif  // SPECTRE_AUTODIFF
   CHECK_ITERABLE_APPROX(get<0>(x), get<0>(xi));
   CHECK_ITERABLE_APPROX(get<1>(x), get<1>(xi));
   CHECK_ITERABLE_APPROX(get<2>(x), get<2>(xi));
@@ -137,6 +148,11 @@ void test_identity() {
   CHECK_ITERABLE_APPROX((get<2, 0>(inv_jacobian)), DataVector(5, 0.));
   CHECK_ITERABLE_APPROX((get<2, 1>(jacobian)), DataVector(5, 0.));
   CHECK_ITERABLE_APPROX((get<2, 1>(inv_jacobian)), DataVector(5, 0.));
+#ifdef SPECTRE_AUTODIFF
+  for (const auto& component : inv_hessian) {
+    CHECK_ITERABLE_APPROX(component, DataVector(5, 0.0));
+  }
+#endif  // SPECTRE_AUTODIFF
   const auto x_target = tnsr::I<double, 3, Frame::Inertial>{{{0.5, 1., 0.}}};
   const auto inv = map.inverse(x_target);
   REQUIRE(inv.has_value());
@@ -175,7 +191,9 @@ void test_3d() {
           make_not_null(&generator), make_not_null(&logical_dist),
           DataVector(5));
   const auto jacobian = map.jacobian(xi);
+
   const auto inv_jacobian = map.inv_jacobian(xi);
+
   const auto identity = tenex::evaluate<ti::I, ti::j>(
       jacobian(ti::I, ti::k) * inv_jacobian(ti::K, ti::j));
   CHECK_ITERABLE_APPROX((get<0, 0>(identity)), DataVector(5, 1.));
@@ -184,6 +202,14 @@ void test_3d() {
   CHECK_ITERABLE_APPROX((get<1, 0>(identity)), DataVector(5, 0.));
   CHECK_ITERABLE_APPROX((get<2, 0>(identity)), DataVector(5, 0.));
   CHECK_ITERABLE_APPROX((get<2, 1>(identity)), DataVector(5, 0.));
+
+#ifdef SPECTRE_AUTODIFF
+  const auto inv_hessian = map.inv_hessian(xi);
+
+  const auto alt_inv_hessian = map.inv_hessian(xi, inv_jacobian);
+
+  CHECK_ITERABLE_APPROX(inv_hessian, alt_inv_hessian);
+#endif  // SPECTRE_AUTODIFF
 }
 }  // namespace
 

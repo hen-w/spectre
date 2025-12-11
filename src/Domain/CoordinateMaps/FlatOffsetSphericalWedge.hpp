@@ -276,6 +276,8 @@ class FlatOffsetSphericalWedge {
 
   static bool is_identity() { return false; }
 
+  static constexpr bool supports_autodiff{false};
+
  private:
   friend bool operator==(const FlatOffsetSphericalWedge& lhs,
                          const FlatOffsetSphericalWedge& rhs);

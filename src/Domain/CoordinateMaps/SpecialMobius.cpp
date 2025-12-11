@@ -8,6 +8,9 @@
 #include <pup.h>
 
 #include "DataStructures/Tensor/Tensor.hpp"
+#ifdef SPECTRE_AUTODIFF
+#include "Utilities/Autodiff/Autodiff.hpp"
+#endif
 #include "Utilities/ConstantExpressions.hpp"
 #include "Utilities/DereferenceWrapper.hpp"
 #include "Utilities/EqualWithinRoundoff.hpp"
@@ -138,9 +141,18 @@ bool operator!=(const SpecialMobius& lhs, const SpecialMobius& rhs) {
   SpecialMobius::inv_jacobian(const std::array<DTYPE(data), 3>& source_coords) \
       const;
 
-GENERATE_INSTANTIATIONS(INSTANTIATE, (double, DataVector,
-                                      std::reference_wrapper<const double>,
-                                      std::reference_wrapper<const DataVector>))
+GENERATE_INSTANTIATIONS(
+    INSTANTIATE, (double, DataVector,
+                  std::reference_wrapper<const double>,
+                  std::reference_wrapper<const DataVector>))
+
+#ifdef SPECTRE_AUTODIFF
+GENERATE_INSTANTIATIONS(
+    INSTANTIATE, (autodiff::SecondOrderDual,
+                  autodiff::SecondOrderDualNum,
+                  std::reference_wrapper<const autodiff::SecondOrderDual>,
+                  std::reference_wrapper<const autodiff::SecondOrderDualNum>))
+#endif  // SPECTRE_AUTODIFF
 
 #undef DTYPE
 #undef INSTANTIATE

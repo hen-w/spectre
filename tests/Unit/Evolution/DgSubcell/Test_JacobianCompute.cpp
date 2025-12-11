@@ -72,8 +72,15 @@ void test() {
               evolution::dg::subcell::Tags::Coordinates>,
           evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToGridCompute<
               ::domain::Tags::ElementMap<3, Frame::Grid>, 3>,
+          evolution::dg::subcell::fd::Tags::InverseHessianLogicalToGridCompute<
+              ::domain::Tags::ElementMap<3, Frame::Grid>, 3>,
           evolution::dg::subcell::fd::Tags::
               InverseJacobianLogicalToInertialCompute<
+                  ::domain::CoordinateMaps::Tags::CoordinateMap<
+                      3, Frame::Grid, Frame::Inertial>,
+                  3>,
+          evolution::dg::subcell::fd::Tags::
+              InverseHessianLogicalToInertialCompute<
                   ::domain::CoordinateMaps::Tags::CoordinateMap<
                       3, Frame::Grid, Frame::Inertial>,
                   3>,
@@ -93,6 +100,10 @@ void test() {
           ::domain::Tags::ElementMap<3, Frame::Grid>, 3>>(
       "InverseJacobian(Logical,Grid)");
   TestHelpers::db::test_compute_tag<
+      evolution::dg::subcell::fd::Tags::InverseHessianLogicalToGridCompute<
+          ::domain::Tags::ElementMap<3, Frame::Grid>, 3>>(
+      "InverseHessian(Logical,Grid)");
+  TestHelpers::db::test_compute_tag<
       evolution::dg::subcell::fd::Tags::DetInverseJacobianLogicalToGridCompute<
           3>>("Det(InverseJacobian(Logical,Grid))");
   TestHelpers::db::test_compute_tag<
@@ -100,6 +111,11 @@ void test() {
           ::domain::CoordinateMaps::Tags::CoordinateMap<3, Frame::Grid,
                                                         Frame::Inertial>,
           3>>("InverseJacobian(Logical,Inertial)");
+  TestHelpers::db::test_compute_tag<
+      evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertialCompute<
+          ::domain::CoordinateMaps::Tags::CoordinateMap<3, Frame::Grid,
+                                                        Frame::Inertial>,
+          3>>("InverseHessian(Logical,Inertial)");
   TestHelpers::db::test_compute_tag<
       evolution::dg::subcell::fd::Tags::
           DetInverseJacobianLogicalToInertialCompute<
@@ -119,6 +135,20 @@ void test() {
        ++storage_index) {
     CHECK_ITERABLE_APPROX(inv_jac_inertial[storage_index],
                           inv_jac_grid[storage_index]);
+  }
+
+  const auto& inv_hes_grid = db::get<
+      evolution::dg::subcell::fd::Tags::InverseHessianLogicalToGrid<3>>(box);
+  const auto& inv_hes_inertial = db::get<
+      evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertial<3>>(
+      box);
+
+  // Check that the two hessians in frames connected by an identity map are
+  // identical
+  for (size_t storage_index = 0; storage_index < inv_hes_inertial.size();
+       ++storage_index) {
+    CHECK_ITERABLE_APPROX(inv_hes_inertial[storage_index],
+                          inv_hes_grid[storage_index]);
   }
 
   const auto& det_inv_jac_grid = db::get<

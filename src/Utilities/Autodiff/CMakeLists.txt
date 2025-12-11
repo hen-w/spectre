@@ -22,4 +22,10 @@ target_link_libraries(
   Simd
   )
 
+target_compile_definitions(
+  ${LIBRARY}
+  INTERFACE
+  SPECTRE_AUTODIFF
+  )
+
 message(STATUS "Enabling autodiff support")

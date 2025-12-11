@@ -107,6 +107,14 @@ target_link_libraries(
   Printf
   )
 
+if (SPECTRE_AUTODIFF)
+target_link_libraries(
+  ${LIBRARY}
+  PUBLIC
+  Autodiff
+)
+endif()
+
 # Libxsmm is disabled in Debug mode (see Blas.hpp).
 # As of Sep 1, 2023 libxsmm has an issue with lldb on ARM Macs (detecting
 # the CPU architecture raises SIGILL signals when loading the libxsmm dynamic

@@ -6,6 +6,7 @@ set(LIBRARY "Test_Ccz4")
 set(LIBRARY_SOURCES
   BoundaryConditions/Test_DirichletAnalytic.cpp
   BoundaryConditions/Test_Sommerfeld.cpp
+  FiniteDifference/Test_AddUpperSpatialZ4Constraint.cpp
   FiniteDifference/Test_ApplyFilter.cpp
   FiniteDifference/Test_BoundaryConditionGhostData.cpp
   FiniteDifference/Test_Derivatives.cpp
@@ -13,6 +14,9 @@ set(LIBRARY_SOURCES
   FiniteDifference/Test_EnforceConstrainedEvolution.cpp
   FiniteDifference/Test_Filter.cpp
   FiniteDifference/Test_GhostData.cpp
+  FiniteDifference/Test_ResizeTimeDerivatives.cpp
+  FiniteDifference/Test_SetInitialEta.cpp
+  FiniteDifference/Test_SetK0.cpp
   FiniteDifference/Test_SoTimeDerivative.cpp
   FiniteDifference/Test_Tags.cpp
   Test_ATilde.cpp

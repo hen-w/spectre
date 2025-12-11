@@ -53,7 +53,7 @@ namespace Ccz4::BoundaryConditions {
  * condition.
  *
  * \warning This boundary condition assumes a complete sphere domain
- * (all wedges), as we only apply it on the upper_zeta
+ * (all wedges), as we only apply it on the \ref upper_zeta
  * direction in blocks with external boundaries.
  */
 class Sommerfeld final : public BoundaryCondition {

@@ -104,6 +104,9 @@ class ProductOf2Maps {
     return map1_.is_identity() and map2_.is_identity();
   }
 
+  static constexpr bool supports_autodiff{Map1::supports_autodiff and
+                                          Map2::supports_autodiff};
+
   const std::unordered_set<std::string>& function_of_time_names() const {
     return f_of_t_names_;
   }
@@ -188,6 +191,10 @@ class ProductOf3Maps {
   bool is_identity() const {
     return map1_.is_identity() and map2_.is_identity() and map3_.is_identity();
   }
+
+  static constexpr bool supports_autodiff{Map1::supports_autodiff and
+                                            Map2::supports_autodiff and
+                                            Map3::supports_autodiff};
 
   const std::unordered_set<std::string>& function_of_time_names() const {
     return f_of_t_names_;

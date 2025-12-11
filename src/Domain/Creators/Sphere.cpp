@@ -219,21 +219,40 @@ Domain<3> Sphere::create_domain() const {
                                            which_wedges_);
   double aspect_ratio = 1.0;
   size_t index_polar_axis = 2;
+
+  std::vector<std::unique_ptr<
+      domain::CoordinateMapBase<Frame::BlockLogical, Frame::Inertial, 3>>>
+      coord_maps;
+
   if (equatorial_compression_.has_value()) {
     aspect_ratio = equatorial_compression_.value().aspect_ratio;
     index_polar_axis = equatorial_compression_.value().index_polar_axis;
-  }
-  const domain::CoordinateMaps::EquatorialCompression compression{
-      aspect_ratio, index_polar_axis};
 
-  auto coord_maps = domain::make_vector_coordinate_map_base<Frame::BlockLogical,
-                                                            Frame::Inertial, 3>(
-      sph_wedge_coordinate_maps(
-          inner_radius_, outer_radius_,
-          fill_interior_ ? std::get<InnerCube>(interior_).sphericity : 1.0, 1.0,
-          use_equiangular_map_, std::nullopt, false, radial_partitioning_,
-          radial_distribution_, which_wedges_),
-      compression);
+    const domain::CoordinateMaps::EquatorialCompression compression{
+        aspect_ratio, index_polar_axis};
+
+    coord_maps = domain::make_vector_coordinate_map_base<Frame::BlockLogical,
+                                                         Frame::Inertial, 3>(
+        sph_wedge_coordinate_maps(
+            inner_radius_, outer_radius_,
+            fill_interior_ ? std::get<InnerCube>(interior_).sphericity : 1.0,
+            1.0, use_equiangular_map_, std::nullopt, false,
+            radial_partitioning_, radial_distribution_, which_wedges_),
+        compression);
+  } else {
+    // This allows using sphere domain with autodiff hessians as
+    // equatorial compression currently does not support autodiff hessians
+    const domain::CoordinateMaps::EquatorialCompression compression{
+        aspect_ratio, index_polar_axis};
+
+    coord_maps = domain::make_vector_coordinate_map_base<Frame::BlockLogical,
+                                                         Frame::Inertial, 3>(
+        sph_wedge_coordinate_maps(
+            inner_radius_, outer_radius_,
+            fill_interior_ ? std::get<InnerCube>(interior_).sphericity : 1.0,
+            1.0, use_equiangular_map_, std::nullopt, false,
+            radial_partitioning_, radial_distribution_, which_wedges_));
+  }
 
   std::unordered_map<std::string, ExcisionSphere<3>> excision_spheres{};
 

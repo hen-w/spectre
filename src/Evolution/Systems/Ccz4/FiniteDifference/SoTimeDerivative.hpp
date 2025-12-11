@@ -15,6 +15,7 @@
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
 #include "DataStructures/VectorImpl.hpp"
+#include "Evolution/DgSubcell/Tags/Coordinates.hpp"
 #include "Evolution/DgSubcell/Tags/GhostDataForReconstruction.hpp"
 #include "Evolution/DgSubcell/Tags/Jacobians.hpp"
 #include "Evolution/DgSubcell/Tags/Mesh.hpp"
@@ -51,6 +52,9 @@ namespace Ccz4::fd {
 const size_t Dim = 3;
 
 namespace detail {
+// Update the time derivative at outermost interior points in a sphere domain
+// according to Sommerfeld boundary conditions.
+
 // Calculate the time derivative of the evolved variables for the second-order
 // Ccz4 system. There is quite some overlap between this apply() funcion
 // and the apply() function in the first-order Ccz4 system. However,
@@ -564,6 +568,9 @@ struct SoTimeDerivative {
     const auto& cell_centered_logical_to_inertial_inv_jacobian =
         db::get<evolution::dg::subcell::fd::Tags::
                     InverseJacobianLogicalToInertial<Dim>>(*box);
+    const auto& cell_centered_logical_to_inertial_inv_hessian = db::get<
+        evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertial<Dim>>(
+        *box);
 
     constexpr bool subcell_enabled_at_external_boundary =
         std::decay_t<decltype(db::get<Parallel::Tags::Metavariables>(
@@ -630,7 +637,8 @@ struct SoTimeDerivative {
         make_not_null(&cell_centered_Ccz4_second_derivs), evolved_vars,
         db::get<evolution::dg::subcell::Tags::GhostDataForReconstruction<Dim>>(
             *box),
-        fd_order, subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian);
+        fd_order, subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
+        cell_centered_logical_to_inertial_inv_hessian);
 
     // compute spatial derivative of the four auxiliary fields
     const auto& d_d_lapse =
@@ -962,6 +970,8 @@ struct SoTimeDerivative {
 
           // modify the time derivatives at the outermost interior points
           // per Sommerfeld BCs
+          // Alternative: maybe modify the time derivatives at the outermost
+          // n pts where n is the ghost zone size?
           tmpl::for_each<Ccz4::fd::System::variables_tag_list>(
               [&]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
                 const auto& var = get<Tag>(evolved_var);

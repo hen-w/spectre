@@ -12,15 +12,18 @@ spectre_target_sources(
   Derivatives.cpp
   DummyReconstructor.cpp
   EnforceConstrainedEvolution.cpp
+  EventInstantiation.cpp
   Filter.cpp
   GhostData.cpp
   Reconstructor.cpp
+  RegisterDerivedWithCharm.cpp
   )
 
 spectre_target_headers(
   ${LIBRARY}
   INCLUDE_DIRECTORY ${CMAKE_SOURCE_DIR}/src
   HEADERS
+  AddUpperSpatialZ4Constraint.hpp
   ApplyFilter.hpp
   BoundaryConditionGhostData.hpp
   Derivatives.hpp
@@ -29,6 +32,10 @@ spectre_target_headers(
   Filter.hpp
   GhostData.hpp
   Reconstructor.hpp
+  RegisterDerivedWithCharm.hpp
+  ResizeTimeDerivatives.hpp
+  SetInitialEta.hpp
+  SetK0.hpp
   SoTimeDerivative.hpp
   System.hpp
   Tags.hpp
