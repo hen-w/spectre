@@ -24,6 +24,18 @@ void test_simple_tags() {
       "ConstrainedEvolution");
   TestHelpers::db::test_simple_tag<Ccz4::fd::Tags::KreissOligerEpsilon>(
       "KreissOligerEpsilon");
+  TestHelpers::db::test_simple_tag<
+      Ccz4::fd::Tags::ConstraintCharacteristicSpeeds<DataType>>(
+      "ConstraintCharacteristicSpeeds");
+  TestHelpers::db::test_simple_tag<
+      Ccz4::fd::Tags::CVectorZero<DataType, Dim, Frame>>("CVectorZero");
+  TestHelpers::db::test_simple_tag<Ccz4::fd::Tags::CScalarPlus<DataType>>(
+      "CScalarPlus");
+  TestHelpers::db::test_simple_tag<Ccz4::fd::Tags::CScalarMinus<DataType>>(
+      "CScalarMinus");
+  TestHelpers::db::test_simple_tag<
+      Ccz4::fd::Tags::ConstraintCharacteristicFields<DataType, Dim, Frame>>(
+      "ConstraintCharacteristicFields");
   TestHelpers::db::test_simple_tag<Ccz4::fd::Tags::CPhi<DataType>>("CPhi");
   TestHelpers::db::test_simple_tag<Ccz4::fd::Tags::CGamma<DataType>>("CGamma");
   TestHelpers::db::test_simple_tag<Ccz4::fd::Tags::CAlpha<DataType>>("CAlpha");
