@@ -142,6 +142,27 @@ struct ConstraintCharacteristicFields : db::SimpleTag {
                            CScalarPlus<DataType>, CScalarMinus<DataType>>>;
 };
 
+template <typename DataType>
+struct RadiationCharacteristicSpeeds : db::SimpleTag {
+  using type = std::array<DataType, 2>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct CTensorPlus : db::SimpleTag {
+  using type = tnsr::ii<DataType, Dim, Frame>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct CTensorMinus : db::SimpleTag {
+  using type = tnsr::ii<DataType, Dim, Frame>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct RadiationCharacteristicFields : db::SimpleTag {
+  using type = Variables<tmpl::list<CTensorPlus<DataType, Dim, Frame>,
+                                    CTensorMinus<DataType, Dim, Frame>>>;
+};
+
 /// \brief Tags sent for second-order Ccz4 evolution.
 using spacetime_reconstruction_tags = System::variables_tag_list;
 

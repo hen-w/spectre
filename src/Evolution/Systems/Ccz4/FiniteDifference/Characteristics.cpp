@@ -19,42 +19,6 @@
 
 namespace Ccz4::fd {
 namespace detail {
-// Helper function to compute the projector q_{ij} = gamma_{ij} - n_i n_j
-template <typename DataType, typename Frame>
-tnsr::ii<DataType, Dim, Frame> projector_dd(
-    const tnsr::ii<DataType, Dim, Frame>& spatial_metric,
-    const tnsr::i<DataType, Dim, Frame>& unit_normal_one_form) {
-  return gr::transverse_projection_operator(spatial_metric,
-                                            unit_normal_one_form);
-}
-
-// Helper function to compute the TT part of a symmetric rank-2 tensor
-template <typename DataType, typename Frame>
-tnsr::ii<DataType, Dim, Frame> compute_tt_symmetric_tensor(
-    const tnsr::ii<DataType, Dim, Frame>& tensor,
-    const tnsr::ii<DataType, Dim, Frame>& spatial_metric,
-    const tnsr::II<DataType, Dim, Frame>& inverse_spatial_metric,
-    const tnsr::i<DataType, Dim, Frame>& unit_normal_one_form) {
-  const tnsr::ii<DataType, Dim, Frame> q_dd =
-      projector_dd(spatial_metric, unit_normal_one_form);
-  tnsr::iJ<DataType, Dim, Frame> q_dU{};
-  ::tenex::evaluate<ti::i, ti::J>(
-      make_not_null(&q_dU),
-      q_dd(ti::i, ti::k) * inverse_spatial_metric(ti::K, ti::J));
-  tnsr::II<DataType, Dim, Frame> q_UU{};
-  ::tenex::evaluate<ti::I, ti::J>(
-      make_not_null(&q_UU),
-      inverse_spatial_metric(ti::I, ti::K) * q_dU(ti::k, ti::J));
-
-  tnsr::ii<DataType, Dim, Frame> tensor_tt{};
-  ::tenex::evaluate<ti::i, ti::j>(
-      make_not_null(&tensor_tt),
-      (q_dU(ti::i, ti::K) * q_dU(ti::j, ti::L) -
-       0.5 * q_dd(ti::i, ti::j) * q_UU(ti::K, ti::L)) *
-          tensor(ti::k, ti::l));
-  return tensor_tt;
-}
-
 // Helper function to compute a rank-2 symmetric tensor from TT components
 template <typename DataType, typename Frame>
 tnsr::ii<DataType, Dim, Frame> reconstruct_symmetric_tensor_from_tt(
@@ -243,6 +207,42 @@ Variables<coefficients_tags_list<DataType>> compute_coefficients_minus(
 }
 }  // namespace detail
 
+// Helper function to compute the projector q_{ij} = gamma_{ij} - n_i n_j
+template <typename DataType, typename Frame>
+tnsr::ii<DataType, Dim, Frame> projector_dd(
+    const tnsr::ii<DataType, Dim, Frame>& spatial_metric,
+    const tnsr::i<DataType, Dim, Frame>& unit_normal_one_form) {
+  return gr::transverse_projection_operator(spatial_metric,
+                                            unit_normal_one_form);
+}
+
+// Helper function to compute the TT part of a symmetric rank-2 tensor
+template <typename DataType, typename Frame>
+tnsr::ii<DataType, Dim, Frame> compute_tt_symmetric_tensor(
+    const tnsr::ii<DataType, Dim, Frame>& tensor,
+    const tnsr::ii<DataType, Dim, Frame>& spatial_metric,
+    const tnsr::II<DataType, Dim, Frame>& inverse_spatial_metric,
+    const tnsr::i<DataType, Dim, Frame>& unit_normal_one_form) {
+  const tnsr::ii<DataType, Dim, Frame> q_dd =
+      projector_dd(spatial_metric, unit_normal_one_form);
+  tnsr::iJ<DataType, Dim, Frame> q_dU{};
+  ::tenex::evaluate<ti::i, ti::J>(
+      make_not_null(&q_dU),
+      q_dd(ti::i, ti::k) * inverse_spatial_metric(ti::K, ti::J));
+  tnsr::II<DataType, Dim, Frame> q_UU{};
+  ::tenex::evaluate<ti::I, ti::J>(
+      make_not_null(&q_UU),
+      inverse_spatial_metric(ti::I, ti::K) * q_dU(ti::k, ti::J));
+
+  tnsr::ii<DataType, Dim, Frame> tensor_tt{};
+  ::tenex::evaluate<ti::i, ti::j>(
+      make_not_null(&tensor_tt),
+      (q_dU(ti::i, ti::K) * q_dU(ti::j, ti::L) -
+       0.5 * q_dd(ti::i, ti::j) * q_UU(ti::K, ti::L)) *
+          tensor(ti::k, ti::l));
+  return tensor_tt;
+}
+
 template <typename Frame>
 std::array<DataVector, 16> characteristic_speeds(
     const Scalar<DataVector>& lapse,
@@ -371,7 +371,7 @@ void characteristic_fields(
           (conformal_factor() * conformal_factor()));
   const auto inverse_spatial_metric =
       determinant_and_inverse(spatial_metric).second;
-  const auto a_tilde_tt = detail::compute_tt_symmetric_tensor(
+  const auto a_tilde_tt = compute_tt_symmetric_tensor(
       a_tilde, spatial_metric, inverse_spatial_metric, unit_normal_one_form);
   const auto unit_normal_vector =
       raise_or_lower_index(unit_normal_one_form, inverse_spatial_metric);
@@ -379,9 +379,8 @@ void characteristic_fields(
   contract_first_n_indices<1>(make_not_null(&dn_conformal_spatial_metric),
                               unit_normal_vector, d_conformal_spatial_metric);
   const auto dn_conformal_spatial_metric_tt =
-      detail::compute_tt_symmetric_tensor(
-          dn_conformal_spatial_metric, spatial_metric, inverse_spatial_metric,
-          unit_normal_one_form);
+      compute_tt_symmetric_tensor(dn_conformal_spatial_metric, spatial_metric,
+                                  inverse_spatial_metric, unit_normal_one_form);
   auto& u_tnsr_plus =
       get<Tags::UTensorPlus<DataVector, Dim, Frame>>(*char_fields);
   ::tenex::evaluate<ti::i, ti::j>(
@@ -396,7 +395,7 @@ void characteristic_fields(
           0.5 * dn_conformal_spatial_metric_tt(ti::i, ti::j));
 
   // Compute u_vector1_zero
-  const auto q_dd = detail::projector_dd(spatial_metric, unit_normal_one_form);
+  const auto q_dd = projector_dd(spatial_metric, unit_normal_one_form);
   auto& u_vector1_zero =
       get<Tags::UVector1Zero<DataVector, Dim, Frame>>(*char_fields);
   ::tenex::evaluate<ti::i>(
@@ -871,6 +870,19 @@ void evolved_space_from_characteristic_fields(
 #define FRAME(data) BOOST_PP_TUPLE_ELEM(0, data)
 
 #define INSTANTIATION(_, data)                                                 \
+  template tnsr::ii<DataVector, Ccz4::fd::Dim, FRAME(data)>                    \
+  Ccz4::fd::projector_dd<DataVector, FRAME(data)>(                             \
+      const tnsr::ii<DataVector, Ccz4::fd::Dim, FRAME(data)>& spatial_metric,  \
+      const tnsr::i<DataVector, Ccz4::fd::Dim, FRAME(data)>&                   \
+          unit_normal_one_form);                                               \
+  template tnsr::ii<DataVector, Ccz4::fd::Dim, FRAME(data)>                    \
+  Ccz4::fd::compute_tt_symmetric_tensor<DataVector, FRAME(data)>(              \
+      const tnsr::ii<DataVector, Ccz4::fd::Dim, FRAME(data)>& tensor,          \
+      const tnsr::ii<DataVector, Ccz4::fd::Dim, FRAME(data)>& spatial_metric,  \
+      const tnsr::II<DataVector, Ccz4::fd::Dim, FRAME(data)>&                  \
+          inverse_spatial_metric,                                              \
+      const tnsr::i<DataVector, Ccz4::fd::Dim, FRAME(data)>&                   \
+          unit_normal_one_form);                                               \
   template std::array<DataVector, 16>                                          \
   Ccz4::fd::characteristic_speeds<FRAME(data)>(                                \
       const Scalar<DataVector>& lapse,                                         \

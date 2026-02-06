@@ -16,6 +16,7 @@ spectre_target_sources(
   EnforceConstrainedEvolution.cpp
   Filter.cpp
   GhostData.cpp
+  RadiationCharacteristics.cpp
   Reconstructor.cpp
   )
 
@@ -32,6 +33,7 @@ spectre_target_headers(
   EnforceConstrainedEvolution.hpp
   Filter.hpp
   GhostData.hpp
+  RadiationCharacteristics.hpp
   Reconstructor.hpp
   SoTimeDerivative.hpp
   System.hpp

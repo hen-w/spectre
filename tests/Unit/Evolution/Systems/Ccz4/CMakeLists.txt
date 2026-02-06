@@ -15,6 +15,7 @@ set(LIBRARY_SOURCES
   FiniteDifference/Test_EnforceConstrainedEvolution.cpp
   FiniteDifference/Test_Filter.cpp
   FiniteDifference/Test_GhostData.cpp
+  FiniteDifference/Test_RadiationCharacteristics.cpp
   FiniteDifference/Test_SoTimeDerivative.cpp
   FiniteDifference/Test_Tags.cpp
   Test_ATilde.cpp
