@@ -9,6 +9,7 @@ set(LIBRARY_SOURCES
   FiniteDifference/Test_ApplyFilter.cpp
   FiniteDifference/Test_BoundaryConditionGhostData.cpp
   FiniteDifference/Test_Characteristics.cpp
+  FiniteDifference/Test_ConstraintCharacteristics.cpp
   FiniteDifference/Test_Derivatives.cpp
   FiniteDifference/Test_DummyReconstructor.cpp
   FiniteDifference/Test_EnforceConstrainedEvolution.cpp

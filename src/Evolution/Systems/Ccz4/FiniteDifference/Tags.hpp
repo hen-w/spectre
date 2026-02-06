@@ -115,6 +115,33 @@ struct KreissOligerEpsilon : db::SimpleTag {
   }
 };
 
+template <typename DataType>
+struct ConstraintCharacteristicSpeeds : db::SimpleTag {
+  using type = std::array<DataType, 3>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct CVectorZero : db::SimpleTag {
+  using type = tnsr::i<DataType, Dim, Frame>;
+};
+
+template <typename DataType>
+struct CScalarPlus : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct CScalarMinus : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct ConstraintCharacteristicFields : db::SimpleTag {
+  using type =
+      Variables<tmpl::list<CVectorZero<DataType, Dim, Frame>,
+                           CScalarPlus<DataType>, CScalarMinus<DataType>>>;
+};
+
 /// \brief Tags sent for second-order Ccz4 evolution.
 using spacetime_reconstruction_tags = System::variables_tag_list;
 

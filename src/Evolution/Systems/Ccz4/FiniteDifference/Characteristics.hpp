@@ -24,7 +24,6 @@ struct Normalized;
 namespace Ccz4::fd {
 static constexpr size_t Dim = System::volume_dim;
 
-<<<<<<< HEAD
 /// Helper function to compute the projector q_{ij} = gamma_{ij} - n_i n_j
 template <typename DataType, typename Frame>
 tnsr::ii<DataType, Dim, Frame> projector_dd(
@@ -39,8 +38,6 @@ tnsr::ii<DataType, Dim, Frame> compute_tt_symmetric_tensor(
     const tnsr::II<DataType, Dim, Frame>& inverse_spatial_metric,
     const tnsr::i<DataType, Dim, Frame>& unit_normal_one_form);
 
-=======
->>>>>>> 529cf70a4 (Add evolution characteristics to SoCcz4)
 /// @{
 /*!
  * \brief Compute the characteristic speeds for the SoCcz4 system.
