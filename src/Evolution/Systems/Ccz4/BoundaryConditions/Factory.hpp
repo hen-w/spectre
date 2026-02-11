@@ -5,6 +5,7 @@
 
 #include "Domain/BoundaryConditions/Periodic.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
+#include "Evolution/Systems/Ccz4/BoundaryConditions/ConstraintsRadiationPreserving.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/DirichletAnalytic.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Sommerfeld.hpp"
 #include "Utilities/TMPL.hpp"
@@ -14,5 +15,5 @@ namespace Ccz4::BoundaryConditions {
 using standard_boundary_conditions =
     tmpl::list<DirichletAnalytic,
                domain::BoundaryConditions::Periodic<BoundaryCondition>,
-               Sommerfeld>;
+               Sommerfeld, ConstraintsRadiationPreserving>;
 }  // namespace Ccz4::BoundaryConditions

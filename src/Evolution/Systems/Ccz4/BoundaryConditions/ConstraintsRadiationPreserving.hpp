@@ -36,27 +36,47 @@ struct Time;
 
 namespace Ccz4::BoundaryConditions {
 /*!
- * \brief Sets Sommerfeld boundary conditions per tensor component.
+ * \brief Set constraints and radiation preserving
+ * boundary conditions (CRPBC) for SoCcz4.
  *
  * Unlike time-independent subcell external boundary conditions,
- * the Sommerfeld boundary condition is applied at the outermost
+ * the CRPBC is applied at the outermost
  * interior points in the volume instead of the ghost zone.
- * This is because the Sommerfeld condition requires radial derivatives
+ * This is because the CRPBC requires spatial derivatives
  * of the fields and modify their time derivatives, which then need to
  * be time integrated. Under current infrastructure, it is therefore
  * the simplest to apply this boundary condition in the interior
  * rather than the ghost zone. This file extrapolates the interior
- * evolved variables into the ghost zone. Their radial derivatives and
+ * evolved variables into the ghost zone. Their spatial derivatives and
  * time derivatives are then computed and applied in SoTimeDerivative.hpp for
- * the outermost interior points. All tensor components (including lapse and
- * shift) are treated as independent fields when applying this boundary
- * condition.
+ * the outermost interior points.
+ *
+ * The CRPBC is designed to preserve the incoming constraint and radiation
+ * characteristics at the boundary; see \ref constraint_characteristic_fields()
+ * and \ref radiation_characteristic_fields(). We control the
+ * constraint characteristic fields $C_i^{-\beta^n}$ via the main
+ * characteristic field $U_i^{-\alpha-\beta^n}$
+ * and similarly $C^{\pm\alpha-\beta^n}$ via $U_{(1)}^{\pm\alpha-\beta^n}$
+ * or $U_{(2)}^{\pm\alpha-\beta^n}$. See \ref characteristic_fields()
+ * for the definition of the main characteristic fields. We also control
+ * the gravitatonal radiation characteristics $C_{ij}^{\pm\alpha-\beta^n}$,
+ * which are proportional to Newman-Penrose quantity $\Psi_4$ and $\Psi_0$
+ * respectively, via the normal derivative
+ * $\partial_n U_{ij}^{\pm\alpha-\beta^n}$. For the rest of the incoming
+ * main characteristic fields (gauge), we simply apply Sommerfeld
+ * boundary conditions.
  *
  * \warning This boundary condition assumes a complete sphere domain
  * (all wedges), as we only apply it on the \ref upper_zeta
  * direction in blocks with external boundaries.
+ *
+ * \note This file has exactly the same implementation as Sommerfeld.hpp
+ * since they only serve to extrapolate into the ghost zone. The actual
+ * difference in the boundary condition is applied in SoTimeDerivative.hpp,
+ * which needs this spearate class from Sommerfeld to identify the correct
+ * boundary condition to impose.
  */
-class Sommerfeld final : public BoundaryCondition {
+class ConstraintsRadiationPreserving final : public BoundaryCondition {
  public:
   /// \brief What extrapolation order to use to extrapolate
   /// into the ghost zone.
@@ -69,21 +89,24 @@ class Sommerfeld final : public BoundaryCondition {
   };
   using options = tmpl::list<ExtrapolationOrder>;
   static constexpr Options::String help{
-      "Sommerfeld boundary conditions applied per tensor component."};
+      "Constraints and radiation preserving boundary conditions."};
 
-  Sommerfeld() = default;
-  Sommerfeld(Sommerfeld&&) = default;
-  Sommerfeld& operator=(Sommerfeld&&) = default;
-  Sommerfeld(const Sommerfeld&);
-  Sommerfeld& operator=(const Sommerfeld&);
-  ~Sommerfeld() override = default;
+  ConstraintsRadiationPreserving() = default;
+  ConstraintsRadiationPreserving(ConstraintsRadiationPreserving&&) = default;
+  ConstraintsRadiationPreserving& operator=(ConstraintsRadiationPreserving&&) =
+      default;
+  ConstraintsRadiationPreserving(const ConstraintsRadiationPreserving&);
+  ConstraintsRadiationPreserving& operator=(
+      const ConstraintsRadiationPreserving&);
+  ~ConstraintsRadiationPreserving() override = default;
 
-  explicit Sommerfeld(CkMigrateMessage* msg);
+  explicit ConstraintsRadiationPreserving(CkMigrateMessage* msg);
 
-  explicit Sommerfeld(size_t extrapolation_order);
+  explicit ConstraintsRadiationPreserving(size_t extrapolation_order);
 
   WRAPPED_PUPable_decl_base_template(
-      domain::BoundaryConditions::BoundaryCondition, Sommerfeld);
+      domain::BoundaryConditions::BoundaryCondition,
+      ConstraintsRadiationPreserving);
 
   auto get_clone() const -> std::unique_ptr<
       domain::BoundaryConditions::BoundaryCondition> override;
@@ -98,7 +121,8 @@ class Sommerfeld final : public BoundaryCondition {
   using fd_interior_temporary_tags =
       tmpl::list<evolution::dg::subcell::Tags::Mesh<3>>;
   using fd_interior_primitive_variables_tags = tmpl::list<>;
-  using fd_gridless_tags = tmpl::list<::Ccz4::fd::Tags::Reconstructor>;
+  using fd_gridless_tags = tmpl::list<::Ccz4::fd::Tags::Reconstructor,
+                                      ::Ccz4::fd::Tags::EvolveLapseAndShift>;
   void fd_ghost(
       gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> conformal_metric,
       gsl::not_null<Scalar<DataVector>*> lapse,
@@ -126,7 +150,8 @@ class Sommerfeld final : public BoundaryCondition {
       const Mesh<3>& subcell_mesh,
 
       // fd_gridless_tags
-      const fd::Reconstructor& reconstructor) const;
+      const fd::Reconstructor& reconstructor,
+      const bool evolve_lapse_and_shift) const;
 
  private:
   size_t extrapolation_order_;

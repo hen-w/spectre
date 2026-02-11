@@ -22,7 +22,8 @@ struct System {
   static constexpr bool shifting_shift = false;
 
   // The free parameter f in the Gamma-driver condition.
-  static constexpr double f = 0.75;
+  // We assume in cpbc that f has no spatial dependenc.
+  static constexpr double f = 1.0;
 
   // the order of the following evolved variables is important
   // as it is assumed in the filter

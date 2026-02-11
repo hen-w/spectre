@@ -14,8 +14,8 @@
 #include "Domain/CoordinateMaps/ProductMaps.tpp"
 #include "Domain/ElementMap.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
+#include "Evolution/Systems/Ccz4/BoundaryConditions/ConstraintsRadiationPreserving.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
-#include "Evolution/Systems/Ccz4/BoundaryConditions/Sommerfeld.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Framework/TestCreation.hpp"
@@ -34,9 +34,9 @@ using Vars = Variables<Ccz4::fd::Tags::spacetime_reconstruction_tags>;
 struct Metavariables {
   struct factory_creation
       : tt::ConformsTo<Options::protocols::FactoryCreation> {
-    using factory_classes =
-        tmpl::map<tmpl::pair<Ccz4::BoundaryConditions::BoundaryCondition,
-                             tmpl::list<Ccz4::BoundaryConditions::Sommerfeld>>>;
+    using factory_classes = tmpl::map<tmpl::pair<
+        Ccz4::BoundaryConditions::BoundaryCondition,
+        tmpl::list<Ccz4::BoundaryConditions::ConstraintsRadiationPreserving>>>;
   };
 };
 
@@ -66,7 +66,8 @@ Vars set_polynomial(const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
 }
 
 template <typename U>
-void test_fd(const U& boundary_condition, const size_t max_degree) {
+void test_fd(const U& boundary_condition, const size_t max_degree,
+             const bool evolve_lapse_and_shift) {
   const Mesh<3> subcell_mesh{20, Spectral::Basis::FiniteDifference,
                              Spectral::Quadrature::CellCentered};
 
@@ -150,7 +151,8 @@ void test_fd(const U& boundary_condition, const size_t max_degree) {
       // interior args in variables_tag_list order
       int_conformal_metric, int_conformal_factor, int_a_tilde,
       int_trace_extrinsic_curvature, int_theta, int_gamma_hat, int_lapse,
-      int_shift, int_auxiliary_shift_b, subcell_mesh, reconstructor);
+      int_shift, int_auxiliary_shift_b, subcell_mesh, reconstructor,
+      evolve_lapse_and_shift);
 
   tmpl::for_each<Ccz4::fd::System::variables_tag_list>(
       [&]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
@@ -169,80 +171,91 @@ void test_fd(const U& boundary_condition, const size_t max_degree) {
       });
 }
 
-SPECTRE_TEST_CASE("Unit.Ccz4.BoundaryConditions.Sommerfeld",
+SPECTRE_TEST_CASE("Unit.Ccz4.BoundaryConditions.ConstraintsRadiationPreserving",
                   "[Unit][Evolution]") {
   register_factory_classes_with_charm<Metavariables>();
   {
-    INFO("Test Sommerfeld BC");
+    INFO("Test ConstraintsRadiationPreserving BC");
     const auto product_boundary_condition =
         TestHelpers::test_creation<
             std::unique_ptr<Ccz4::BoundaryConditions::BoundaryCondition>,
             Metavariables>(
-            "Sommerfeld:\n"
+            "ConstraintsRadiationPreserving:\n"
             "  ExtrapolationOrder: 1\n")
             ->get_clone();
 
     const auto serialized_and_deserialized_condition =
         serialize_and_deserialize(
-            *dynamic_cast<Ccz4::BoundaryConditions::Sommerfeld*>(
+            *dynamic_cast<
+                Ccz4::BoundaryConditions::ConstraintsRadiationPreserving*>(
                 product_boundary_condition.get()));
 
-    test_fd<Ccz4::BoundaryConditions::Sommerfeld>(
-        serialized_and_deserialized_condition, 1);
+    test_fd<Ccz4::BoundaryConditions::ConstraintsRadiationPreserving>(
+        serialized_and_deserialized_condition, 1, true);
   }
   {
-    INFO("Test Sommerfeld BC");
+    INFO("Test ConstraintsRadiationPreserving BC");
     const auto product_boundary_condition =
         TestHelpers::test_creation<
             std::unique_ptr<Ccz4::BoundaryConditions::BoundaryCondition>,
             Metavariables>(
-            "Sommerfeld:\n"
+            "ConstraintsRadiationPreserving:\n"
             "  ExtrapolationOrder: 2\n")
             ->get_clone();
 
     const auto serialized_and_deserialized_condition =
         serialize_and_deserialize(
-            *dynamic_cast<Ccz4::BoundaryConditions::Sommerfeld*>(
+            *dynamic_cast<
+                Ccz4::BoundaryConditions::ConstraintsRadiationPreserving*>(
                 product_boundary_condition.get()));
 
-    test_fd<Ccz4::BoundaryConditions::Sommerfeld>(
-        serialized_and_deserialized_condition, 2);
+    test_fd<Ccz4::BoundaryConditions::ConstraintsRadiationPreserving>(
+        serialized_and_deserialized_condition, 2, true);
   }
   {
-    INFO("Test Sommerfeld BC");
+    INFO("Test ConstraintsRadiationPreserving BC");
     const auto product_boundary_condition =
         TestHelpers::test_creation<
             std::unique_ptr<Ccz4::BoundaryConditions::BoundaryCondition>,
             Metavariables>(
-            "Sommerfeld:\n"
+            "ConstraintsRadiationPreserving:\n"
             "  ExtrapolationOrder: 3\n")
             ->get_clone();
 
     const auto serialized_and_deserialized_condition =
         serialize_and_deserialize(
-            *dynamic_cast<Ccz4::BoundaryConditions::Sommerfeld*>(
+            *dynamic_cast<
+                Ccz4::BoundaryConditions::ConstraintsRadiationPreserving*>(
                 product_boundary_condition.get()));
 
-    test_fd<Ccz4::BoundaryConditions::Sommerfeld>(
-        serialized_and_deserialized_condition, 3);
+    test_fd<Ccz4::BoundaryConditions::ConstraintsRadiationPreserving>(
+        serialized_and_deserialized_condition, 3, true);
   }
+#ifdef SPECTRE_DEBUG
   {
-    INFO("Test Sommerfeld BC");
+    INFO(
+        "Test ConstraintsRadiationPreserving BC with "
+        "evolve_lapse_and_shift=false");
     const auto product_boundary_condition =
         TestHelpers::test_creation<
             std::unique_ptr<Ccz4::BoundaryConditions::BoundaryCondition>,
             Metavariables>(
-            "Sommerfeld:\n"
-            "  ExtrapolationOrder: 4\n")
+            "ConstraintsRadiationPreserving:\n"
+            "  ExtrapolationOrder: 1\n")
             ->get_clone();
 
     const auto serialized_and_deserialized_condition =
         serialize_and_deserialize(
-            *dynamic_cast<Ccz4::BoundaryConditions::Sommerfeld*>(
+            *dynamic_cast<
+                Ccz4::BoundaryConditions::ConstraintsRadiationPreserving*>(
                 product_boundary_condition.get()));
 
-    test_fd<Ccz4::BoundaryConditions::Sommerfeld>(
-        serialized_and_deserialized_condition, 4);
+    CHECK_THROWS_WITH(
+        test_fd<Ccz4::BoundaryConditions::ConstraintsRadiationPreserving>(
+            serialized_and_deserialized_condition, 1, false),
+        Catch::Matchers::ContainsSubstring(
+            "ConstraintsRadiationPreserving BC is not implemented"));
   }
+#endif  // SPECTRE_DEBUG
 }
 }  // namespace
