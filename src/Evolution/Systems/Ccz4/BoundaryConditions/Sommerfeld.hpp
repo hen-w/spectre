@@ -58,7 +58,16 @@ namespace Ccz4::BoundaryConditions {
  */
 class Sommerfeld final : public BoundaryCondition {
  public:
-  using options = tmpl::list<>;
+  /// \brief What extrapolation order to use to extrapolate
+  /// into the ghost zone.
+  struct ExtrapolationOrder {
+    static constexpr Options::String help =
+        "What extrapolation order to use to extrapolate into the ghost zone.";
+    using type = size_t;
+    static type lower_bound() { return 1; }
+    static type upper_bound() { return 3; }
+  };
+  using options = tmpl::list<ExtrapolationOrder>;
   static constexpr Options::String help{
       "Sommerfeld boundary conditions applied per tensor component."};
 
@@ -70,6 +79,8 @@ class Sommerfeld final : public BoundaryCondition {
   ~Sommerfeld() override = default;
 
   explicit Sommerfeld(CkMigrateMessage* msg);
+
+  explicit Sommerfeld(size_t extrapolation_order);
 
   WRAPPED_PUPable_decl_base_template(
       domain::BoundaryConditions::BoundaryCondition, Sommerfeld);
@@ -88,7 +99,7 @@ class Sommerfeld final : public BoundaryCondition {
       tmpl::list<evolution::dg::subcell::Tags::Mesh<3>>;
   using fd_interior_primitive_variables_tags = tmpl::list<>;
   using fd_gridless_tags = tmpl::list<::Ccz4::fd::Tags::Reconstructor>;
-  static void fd_ghost(
+  void fd_ghost(
       gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> conformal_metric,
       gsl::not_null<Scalar<DataVector>*> lapse,
       gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> shift,
@@ -115,6 +126,9 @@ class Sommerfeld final : public BoundaryCondition {
       const Mesh<3>& subcell_mesh,
 
       // fd_gridless_tags
-      const fd::Reconstructor& reconstructor);
+      const fd::Reconstructor& reconstructor) const;
+
+ private:
+  size_t extrapolation_order_;
 };
 }  // namespace Ccz4::BoundaryConditions
