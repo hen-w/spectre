@@ -9,12 +9,15 @@ spectre_target_sources(
   ${LIBRARY}
   PRIVATE
   ApplyFilter.cpp
+  Characteristics.cpp
+  ConstraintCharacteristics.cpp
   Derivatives.cpp
   DummyReconstructor.cpp
   EnforceConstrainedEvolution.cpp
   EventInstantiation.cpp
   Filter.cpp
   GhostData.cpp
+  RadiationCharacteristics.cpp
   Reconstructor.cpp
   RegisterDerivedWithCharm.cpp
   )
@@ -26,11 +29,14 @@ spectre_target_headers(
   AddUpperSpatialZ4Constraint.hpp
   ApplyFilter.hpp
   BoundaryConditionGhostData.hpp
+  Characteristics.hpp
+  ConstraintCharacteristics.hpp
   Derivatives.hpp
   DummyReconstructor.hpp
   EnforceConstrainedEvolution.hpp
   Filter.hpp
   GhostData.hpp
+  RadiationCharacteristics.hpp
   Reconstructor.hpp
   RegisterDerivedWithCharm.hpp
   ResizeTimeDerivatives.hpp

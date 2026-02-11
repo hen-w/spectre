@@ -9,11 +9,14 @@ set(LIBRARY_SOURCES
   FiniteDifference/Test_AddUpperSpatialZ4Constraint.cpp
   FiniteDifference/Test_ApplyFilter.cpp
   FiniteDifference/Test_BoundaryConditionGhostData.cpp
+  FiniteDifference/Test_Characteristics.cpp
+  FiniteDifference/Test_ConstraintCharacteristics.cpp
   FiniteDifference/Test_Derivatives.cpp
   FiniteDifference/Test_DummyReconstructor.cpp
   FiniteDifference/Test_EnforceConstrainedEvolution.cpp
   FiniteDifference/Test_Filter.cpp
   FiniteDifference/Test_GhostData.cpp
+  FiniteDifference/Test_RadiationCharacteristics.cpp
   FiniteDifference/Test_ResizeTimeDerivatives.cpp
   FiniteDifference/Test_SetInitialEta.cpp
   FiniteDifference/Test_SetK0.cpp
@@ -38,6 +41,7 @@ target_link_libraries(
   ${LIBRARY}
   PRIVATE
   Ccz4
+  CoordinateMaps
   DataBoxTestHelpers
   DataStructures
   Domain
