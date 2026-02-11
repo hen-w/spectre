@@ -78,7 +78,13 @@ void test_ccz4_solution(
           gr::Tags::TraceExtrinsicCurvature<DataVector>,
           Ccz4::Tags::Theta<DataVector>,
           Ccz4::Tags::GammaHat<DataVector, SolutionType::volume_dim>,
-          Ccz4::Tags::AuxiliaryShiftB<DataVector, SolutionType::volume_dim>>{});
+          Ccz4::Tags::AuxiliaryShiftB<DataVector, SolutionType::volume_dim>,
+          ::Tags::deriv<
+              Ccz4::Tags::ConformalMetric<DataVector, SolutionType::volume_dim>,
+              tmpl::size_t<SolutionType::volume_dim>, Frame::Inertial>,
+          ::Tags::deriv<Ccz4::Tags::ConformalFactor<DataVector>,
+                        tmpl::size_t<SolutionType::volume_dim>,
+                        Frame::Inertial>>{});
 
   const auto& spatial_metric =
       get<gr::Tags::SpatialMetric<DataVector, SolutionType::volume_dim>>(vars);
@@ -183,6 +189,33 @@ void test_ccz4_solution(
   CHECK(auxiliary_shift_b ==
         get<Ccz4::Tags::AuxiliaryShiftB<DataVector, SolutionType::volume_dim>>(
             wrapped_Ccz4_vars));
+
+  tnsr::i<DataVector, Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>
+      d_conformal_factor;
+  ::tenex::evaluate<ti::i>(make_not_null(&d_conformal_factor),
+                           -1. / 6. * conformal_factor() *
+                               inverse_spatial_metric(ti::M, ti::L) *
+                               d_spatial_metric(ti::i, ti::m, ti::l));
+  CHECK_ITERABLE_APPROX(
+      d_conformal_factor,
+      (get<::Tags::deriv<Ccz4::Tags::ConformalFactor<DataVector>,
+                         tmpl::size_t<SolutionType::volume_dim>,
+                         Frame::Inertial>>(wrapped_Ccz4_vars)));
+
+  tnsr::ijj<DataVector,
+            Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>
+      d_conformal_spatial_metric;
+  ::tenex::evaluate<ti::i, ti::j, ti::k>(
+      make_not_null(&d_conformal_spatial_metric),
+      conformal_factor_squared() * d_spatial_metric(ti::i, ti::j, ti::k) +
+          2. * conformal_factor() * d_conformal_factor(ti::i) *
+              spatial_metric(ti::j, ti::k));
+  CHECK_ITERABLE_APPROX(
+      d_conformal_spatial_metric,
+      (get<::Tags::deriv<
+           Ccz4::Tags::ConformalMetric<DataVector, SolutionType::volume_dim>,
+           tmpl::size_t<SolutionType::volume_dim>, Frame::Inertial>>(
+          wrapped_Ccz4_vars)));
 
   // Weak test of operators == and !=
   CHECK(wrapped_solution == wrapped_solution);

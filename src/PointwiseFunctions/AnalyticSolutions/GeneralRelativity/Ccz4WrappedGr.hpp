@@ -72,6 +72,12 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
   using DerivSpatialMetric =
       ::Tags::deriv<gr::Tags::SpatialMetric<DataVector, volume_dim>,
                     tmpl::size_t<volume_dim>, Frame::Inertial>;
+  using DerivConformalMetric =
+      ::Tags::deriv<Ccz4::Tags::ConformalMetric<DataVector, volume_dim>,
+                    tmpl::size_t<volume_dim>, Frame::Inertial>;
+  using DerivConformalFactor =
+      ::Tags::deriv<Ccz4::Tags::ConformalFactor<DataVector>,
+                    tmpl::size_t<volume_dim>, Frame::Inertial>;
   using TimeDerivLapse = ::Tags::dt<gr::Tags::Lapse<DataVector>>;
   using TimeDerivShift = ::Tags::dt<gr::Tags::Shift<DataVector, volume_dim>>;
   using TimeDerivSpatialMetric =
@@ -81,15 +87,18 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
       typename SolutionType::template tags<DataVector>>;
 
   template <typename DataType>
-  using tags =
-      tmpl::push_back<typename SolutionType::template tags<DataType>,
-                      Ccz4::Tags::ConformalMetric<DataType, volume_dim>,
-                      Ccz4::Tags::ConformalFactor<DataType>,
-                      Ccz4::Tags::ATilde<DataType, volume_dim>,
-                      gr::Tags::TraceExtrinsicCurvature<DataType>,
-                      Ccz4::Tags::Theta<DataType>,
-                      Ccz4::Tags::GammaHat<DataType, volume_dim>,
-                      Ccz4::Tags::AuxiliaryShiftB<DataType, volume_dim>>;
+  using tags = tmpl::push_back<
+      typename SolutionType::template tags<DataType>,
+      Ccz4::Tags::ConformalMetric<DataType, volume_dim>,
+      Ccz4::Tags::ConformalFactor<DataType>,
+      Ccz4::Tags::ATilde<DataType, volume_dim>,
+      gr::Tags::TraceExtrinsicCurvature<DataType>, Ccz4::Tags::Theta<DataType>,
+      Ccz4::Tags::GammaHat<DataType, volume_dim>,
+      Ccz4::Tags::AuxiliaryShiftB<DataType, volume_dim>,
+      ::Tags::deriv<Ccz4::Tags::ConformalMetric<DataType, volume_dim>,
+                    tmpl::size_t<volume_dim>, Frame::Inertial>,
+      ::Tags::deriv<Ccz4::Tags::ConformalFactor<DataType>,
+                    tmpl::size_t<volume_dim>, Frame::Inertial>>;
 
   template <typename... Tags>
   tuples::TaggedTuple<Tags...> variables(
@@ -140,10 +149,11 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
 
  private:
   // Preprocessor logic to avoid declaring variables() functions for
-  // tags other than the three the wrapper adds (i.e., other than
+  // tags other than the nine the wrapper adds (i.e., other than
   // Ccz4::Tags::ConformalMetric, Ccz4::Tags::ConformalFactor,
   // Ccz4:Tags::ATilde, gr::Tags::TraceExtrinsicCurvature,
-  // Ccz4::Tags::Theta, Ccz4::Tags::GammaHat)
+  // Ccz4::Tags::Theta, Ccz4::Tags::GammaHat, Ccz4::Tags::AuxiliaryShiftB,
+  // DerivConformalMetric, and DerivConformalFactor)
   using TagShift = gr::Tags::Shift<DataVector, volume_dim>;
   using TagSpatialMetric = gr::Tags::SpatialMetric<DataVector, volume_dim>;
   using TagInverseSpatialMetric =
@@ -201,6 +211,22 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
       const tnsr::I<DataVector, volume_dim>& /*x*/,
       tmpl::list<Ccz4::Tags::AuxiliaryShiftB<DataVector, volume_dim>> /*meta*/,
       const IntermediateVars& intermediate_vars) const;
+  tuples::TaggedTuple<
+      ::Tags::deriv<Ccz4::Tags::ConformalMetric<DataVector, volume_dim>,
+                    tmpl::size_t<volume_dim>, Frame::Inertial>>
+  variables(
+      const tnsr::I<DataVector, volume_dim>& /*x*/,
+      tmpl::list<
+          ::Tags::deriv<Ccz4::Tags::ConformalMetric<DataVector, volume_dim>,
+                        tmpl::size_t<volume_dim>, Frame::Inertial>> /*meta*/,
+      const IntermediateVars& intermediate_vars) const;
+  tuples::TaggedTuple<::Tags::deriv<Ccz4::Tags::ConformalFactor<DataVector>,
+                                    tmpl::size_t<volume_dim>, Frame::Inertial>>
+  variables(const tnsr::I<DataVector, volume_dim>& /*x*/,
+            tmpl::list<::Tags::deriv<Ccz4::Tags::ConformalFactor<DataVector>,
+                                     tmpl::size_t<volume_dim>,
+                                     Frame::Inertial>> /*meta*/,
+            const IntermediateVars& intermediate_vars) const;
 
   tuples::TaggedTuple<Ccz4::Tags::ConformalMetric<DataVector, volume_dim>>
   variables(
@@ -244,6 +270,27 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
       const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
       tmpl::list<Ccz4::Tags::AuxiliaryShiftB<DataVector, volume_dim>> meta,
       const IntermediateVars& intermediate_vars) const {
+    return variables(x, meta, intermediate_vars);
+  }
+  tuples::TaggedTuple<
+      ::Tags::deriv<Ccz4::Tags::ConformalMetric<DataVector, volume_dim>,
+                    tmpl::size_t<volume_dim>, Frame::Inertial>>
+  variables(
+      const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+      tmpl::list<
+          ::Tags::deriv<Ccz4::Tags::ConformalMetric<DataVector, volume_dim>,
+                        tmpl::size_t<volume_dim>, Frame::Inertial>>
+          meta,
+      const IntermediateVars& intermediate_vars) const {
+    return variables(x, meta, intermediate_vars);
+  }
+  tuples::TaggedTuple<::Tags::deriv<Ccz4::Tags::ConformalFactor<DataVector>,
+                                    tmpl::size_t<volume_dim>, Frame::Inertial>>
+  variables(const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+            tmpl::list<::Tags::deriv<Ccz4::Tags::ConformalFactor<DataVector>,
+                                     tmpl::size_t<volume_dim>, Frame::Inertial>>
+                meta,
+            const IntermediateVars& intermediate_vars) const {
     return variables(x, meta, intermediate_vars);
   }
 };
