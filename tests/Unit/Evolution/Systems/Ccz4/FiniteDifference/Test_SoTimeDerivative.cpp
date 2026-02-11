@@ -793,7 +793,7 @@ void test_sommerfeld_bc(const bool evolve_lapse_and_shift) {
       std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>
       external_bcs_per_block(1);
   external_bcs_per_block[0][Direction<SpatialDim>::upper_zeta()] =
-      std::make_unique<Ccz4::BoundaryConditions::Sommerfeld>();
+      std::make_unique<Ccz4::BoundaryConditions::Sommerfeld>(2);
 
   // NOLINTNEXTLINE(misc-const-correctness)
   std::unordered_map<std::string,
