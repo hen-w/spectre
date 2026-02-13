@@ -5,6 +5,7 @@ spectre_target_sources(
   ${LIBRARY}
   PRIVATE
   BoundaryCondition.cpp
+  ConstraintsRadiationPreserving.cpp
   DirichletAnalytic.cpp
   Sommerfeld.cpp
   )
@@ -14,6 +15,7 @@ spectre_target_headers(
   INCLUDE_DIRECTORY ${CMAKE_SOURCE_DIR}/src
   HEADERS
   BoundaryCondition.hpp
+  ConstraintsRadiationPreserving.hpp
   DirichletAnalytic.hpp
   Sommerfeld.hpp
   Factory.hpp

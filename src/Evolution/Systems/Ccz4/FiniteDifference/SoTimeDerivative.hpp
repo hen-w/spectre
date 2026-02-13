@@ -26,7 +26,10 @@
 #include "Evolution/Systems/Ccz4/DerivLapse.hpp"
 #include "Evolution/Systems/Ccz4/DerivZ4Constraint.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/BoundaryConditionGhostData.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/Characteristics.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/ConstraintCharacteristics.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Derivatives.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/RadiationCharacteristics.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Ricci.hpp"
 #include "Evolution/Systems/Ccz4/RicciScalarPlusDivergenceZ4Constraint.hpp"
@@ -72,6 +75,11 @@ static void apply(
     const gsl::not_null<Scalar<DataVector>*> dt_theta,
     const gsl::not_null<tnsr::I<DataVector, Dim>*> dt_gamma_hat,
     const gsl::not_null<tnsr::I<DataVector, Dim>*> dt_b,
+    // first-order reduction variables evolution used in cpbc
+    const gsl::not_null<tnsr::ijj<DataVector, Dim>*> dt_d_conformal_spatial_metric,
+    const gsl::not_null<tnsr::i<DataVector, Dim>*> dt_d_conformal_factor,
+    const gsl::not_null<tnsr::i<DataVector, Dim>*> dt_d_lapse,
+    const gsl::not_null<tnsr::iJ<DataVector, Dim>*> dt_d_shift,
 
     // quantities we need for computing eq 4, 13-27
     const gsl::not_null<Scalar<DataVector>*> conformal_factor_squared,
@@ -528,7 +536,28 @@ static void apply(
     (*dt_b).get(2) = 0.0;
   }
 
-  // Note that, we do not need to evolve the auxiliary variables in SO-CCZ4.
+  // Time derivatives of the first-order reduction variables for cpbc.
+  // We will only use and change these when using cpbc.
+  ::tenex::evaluate<ti::k, ti::i, ti::j>(dt_d_conformal_spatial_metric,
+    -2.0 * lapse() * (d_a_tilde(ti::k, ti::i, ti::j) + a_tilde(ti::i, ti::j) * field_a(ti::k))
+    + conformal_spatial_metric(ti::l, ti::i) * field_b(ti::j, ti::L)
+        + conformal_spatial_metric(ti::l, ti::j) * field_b(ti::i, ti::L)
+    - 2.0 * one_third * (conformal_spatial_metric(ti::i, ti::j) * d_field_b(ti::k, ti::l, ti::L)
+        + field_b(ti::l, ti::L) * 2.0 * field_d(ti::k, ti::i, ti::j))
+    + shift(ti::L) * 2.0 * d_field_d(ti::k, ti::l, ti::i, ti::j)
+        + field_b(ti::k, ti::L) * 2.0 * field_d(ti::l, ti::i, ti::j));
+  ::tenex::evaluate<ti::k>(dt_d_conformal_factor,
+    one_third * conformal_factor() * lapse() * (d_trace_extrinsic_curvature(ti::k)
+        + trace_extrinsic_curvature() * field_p(ti::k)
+        + trace_extrinsic_curvature() * field_a(ti::k)));
+  ::tenex::evaluate<ti::k>(dt_d_lapse,
+    -2.0 * lapse() * (field_a(ti::k) * (*k_minus_k0_minus_2_theta_c)()
+        + d_k(ti::k) - 2.0 * d_theta(ti::k) * c)
+    + lapse() * (field_b(ti::k, ti::L) * field_a(ti::l)
+        + shift(ti::L) * (d_field_a(ti::k, ti::l) + field_a(ti::k) * field_a(ti::l))));
+  ::tenex::evaluate<ti::k, ti::I>(dt_d_shift,
+    f * d_b(ti::k, ti::I) + field_b(ti::k, ti::L) * field_b(ti::l, ti::I)
+        + shift(ti::L) * d_field_b(ti::k, ti::l, ti::I));
 }
 }  // namespace detail
 
@@ -598,40 +627,26 @@ struct SoTimeDerivative {
             *box),
         fd_order, subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian);
 
-    // calculate the four auxiliary fields in eq. 6
-    // auxiliary variables NOT evolved in SO-CCZ4
     const auto& d_lapse =
         get<::Tags::deriv<gr::Tags::Lapse<DataVector>, tmpl::size_t<Dim>,
                           Frame::Inertial>>(cell_centered_Ccz4_derivs);
-    const auto& lapse = get<gr::Tags::Lapse<DataVector>>(evolved_vars);
-    const auto field_a = ::tenex::evaluate<ti::i>(d_lapse(ti::i) / lapse());
-
-    const auto& field_b =
+    const auto& d_shift =
         get<::Tags::deriv<gr::Tags::Shift<DataVector, Dim>, tmpl::size_t<Dim>,
-                          Frame::Inertial>>(cell_centered_Ccz4_derivs);
-
+                        Frame::Inertial>>(cell_centered_Ccz4_derivs);
     const auto& d_spatial_conformal_metric =
         get<::Tags::deriv<::Ccz4::Tags::ConformalMetric<DataVector, Dim>,
                           tmpl::size_t<Dim>, Frame::Inertial>>(
             cell_centered_Ccz4_derivs);
-    tnsr::ijj<DataVector, Dim> field_d;
-    ::tenex::evaluate<ti::i, ti::j, ti::k>(
-        make_not_null(&field_d),
-        0.5 * d_spatial_conformal_metric(ti::i, ti::j, ti::k));
-
-    const auto& conformal_factor =
-        get<::Ccz4::Tags::ConformalFactor<DataVector>>(evolved_vars);
     const auto& d_conformal_factor =
         get<::Tags::deriv<::Ccz4::Tags::ConformalFactor<DataVector>,
                           tmpl::size_t<Dim>, Frame::Inertial>>(
             cell_centered_Ccz4_derivs);
-    const auto field_p = ::tenex::evaluate<ti::i>(d_conformal_factor(ti::i) /
-                                                  conformal_factor());
 
     // compute second derivatives of the evolved variables
-    Variables<db::wrap_tags_in<::Tags::second_deriv, gradients_tags,
-                               tmpl::size_t<Dim>, Frame::Inertial>>
-        cell_centered_Ccz4_second_derivs{num_pts};
+    using second_deriv_var_tag =
+        db::wrap_tags_in<::Tags::second_deriv, gradients_tags,
+                                        tmpl::size_t<Dim>, Frame::Inertial>
+    Variables<second_deriv_var_tag> cell_centered_Ccz4_second_derivs{num_pts};
 
     Ccz4::fd::second_spacetime_derivatives(
         make_not_null(&cell_centered_Ccz4_second_derivs), evolved_vars,
@@ -640,36 +655,180 @@ struct SoTimeDerivative {
         fd_order, subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
         cell_centered_logical_to_inertial_inv_hessian);
 
-    // compute spatial derivative of the four auxiliary fields
     const auto& d_d_lapse =
         get<::Tags::second_deriv<gr::Tags::Lapse<DataVector>, tmpl::size_t<Dim>,
                                  Frame::Inertial>>(
             cell_centered_Ccz4_second_derivs);
+    const auto& d_d_shift =
+        get<::Tags::second_deriv<gr::Tags::Shift<DataVector, Dim>,
+                                 tmpl::size_t<Dim>, Frame::Inertial>>(
+            cell_centered_Ccz4_second_derivs);
+    const auto& d_d_conformal_metric =
+        get<::Tags::second_deriv<::Ccz4::Tags::ConformalMetric<DataVector, Dim>,
+                                 tmpl::size_t<Dim>, Frame::Inertial>>(
+            cell_centered_Ccz4_second_derivs);
+    const auto& d_d_conformal_factor =
+        get<::Tags::second_deriv<::Ccz4::Tags::ConformalFactor<DataVector>,
+                                 tmpl::size_t<Dim>, Frame::Inertial>>(
+            cell_centered_Ccz4_second_derivs);
+
+    const auto& external_bcs =
+        db::get<domain::Tags::ExternalBoundaryConditions<Dim>>(*box).at(
+            element.id().block_id());
+
+    // Slice into the outermost layer of the evolved variables and their derivatives
+    Variables<Ccz4::fd::System::variables_tag_list> outermost_evolved_vars{num_face_pts};
+    Variables<deriv_var_tag> outermost_Ccz4_derivs{num_face_pts};
+    dt_variables_tag outermost_dt_vars{num_face_pts};
+
+    if (dynamic_cast<const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving*>(
+                 external_bcs.at(Direction<Dim>::upper_zeta()).get()) != nullptr) {
+        tmpl::for_each<Ccz4::fd::System::variables_tag_list>(
+            [&]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
+                const auto& var = get<Tag>(evolved_vars);
+                auto& outermost_var = get<Tag>(outermost_evolved_vars);
+                const auto& d_var =
+                    get<::Tags::deriv<Tag, tmpl::size_t<Dim>, Frame::Inertial>>(
+                        cell_centered_Ccz4_derivs);
+                auto& outermost_d_var =
+                    get<::Tags::deriv<Tag, tmpl::size_t<Dim>, Frame::Inertial>>(
+                        outermost_Ccz4_derivs);
+                auto& dt_var = get<::Tags::dt<Tag>>(*dt_vars_ptr);
+                auto& outermost_dt_var = get<::Tags::dt<Tag>>(outermost_dt_vars);
+
+                for (size_t tensor_index = 0; tensor_index < Tag::type::size();
+                    ++tensor_index) {
+                    make_const_view<DataVector>(
+                        make_not_null(&outermost_var[tensor_index]), var[tensor_index],
+                        (subcell_mesh.extents(2) - 1) * num_face_pts,
+                        num_face_pts);
+
+                    for (size_t i = 0; i < Dim; ++i) {
+                        make_const_view<DataVector>(
+                            make_not_null(&outermost_d_var[Dim * tensor_index + i]),
+                            d_var[Dim * tensor_index + i],
+                            (subcell_mesh.extents(2) - 1) * num_face_pts,
+                            num_face_pts);
+                    }
+
+                    outermost_dt_var[tensor_index].set_data_ref(
+                        dt_var[tensor_index].data() +
+                            (subcell_mesh.extents(2) - 1) * num_face_pts,
+                        num_face_pts);
+                }
+            });
+
+        // Replace first and second derivatives of conformal_metric, conformal_factor,
+        // lapse, and shift at the outermost interior points with the reduction fields
+        get<::Tags::deriv<::Ccz4::Tags::ConformalMetric<DataVector, Dim>,
+                          tmpl::size_t<Dim>, Frame::Inertial>>(outermost_Ccz4_derivs) =
+            get<::Tags::deriv<::Ccz4::Tags::ConformalMetric<DataVector, Dim>,
+                              tmpl::size_t<Dim>, Frame::Inertial>>(outermost_evolved_vars);
+        get<::Tags::deriv<::Ccz4::Tags::ConformalFactor<DataVector>,
+                          tmpl::size_t<Dim>, Frame::Inertial>>(outermost_Ccz4_derivs) =
+            get<::Tags::deriv<::Ccz4::Tags::ConformalFactor<DataVector>,
+                              tmpl::size_t<Dim>, Frame::Inertial>>(outermost_evolved_vars);
+        get<::Tags::deriv<gr::Tags::Lapse<DataVector>, tmpl::size_t<Dim>,
+                          Frame::Inertial>>(outermost_Ccz4_derivs) =
+            get<::Tags::deriv<gr::Tags::Lapse<DataVector>, tmpl::size_t<Dim>,
+                              Frame::Inertial>>(outermost_evolved_vars);
+        get<::Tags::deriv<gr::Tags::Shift<DataVector, Dim>, tmpl::size_t<Dim>,
+                          Frame::Inertial>>(outermost_Ccz4_derivs) =
+            get<::Tags::deriv<gr::Tags::Shift<DataVector, Dim>, tmpl::size_t<Dim>,
+                              Frame::Inertial>>(outermost_evolved_vars);
+
+        const auto& d_d_conformal_metric_reduction =
+            get<::Tags::deriv<::Tags::deriv<::Ccz4::Tags::ConformalMetric<DataVector, Dim>,
+                              tmpl::size_t<Dim>, Frame::Inertial>,
+                          tmpl::size_t<Dim>, Frame::Inertial>>(outermost_evolved_vars);
+        tnsr::iijj<Datavector, Dim> outermost_d_d_conformal_metric{};
+        for (size_t tensor_index = 0; tensor_index < outermost_d_d_conformal_metric.size(); ++tensor_index) {
+            outermost_d_d_conformal_metric[tensor_index].set_data_ref(
+                d_d_conformal_metric[tensor_index].data() +
+                    (subcell_mesh.extents(2) - 1) * num_face_pts,
+                num_face_pts);
+        }
+        ::tenex::evaluate<ti::i, ti::j, ti::k, ti::l>(
+            make_not_null(&outermost_d_d_conformal_metric),
+            0.5 * (d_d_conformal_metric_reduction(ti::i, ti::j, ti::k, ti::l)
+                + d_d_conformal_metric_reduction(ti::j, ti::i, ti::k, ti::l)));
+
+        const auto& d_d_conformal_factor_reduction =
+            get<::Tags::deriv<::Tags::deriv<::Ccz4::Tags::ConformalFactor<DataVector>,
+                              tmpl::size_t<Dim>, Frame::Inertial>,
+                          tmpl::size_t<Dim>, Frame::Inertial>>(outermost_evolved_vars);
+        tnsr::ij<DataVector, Dim> outermost_d_d_conformal_factor{};
+        for (size_t tensor_index = 0; tensor_index < outermost_d_d_conformal_factor.size(); ++tensor_index) {
+            outermost_d_d_conformal_factor[tensor_index].set_data_ref(
+                d_d_conformal_factor[tensor_index].data() +
+                    (subcell_mesh.extents(2) - 1) * num_face_pts,
+                num_face_pts);
+        }
+        ::tenex::evaluate<ti::i, ti::j>(
+            make_not_null(&outermost_d_d_conformal_factor),
+            0.5 * (d_d_conformal_factor_reduction(ti::i, ti::j) + d_d_conformal_factor_reduction(ti::j, ti::i)));
+        
+        const auto& d_d_lapse_reduction =
+            get<::Tags::deriv<::Tags::deriv<gr::Tags::Lapse<DataVector>,
+                              tmpl::size_t<Dim>, Frame::Inertial>,
+                          tmpl::size_t<Dim>, Frame::Inertial>>(outermost_evolved_vars);
+        tnsr::ii<DataVector, Dim> outermost_d_d_lapse{};
+        for (size_t tensor_index = 0; tensor_index < outermost_d_d_lapse.size(); ++tensor_index) {
+            outermost_d_d_lapse[tensor_index].set_data_ref(
+                d_d_lapse[tensor_index].data() +
+                    (subcell_mesh.extents(2) - 1) * num_face_pts,
+                num_face_pts);
+        }
+        ::tenex::evaluate<ti::i, ti::j>(
+            make_not_null(&outermost_d_d_lapse),
+            0.5 * (d_d_lapse_reduction(ti::i, ti::j) + d_d_lapse_reduction(ti::j, ti::i)));
+
+        const auto& d_d_shift_reduction =
+            get<::Tags::deriv<::Tags::deriv<gr::Tags::Shift<DataVector, Dim>,
+                              tmpl::size_t<Dim>, Frame::Inertial>,
+                          tmpl::size_t<Dim>, Frame::Inertial>>(outermost_evolved_vars);
+        tnsr::iiJ<DataVector, Dim> outermost_d_d_shift{};
+        for (size_t tensor_index = 0; tensor_index < outermost_d_d_shift.size(); ++tensor_index) {
+            outermost_d_d_shift[tensor_index].set_data_ref(
+                d_d_shift[tensor_index].data() +
+                    (subcell_mesh.extents(2) - 1) * num_face_pts,
+                num_face_pts);
+        }
+        ::tenex::evaluate<ti::i, ti::j, ti::I>(
+            make_not_null(&outermost_d_d_shift),
+            0.5 * (d_d_shift_reduction(ti::i, ti::j, ti::I) + d_d_shift_reduction(ti::j, ti::i, ti::I)));
+    }
+
+    // calculate the four auxiliary fields in eq. 6
+    // auxiliary variables NOT evolved in SO-CCZ4
+    const auto& lapse = get<gr::Tags::Lapse<DataVector>>(evolved_vars);
+    const auto field_a = ::tenex::evaluate<ti::i>(d_lapse(ti::i) / lapse());
+
+    const auto& field_b = d_shift;
+
+    tnsr::ijj<DataVector, Dim> field_d;
+    ::tenex::evaluate<ti::i, ti::j, ti::k>(
+        make_not_null(&field_d),
+        0.5 * d_spatial_conformal_metric(ti::i, ti::j, ti::k));
+
+    const auto& conformal_factor =
+        get<::Ccz4::Tags::ConformalFactor<DataVector>>(evolved_vars);
+    const auto field_p = ::tenex::evaluate<ti::i>(d_conformal_factor(ti::i) /
+                                                  conformal_factor());
+
+    // compute spatial derivative of the four auxiliary fields
     tnsr::ii<DataVector, Dim> d_field_a;
     ::tenex::evaluate<ti::i, ti::j>(
         make_not_null(&d_field_a),
         (d_d_lapse(ti::i, ti::j) - d_lapse(ti::i) * d_lapse(ti::j) / lapse()) /
             lapse());
 
-    const auto& d_field_b =
-        get<::Tags::second_deriv<gr::Tags::Shift<DataVector, Dim>,
-                                 tmpl::size_t<Dim>, Frame::Inertial>>(
-            cell_centered_Ccz4_second_derivs);
-
-    const auto& d_d_conformal_metric =
-        get<::Tags::second_deriv<::Ccz4::Tags::ConformalMetric<DataVector, Dim>,
-                                 tmpl::size_t<Dim>, Frame::Inertial>>(
-            cell_centered_Ccz4_second_derivs);
+    const auto& d_field_b = d_d_shift;
 
     tnsr::iijj<DataVector, Dim> d_field_d;
     ::tenex::evaluate<ti::i, ti::j, ti::k, ti::l>(
         make_not_null(&d_field_d),
         0.5 * d_d_conformal_metric(ti::i, ti::j, ti::k, ti::l));
-
-    const auto& d_d_conformal_factor =
-        get<::Tags::second_deriv<::Ccz4::Tags::ConformalFactor<DataVector>,
-                                 tmpl::size_t<Dim>, Frame::Inertial>>(
-            cell_centered_Ccz4_second_derivs);
 
     tnsr::ii<DataVector, Dim> d_field_p;
     ::tenex::evaluate<ti::i, ti::j>(
@@ -812,6 +971,18 @@ struct SoTimeDerivative {
                   &get<::Tags::dt<
                       ::Ccz4::Tags::AuxiliaryShiftB<DataVector, Dim>>>(
                       *dt_vars_ptr)),  // eq 4i
+              make_not_null(
+                  &get<::Tags::dt<::Tags::deriv<::Ccz4::ConformalMetric<DataVector, Dim>,
+                        tmpl::size_t<Dim>, Frame::Inertial>>>(*dt_vars_ptr)),
+              make_not_null(
+                  &get<::Tags::dt<::Tags::deriv<::Ccz4::Tags::ConformalFactor<DataVector>,
+                        tmpl::size_t<Dim>, Frame::Inertial>>>(*dt_vars_ptr)),
+              make_not_null(
+                  &get<::Tags::dt<::Tags::deriv<gr::Tags::Lapse<DataVector>,
+                        tmpl::size_t<Dim>, Frame::Inertial>>(*dt_vars_ptr)),
+              make_not_null(
+                  &get<::Tags::dt<::Tags::deriv<gr::Tags::Shift<DataVector, Dim>,
+                        tmpl::size_t<Dim>, Frame::Inertial>>(*dt_vars_ptr)),
 
               // quantities we need for computing eq 4, 13 - 27
               make_not_null(&conformal_factor_squared),
@@ -914,7 +1085,7 @@ struct SoTimeDerivative {
         },
         box);
 
-    // handling Sommerfeld BCs
+    // handling Sommerfeld and ConstraintRadiationPreserving BCs
     // WARNING: We assume a complete sphere domain (all wedges)
     if constexpr (not subcell_enabled_at_external_boundary) {
       return;
@@ -923,100 +1094,440 @@ struct SoTimeDerivative {
       return;
     }
 
-    const auto& external_bcs =
-        db::get<domain::Tags::ExternalBoundaryConditions<Dim>>(*box).at(
-            element.id().block_id());
     for (const auto& direction : element.external_boundaries()) {
-      ASSERT(direction == Direction<Dim>::upper_zeta(),
-             "external bc direction is not upper_zeta but " << direction);
       // this is potentially expensive; we should add a boolean flag for
       // time-dependent bc. This should be done in a future PR.
-      if (dynamic_cast<const Ccz4::BoundaryConditions::Sommerfeld*>(
-              external_bcs.at(direction).get()) == nullptr) {
+      if ((dynamic_cast<const Ccz4::BoundaryConditions::Sommerfeld*>(
+              external_bcs.at(direction).get()) == nullptr) and
+          (dynamic_cast<const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving*>(
+              external_bcs.at(direction).get()) == nullptr)) {
         return;  // no need to check more, as we do not allow mixed BCs
+      }
+      if (direction != Direction<Dim>::upper_zeta()) {
+        ERROR("Sommerfeld and ConstraintRadiationPreserving BCs are only implemented assuming"
+              " the outer boundary is in the upper zeta direction, but the current "
+              "external boundary is in direction " << direction);
       }
     }
 
-    db::mutate<dt_variables_tag>(
-        [&](const auto dt_vars_ptr, const auto& inertial_coords,
-            const auto& evolved_var) {
-          const size_t num_face_pts =
-              subcell_mesh.extents(0) * subcell_mesh.extents(1);
+    // Handling Sommerfeld BCs
+    if (dynamic_cast<const Ccz4::BoundaryConditions::Sommerfeld*>(
+            external_bcs.at(Direction<Dim>::upper_zeta()).get()) != nullptr) {
+        db::mutate<dt_variables_tag>(
+            [&](const auto dt_vars_ptr, const auto& inertial_coords,
+                const auto& evolved_vars) {
+            const size_t num_face_pts =
+                subcell_mesh.extents(0) * subcell_mesh.extents(1);
 
-          ASSERT(inertial_coords.get(0).size() ==
-                     subcell_mesh.number_of_grid_points() and
-                 inertial_coords.get(1).size() ==
-                     subcell_mesh.number_of_grid_points() and
-                 inertial_coords.get(2).size() ==
-                     subcell_mesh.number_of_grid_points(),
-                 "Inertial coords size ["
-                     << inertial_coords.get(0).size()
-                     << ", " << inertial_coords.get(1).size()
-                     << ", " << inertial_coords.get(2).size()
-                     << "] does not match number of subcell points "
-                     << subcell_mesh.number_of_grid_points());
+            ASSERT(inertial_coords.get(0).size() ==
+                        subcell_mesh.number_of_grid_points() and
+                    inertial_coords.get(1).size() ==
+                        subcell_mesh.number_of_grid_points() and
+                    inertial_coords.get(2).size() ==
+                        subcell_mesh.number_of_grid_points(),
+                    "Inertial coords size ["
+                        << inertial_coords.get(0).size()
+                        << ", " << inertial_coords.get(1).size()
+                        << ", " << inertial_coords.get(2).size()
+                        << "] does not match number of subcell points "
+                        << subcell_mesh.number_of_grid_points());
 
-          std::array<DataVector, Dim> outermost_inertial_coords{};
-          for (size_t i = 0; i < Dim; ++i) {
-            make_const_view<DataVector>(
-                make_not_null(&outermost_inertial_coords.at(i)),
-                inertial_coords.get(i),
-                (subcell_mesh.extents(2) - 1) * num_face_pts, num_face_pts);
-          }
-          const DataVector outermost_radial_coords =
-              sqrt(square(outermost_inertial_coords[0]) +
-                   square(outermost_inertial_coords[1]) +
-                   square(outermost_inertial_coords[2]));
+            std::array<DataVector, Dim> outermost_inertial_coords{};
+            for (size_t i = 0; i < Dim; ++i) {
+                make_const_view<DataVector>(
+                    make_not_null(&outermost_inertial_coords.at(i)),
+                    inertial_coords.get(i),
+                    (subcell_mesh.extents(2) - 1) * num_face_pts, num_face_pts);
+            }
+            const DataVector outermost_radial_coords =
+                sqrt(square(outermost_inertial_coords[0]) +
+                    square(outermost_inertial_coords[1]) +
+                    square(outermost_inertial_coords[2]));
 
-          // modify the time derivatives at the outermost interior points
-          // per Sommerfeld BCs
-          // Alternative: maybe modify the time derivatives at the outermost
-          // n pts where n is the ghost zone size?
-          tmpl::for_each<Ccz4::fd::System::variables_tag_list>(
-              [&]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
-                const auto& var = get<Tag>(evolved_var);
-                const auto& d_var =
-                    get<::Tags::deriv<Tag, tmpl::size_t<Dim>, Frame::Inertial>>(
-                        cell_centered_Ccz4_derivs);
-                auto& dt_var = get<::Tags::dt<Tag>>(*dt_vars_ptr);
+            // modify the time derivatives at the outermost interior points
+            // per Sommerfeld BCs
+            // Alternative: maybe modify the time derivatives at the outermost
+            // n pts where n is the ghost zone size?
+            tmpl::for_each<Ccz4::fd::System::variables_tag_list>(
+                [&]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
+                    const auto& var = get<Tag>(evolved_vars);
+                    const auto& d_var =
+                        get<::Tags::deriv<Tag, tmpl::size_t<Dim>, Frame::Inertial>>(
+                            cell_centered_Ccz4_derivs);
+                    auto& dt_var = get<::Tags::dt<Tag>>(*dt_vars_ptr);
 
-                for (size_t tensor_index = 0; tensor_index < Tag::type::size();
-                     ++tensor_index) {
-                  DataVector outermost_var{};
-                  make_const_view<DataVector>(
-                      make_not_null(&outermost_var), var[tensor_index],
-                      (subcell_mesh.extents(2) - 1) * num_face_pts,
-                      num_face_pts);
+                    for (size_t tensor_index = 0; tensor_index < Tag::type::size();
+                        ++tensor_index) {
+                        DataVector outermost_var{};
+                        make_const_view<DataVector>(
+                            make_not_null(&outermost_var), var[tensor_index],
+                            (subcell_mesh.extents(2) - 1) * num_face_pts,
+                            num_face_pts);
 
-                  std::array<DataVector, Dim> outermost_d_var{};
-                  for (size_t i = 0; i < Dim; ++i) {
+                        std::array<DataVector, Dim> outermost_d_var{};
+                        for (size_t i = 0; i < Dim; ++i) {
+                            make_const_view<DataVector>(
+                                make_not_null(&outermost_d_var.at(i)),
+                                d_var[Dim * tensor_index + i],
+                                (subcell_mesh.extents(2) - 1) * num_face_pts,
+                                num_face_pts);
+                        }
+
+                        const DataVector outermost_dr_var =
+                            (outermost_inertial_coords[0] * outermost_d_var[0] +
+                            outermost_inertial_coords[1] * outermost_d_var[1] +
+                            outermost_inertial_coords[2] * outermost_d_var[2]) /
+                            outermost_radial_coords;
+                        DataVector outermost_dt_var{};
+                        outermost_dt_var.set_data_ref(
+                            dt_var[tensor_index].data() +
+                                (subcell_mesh.extents(2) - 1) * num_face_pts,
+                            num_face_pts);
+                        outermost_dt_var =
+                            outermost_var * (-1.0 / outermost_radial_coords) -
+                            outermost_dr_var;
+                    }
+                });
+            },
+            box,
+            db::get<evolution::dg::subcell::Tags::Coordinates<
+                Dim, Frame::Inertial>>(*box),
+            db::get<evolved_vars_tag>(*box)
+        );
+    }
+
+    // Handling ConstraintRadiationPreserving BCs
+    else if (dynamic_cast<const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving*>(
+                 external_bcs.at(Direction<Dim>::upper_zeta()).get()) != nullptr) {
+        db::mutate<dt_variables_tag>(
+            [&](const auto dt_vars_ptr, const auto& inertial_coords,
+                const auto& evolved_vars){
+                // Compute unit_normal_vector and unit_normal_one_form at the outermost layer
+                const auto& outermost_conformal_metric =
+                    get<::Ccz4::Tags::ConformalMetric<DataVector, Dim>>(outermost_evolved_vars);
+                const auto& outermost_conformal_factor =
+                    get<::Ccz4::Tags::ConformalFactor<DataVector>>(outermost_evolved_vars);
+                tnsr::ii<DataVector, Dim> outermost_spatial_metric;
+                ::tenex::evaluate<ti::i, ti::j>(
+                    make_not_null(&outermost_spatial_metric),
+                    outermost_conformal_metric(ti::i, ti::j)
+                        / outermost_conformal_factor() / outermost_conformal_factor());
+                tnsr::I<DataVector, Dim> outermost_inertial_coords;
+                for (size_t i = 0; i < Dim; ++i) {
                     make_const_view<DataVector>(
-                        make_not_null(&outermost_d_var.at(i)),
-                        d_var[Dim * tensor_index + i],
+                        make_not_null(&outermost_inertial_coords.get(i)),
+                        inertial_coords.get(i),
                         (subcell_mesh.extents(2) - 1) * num_face_pts,
                         num_face_pts);
-                  }
-
-                  const DataVector outermost_dr_var =
-                      (outermost_inertial_coords[0] * outermost_d_var[0] +
-                       outermost_inertial_coords[1] * outermost_d_var[1] +
-                       outermost_inertial_coords[2] * outermost_d_var[2]) /
-                      outermost_radial_coords;
-                  DataVector outermost_dt_var{};
-                  outermost_dt_var.set_data_ref(
-                      dt_var[tensor_index].data() +
-                          (subcell_mesh.extents(2) - 1) * num_face_pts,
-                      num_face_pts);
-                  outermost_dt_var =
-                      outermost_var * (-1.0 / outermost_radial_coords) -
-                      outermost_dr_var;
                 }
-              });
-        },
-        box,
-        db::get<evolution::dg::subcell::Tags::Coordinates<
-            Dim, Frame::Inertial>>(*box),
-        db::get<evolved_vars_tag>(*box));
+                tnsr::I<DataVector, Dim> unit_normal_vector = outermost_inertial_coords;
+                ::tenex::update<ti::I>(
+                    make_not_null(&unit_normal_vector),
+                    unit_normal_vector(ti::I)
+                        / sqrt(outermost_spatial_metric(ti::k, ti::l)
+                            * unit_normal_vector(ti::K) * unit_normal_vector(ti::L)));
+                const tnsr::i<DataVector, Dim> unit_normal_one_form =
+                    raise_or_lower_index(unit_normal_vector, outermost_spatial_metric);
+                
+                // Compute the unmodified evolution of characteristic fields
+                const auto& outermost_lapse = get<gr::Tags::Lapse<DataVector>>(outermost_evolved_vars);
+                const auto& outermost_shift = get<gr::Tags::Shift<DataVector, Dim>>(outermost_evolved_vars);
+                const auto& outermost_dt_a_tilde =
+                    get<::Tags::dt<::Ccz4::Tags::ATilde<DataVector, Dim>>>(outermost_dt_vars);
+                const auto& outermost_dt_trace_extrinsic_curvature =
+                    get<::Tags::dt<gr::Tags::TraceExtrinsicCurvature<DataVector>>(outermost_dt_vars);
+                const auto& outermost_dt_theta =
+                    get<::Tags::dt<::Ccz4::Tags::Theta<DataVector>>>(outermost_dt_vars);
+                const auto& outermost_dt_gamma_hat =
+                    get<::Tags::dt<::Ccz4::Tags::GammaHat<DataVector, Dim>>>(outermost_dt_vars);
+                const auto& outermost_dt_auxiliary_shift_b =
+                    get<::Tags::dt<::Ccz4::Tags::AuxiliaryShiftB<DataVector, Dim>>>(outermost_dt_vars);
+                const auto& outermost_dt_d_conformal_metric =
+                    get<::Tags::dt<::Tags::deriv<::Ccz4::Tags::ConformalMetric<DataVector, Dim>,
+                        tmpl::size_t<Dim>, Frame::Inertial>>>(outermost_dt_vars);
+                const auto& outermost_dt_d_conformal_factor =
+                    get<::Tags::dt<::Tags::deriv<::Ccz4::Tags::ConformalFactor<DataVector>,
+                        tmpl::size_t<Dim>, Frame::Inertial>>>(outermost_dt_vars);
+                const auto& outermost_dt_d_lapse =
+                    get<::Tags::dt<::Tags::deriv<gr::Tags::Lapse<DataVector>,
+                        tmpl::size_t<Dim>, Frame::Inertial>>>(outermost_dt_vars);
+                const auto& outermost_dt_d_shift =
+                    get<::Tags::dt<::Tags::deriv<gr::Tags::Shift<DataVector, Dim>,
+                        tmpl::size_t<Dim>, Frame::Inertial>>>(outermost_dt_vars);
+                auto dt_char_fields =
+                    characteristic_fields(unit_normal_one_form, outermost_conformal_metric,
+                                          outermost_conformal_factor, outermost_lapse, outermost_shift,
+                                          outermost_dt_trace_extrinsic_curvature, outermost_dt_a_tilde,
+                                          outermost_dt_theta, outermost_dt_gamma_hat,
+                                          outermost_dt_auxiliary_shift_b, outermost_dt_d_conformal_metric,
+                                          outermost_dt_d_conformal_factor, outermost_dt_d_lapse,
+                                          outermost_dt_d_shift, f);
+
+                // Compute characteristic speeds
+                const auto char_speeds =
+                    characteristic_speeds(outermost_lapse, outermost_shift, outermost_conformal_factor,
+                                          f, unit_normal_one_form);
+                // Compute characteristic fields
+                const auto& outermost_trace_extrinsic_curvature =
+                    get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(outermost_evolved_vars);
+                const auto& outermost_a_tilde =
+                    get<::Ccz4::Tags::ATilde<DataVector, Dim>>(outermost_evolved_vars);
+                const auto& outermost_theta =
+                    get<::Ccz4::Tags::Theta<DataVector>>(outermost_evolved_vars);
+                const auto& outermost_gamma_hat =
+                    get<::Ccz4::Tags::GammaHat<DataVector, Dim>>(outermost_evolved_vars);
+                const auto& outermost_auxiliary_shift_b =
+                    get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, Dim>>(outermost_evolved_vars);
+                // Note that we should be using the interior solution to compute characteristic fields
+                const auto& outermost_d_conformal_metric =
+                    get<::Tags::deriv<::Ccz4::Tags::ConformalMetric<DataVector, Dim>,
+                        tmpl::size_t<Dim>, Frame::Inertial>>(outermost_Ccz4_derivs);
+                const auto& outermost_d_conformal_factor =
+                    get<::Tags::deriv<::Ccz4::Tags::ConformalFactor<DataVector>,
+                        tmpl::size_t<Dim>, Frame::Inertial>>(outermost_Ccz4_derivs);
+                const auto& outermost_d_lapse =
+                    get<::Tags::deriv<gr::Tags::Lapse<DataVector>,
+                        tmpl::size_t<Dim>, Frame::Inertial>>(outermost_Ccz4_derivs);
+                const auto& outermost_d_shift =
+                    get<::Tags::deriv<gr::Tags::Shift<DataVector, Dim>,
+                        tmpl::size_t<Dim>, Frame::Inertial>>(outermost_Ccz4_derivs);
+                const auto char_fields =
+                    characteristic_fields(unit_normal_one_form, outermost_conformal_metric,
+                                          outermost_conformal_factor, outermost_lapse, outermost_shift,
+                                          outermost_trace_extrinsic_curvature, outermost_a_tilde, outermost_theta,
+                                          outermost_gamma_hat, outermost_auxiliary_shift_b,
+                                          outermost_d_conformal_metric, outermost_d_conformal_factor,
+                                          outermost_d_lapse, outermost_d_shift, f);
+
+                // Loop over outer boundary points, check characteristic speeds are valid,
+                // and modify the evolution of approximately zero speed modes
+                for (size_t i = 0; i < num_face_pts; ++i) {
+                    // We require asymptotically Minkowsku coordinates
+                    if (char_speeds[0][i] < 0.0 or char_speeds[1][i] >= 0.0 or char_speeds[5][i] < 0.0
+                        or char_speeds[6][i] >= 0.0 or char_speeds[12][i] < 0.0 or char_speeds[13][i] >= 0.0
+                        or char_speeds[14][i] < 0.0 or char_speeds[15][i] >= 0.0) {
+                        ERROR("ConstraintRadiationPreserving BCs require asymptotically Minkowskian"
+                              " coordinates but the characteristic speeds at a outer boundary point"
+                              " are char_speeds[0] = " << char_speeds[0][i]
+                              << ", char_speeds[1] = " << char_speeds[1][i]
+                              << ", char_speeds[5] = " << char_speeds[5][i]
+                              << ", char_speeds[6] = " << char_speeds[6][i]
+                              << ", char_speeds[12] = " << char_speeds[12][i]
+                              << ", char_speeds[13] = " << char_speeds[13][i]
+                              << ", char_speeds[14] = " << char_speeds[14][i]
+                              << ", char_speeds[15] = " << char_speeds[15][i]);
+                    }
+                    // Modify the evolution of approximately zero speed modes
+                    if (char_speeds[2][i] < 0.0) {
+                        auto& dt_u_vector1_zero =
+                            get<Tags::UVector1Zero<DataVector, Dim, Frame::Inertial>>(dt_char_fields);
+                        for (size_t j = 0; j < Dim; ++j) {
+                            (dt_u_vector1_zero.get(j))[i] = 0.0;
+                        }
+                    }
+                    if (char_speeds[7][i] < 0.0) {
+                        auto& dt_u_scalar1_zero =
+                            get<Tags::UScalar1Zero<DataVector>>(dt_char_fields);
+                        get(dt_u_scalar1_zero)[i] = 0.0;
+                    }
+                }
+
+                // Set the evolution of all incoming modes except UTensorMius, UVector2Minus,
+                // and UScalar2Minus to zero, which are reserved to impose constraint radiation
+                // preserving BCs.
+                auto& dt_u_vector3_minus =
+                    get<Tags::UVector3Minus<DataVector, Dim, Frame::Inertial>>(dt_char_fields);
+                for (size_t i = 0; i < Dim; ++i) {
+                    dt_u_vector3_minus.get(i) = DataVector(num_face_pts, 0.0);
+                }
+                auto& dt_u_scalar3_minus =
+                    get<Tags::UScalar3Minus<DataVector>>(dt_char_fields);
+                get(dt_u_scalar3_minus) = DataVector(num_face_pts, 0.0);
+                auto& dt_u_scalar4_minus =
+                    get<Tags::UScalar4Minus<DataVector>>(dt_char_fields);
+                get(dt_u_scalar4_minus) = DataVector(num_face_pts, 0.0);
+                auto& dt_u_scalar5_minus =
+                    get<Tags::UScalar5Minus<DataVector>>(dt_char_fields);
+                get(dt_u_scalar5_minus) = DataVector(num_face_pts, 0.0);
+
+                // Compute the constraint characteristics
+                const auto& u_vector2_plus =
+                    get<Tags::UVector2Plus<DataVector, Dim, Frame::Inertial>>(char_fields);
+                const auto& u_vector2_minus =
+                    get<Tags::UVector2Minus<DataVector, Dim, Frame::Inertial>>(char_fields);
+                const auto& u_scalar2_plus =
+                    get<Tags::UScalar2Plus<DataVector>>(char_fields);
+                const auto& u_scalar2_minus =
+                    get<Tags::UScalar2Minus<DataVector>>(char_fields);
+                const auto& u_scalar3_plus =
+                    get<Tags::UScalar3Plus<DataVector>>(char_fields);
+                const auto& u_scalar3_minus =
+                    get<Tags::UScalar3Minus<DataVector>>(char_fields);
+                const auto constraint_char_fields =
+                    constraint_characteristic_fields(
+                        outermost_conformal_factor, outermost_conformal_metric,
+                        outermost_d_conformal_metric, u_vector2_plus, u_vector2_minus,
+                        u_scalar2_plus, u_scalar2_minus, u_scalar3_plus, u_scalar3_minus,
+                        unit_normal_one_form);
+                const auto& c_scalar_minus =
+                    get<Tags::CScalarMinus<DataVector>>(constraint_char_fields);
+                const auto& c_vector_zero =
+                    get<Tags::CVectorZero<DataVector, Dim, Frame::Inertial>>(constraint_char_fields);
+                auto& dt_u_vector2_minus =
+                    get<Tags::UVector2Minus<DataVector, Dim, Frame::Inertial>>(dt_char_fields);
+
+                // Compute the radial grid spacing to derive the penalty strength
+                // for UVector2Minus and UScalar2Minus.
+                tnsr::I<DataVector, Dim> second_outermost_inertial_coords;
+                for (size_t i = 0; i < Dim; ++i) {
+                    make_const_view<DataVector>(
+                        make_not_null(&second_outermost_inertial_coords.get(i)),
+                        inertial_coords.get(i),
+                        (subcell_mesh.extents(2) - 2) * num_face_pts,
+                        num_face_pts);
+                }
+                Scalar<DataVector> outermost_radial_grid_spacing;
+                get(outermost_radial_grid_spacing) =
+                    sqrt(square(outermost_inertial_coords.get(0))
+                            + square(outermost_inertial_coords.get(1))
+                            + square(outermost_inertial_coords.get(2))) -
+                    sqrt(square(second_outermost_inertial_coords.get(0))
+                            + square(second_outermost_inertial_coords.get(1))
+                            + square(second_outermost_inertial_coords.get(2)));
+                Scalar<DataVector> penalty_strength;
+                get(penalty_strength) = abs(char_speeds[5]) / get(outermost_radial_grid_spacing);
+
+                // Modify the evolution of UVector2Minus and UScalar2Minus to
+                // impose constraint preserving BCs. We use the fact below that CScalarMinus
+                // has speed -\alpha-\beta^n and CVectorZero has speed -\beta^n.
+                auto& dt_u_scalar_2_minus =
+                    get<Tags::UScalar2Minus<DataVector>>(dt_char_fields);
+                ::tenex::evaluate(
+                    make_not_null(&dt_u_scalar2_minus),
+                    -2.0 * penalty_strength() * outermost_conformal_factor() * outermost_conformal_factor()
+                        * c_scalar_minus());
+                auto& dt_u_vector2_minus =
+                    get<Tags::UVector2Minus<DataVector, Dim, Frame::Inertial>>(dt_char_fields);
+                ::tenex::evaluate<ti::i>(
+                    make_not_null(&dt_u_vector2_minus),
+                    -4.0 * penalty_strength() / (outermost_conformal_factor() * outermost_conformal_factor())
+                        * c_vector_zero(ti::i));
+                for (size_t i = 0; i < num_face_pts; ++i) {
+                    if (char_speeds[3][i] >= 0.0) {
+                        // c_vector_zero are outgoing at these points; do not add penalty
+                        // but simply set dt_u_vector2_minus to zero
+                        for (size_t j = 0; j < Dim; ++j) {
+                            (dt_u_vector2_minus.get(j))[i] = 0.0;
+                        }
+                    }
+                }
+
+                // Modify the evolution of UTensorMinus to impose radiation preserving BCs.
+                // We use the fact below that CTensorMinus has speed -\alpha-\beta^n
+                Scalar<DataVector> outermost_conformal_factor_squared;
+                make_const_view<DataVector>(
+                    make_not_null(&get(outermost_conformal_factor_squared)),
+                    get(conformal_factor_squared), (subcell_mesh.extents(2) - 1) * num_face_pts,
+                    num_face_pts);
+                tnsr::II<DataVector, Dim> outermost_inverse_spatial_metric;
+                for (size_t tensor_index = 0; tensor_index < outermost_conformal_metric.size(); ++tensor_index) {
+                    make_const_view<DataVector>(
+                        make_not_null(&outermost_inverse_spatial_metric[tensor_index]),
+                        inv_spatial_metric[tensor_index],
+                        (subcell_mesh.extents(2) - 1) * num_face_pts,
+                        num_face_pts);
+                }
+                tnsr::ii<DataVector, Dim> outermost_spatial_ricci;
+                for (size_t tensor_index = 0; tensor_index < outermost_spatial_ricci.size(); ++tensor_index) {
+                    make_const_view<DataVector>(
+                        make_not_null(&outermost_spatial_ricci[tensor_index]),
+                        spatial_ricci_tensor[tensor_index],
+                        (subcell_mesh.extents(2) - 1) * num_face_pts,
+                        num_face_pts);
+                }
+                tnsr::Ijj outermost_christoffel;
+                for (size_t tensor_index = 0; tensor_index < outermost_christoffel.size(); ++tensor_index) {
+                    make_const_view<DataVector>(
+                        make_not_null(&outermost_christoffel[tensor_index]),
+                        christoffel_second_kind[tensor_index],
+                        (subcell_mesh.extents(2) - 1) * num_face_pts,
+                        num_face_pts);
+                }
+                const auto& outermost_d_trace_extrinsic_curvature =
+                    get<::Tags::deriv<gr::Tags::TraceExtrinsicCurvature<DataVector>,
+                        tmpl::size_t<Dim>, Frame::Inertial>>(outermost_Ccz4_derivs);
+                const auto& outermost_d_a_tilde =
+                    get<::Tags::deriv<::Ccz4::Tags::ATilde<DataVector, Dim>,
+                        tmpl::size_t<Dim>, Frame::Inertial>>(outermost_Ccz4_derivs);
+                const auto radiation_char_fields =
+                    radiation_characteristic_fields(
+                        outermost_conformal_factor, outermost_conformal_factor_squared,
+                        outermost_conformal_metric, outermost_spatial_metric, outermost_inverse_spatial_metric,
+                        outermost_trace_extrinsic_curvature, outermost_a_tilde,
+                        outermost_d_conformal_factor, outermost_d_trace_extrinsic_curvature,
+                        outermost_d_conformal_metric, outermost_d_a_tilde, outermost_spatial_ricci,
+                        outermost_christoffel, unit_normal_one_form);
+                const auto& c_tensor_minus =
+                    get<Tags::CTensorMinus<DataVector, Dim, Frame::Inertial>>(radiation_char_fields);
+                auto& dt_u_tensor_minus =
+                    get<Tags::UTensorMinus<DataVector, Dim, Frame::Inertial>>(dt_char_fields);
+                ::tenex::update<ti::i, ti::j>(
+                    make_not_null(&dt_u_tensor_minus),
+                    dt_u_tensor_minus(ti::i, ti::j)
+                    - (outermost_lapse() + outermost_shift(ti::K) * unit_normal_one_form(ti::k))
+                        * outermost_conformal_factor_squared() * c_tensor_minus(ti::i, ti::j));
+                
+                // Finally, transform the modified evolution of characteristic fields
+                // back to the evolution of (normal derivatives) of evolved fields.
+                // Since we replaced d_conformal_metric, d_conformal_factor,
+                // d_lapse, and d_shift at the outermost interior points before,
+                // the evolutions of conformal_metric, conformal_factor,
+                // lapse, and shift are already correct.
+                /* Probably should write a separate functions for dt of characteristic fields and
+                 evolved fields as reusing tags is prone to mistake */
+                const auto modified_dt_evolved_vars =
+                    evolved_space_from_characteristic_fields(
+                        get<Tags::UTensorPlus<DataVector, Dim, Frame::Inertial>>(dt_char_fields),
+                        get<Tags::UTensorMinus<DataVector, Dim, Frame::Inertial>>(dt_char_fields),
+                        get<Tags::UVector1Zero<DataVector, Dim, Frame::Inertial>>(dt_char_fields),
+                        get<Tags::UVector2Plus<DataVector, Dim, Frame::Inertial>>(dt_char_fields),
+                        get<Tags::UVector2Minus<DataVector, Dim, Frame::Inertial>>(dt_char_fields),
+                        get<Tags::UVector3Plus<DataVector, Dim, Frame::Inertial>>(dt_char_fields),
+                        get<Tags::UVector3Minus<DataVector, Dim, Frame::Inertial>>(dt_char_fields),
+                        get<Tags::UScalar1Zero<DataVector>>(dt_char_fields),
+                        get<Tags::UScalar2Plus<DataVector>>(dt_char_fields),
+                        get<Tags::UScalar2Minus<DataVector>>(dt_char_fields),
+                        get<Tags::UScalar3Plus<DataVector>>(dt_char_fields),
+                        get<Tags::UScalar3Minus<DataVector>>(dt_char_fields),
+                        get<Tags::UScalar4Plus<DataVector>>(dt_char_fields),
+                        get<Tags::UScalar4Minus<DataVector>>(dt_char_fields),
+                        get<Tags::UScalar5Plus<DataVector>>(dt_char_fields),
+                        get<Tags::UScalar5Minus<DataVector>>(dt_char_fields),
+                        unit_normal_one_form, outermost_conformal_metric, outermost_conformal_factor,
+                        outermost_lapse, outermost_shift, f);
+                get<Tags::dt<Ccz4::Tags::ATilde<DataVector, Dim>>>(outermost_dt_vars) =
+                    get<::Ccz4::Tags::ATilde<DataVector, Dim>>(modified_dt_evolved_vars);
+                get<Tags::dt<gr::Tags::TraceExtrinsicCurvature<DataVector>>(outermost_dt_vars) =
+                    get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(modified_dt_evolved_vars);
+                get<Tags::dt<::Ccz4::Tags::Theta<DataVector>>>(outermost_dt_vars) =
+                    get<::Ccz4::Tags::Theta<DataVector>>(modified_dt_evolved_vars);
+                get<Tags::dt<::Ccz4::Tags::GammaHat<DataVector, Dim>>>(outermost_dt_vars) =
+                    get<::Ccz4::Tags::GammaHat<DataVector, Dim>>(modified_dt_evolved_vars);
+                get<Tags::dt<::Ccz4::Tags::AuxiliaryShiftB<DataVector, Dim>>>(outermost_dt_vars) =
+                    get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, Dim>>(modified_dt_evolved_vars);
+                const auto& modified_dt_dn_conformal_metric =
+                    get<Tags::DnConformalMetric<DataVector, Dim, Frame::Inertial>>(modified_dt_evolved_vars);
+                const auto& modified_dt_dn_conformal_factor =
+                    get<Tags::DnConformalFactor<DataVector, Dim, Frame::Inertial>>(modified_dt_evolved_vars);
+                const auto& modified_dt_dn_lapse =
+                    get<Tags::DnLapse<DataVector, Dim, Frame::Inertial>>(modified_dt_evolved_vars);
+                const auto& modified_dt_dn_shift =
+                    get<Tags::DnShift<DataVector, Dim, Frame::Inertial>>(modified_dt_evolved_vars);
+                
+            },
+            box,
+        )
+    }
   }
 };
 }  // namespace Ccz4::fd

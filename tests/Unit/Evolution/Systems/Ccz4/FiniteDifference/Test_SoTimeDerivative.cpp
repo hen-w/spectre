@@ -26,6 +26,7 @@
 #include "Evolution/DgSubcell/GhostData.hpp"
 #include "Evolution/Systems/Ccz4/ATilde.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
+#include "Evolution/Systems/Ccz4/BoundaryConditions/ConstraintsRadiationPreserving.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/DirichletAnalytic.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Sommerfeld.hpp"
@@ -704,7 +705,10 @@ void test_gauge_plane_wave(
   CHECK_ITERABLE_CUSTOM_APPROX(dt_b_actual, dt_b_expected, custom_approx);
 }
 
-void test_sommerfeld_bc(const bool evolve_lapse_and_shift) {
+void test_sommerfeld_and_crpbc(
+    const bool evolve_lapse_and_shift,
+    std::unique_ptr<Ccz4::BoundaryConditions::BoundaryCondition>
+        boundary_condition) {
   const size_t SpatialDim = 3;
   using FrameType = Frame::Inertial;
   const size_t points_per_dimension = 5;
@@ -793,7 +797,7 @@ void test_sommerfeld_bc(const bool evolve_lapse_and_shift) {
       std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>
       external_bcs_per_block(1);
   external_bcs_per_block[0][Direction<SpatialDim>::upper_zeta()] =
-      std::make_unique<Ccz4::BoundaryConditions::Sommerfeld>(2);
+      std::move(boundary_condition);
 
   // NOLINTNEXTLINE(misc-const-correctness)
   std::unordered_map<std::string,
@@ -1167,8 +1171,21 @@ void test() {
   test_dirichlet_analytic_bc(true);
   test_dirichlet_analytic_bc(false);
   // Run Sommerfeld BC test
-  test_sommerfeld_bc(true);
-  test_sommerfeld_bc(false);
+  test_sommerfeld_and_crpbc(
+      true, std::make_unique<Ccz4::BoundaryConditions::Sommerfeld>(2));
+  test_sommerfeld_and_crpbc(
+      false, std::make_unique<Ccz4::BoundaryConditions::Sommerfeld>(2));
+
+  // Run ConstraintsRadiationPreserving BC test
+  /***************************** WIP ****************************************/
+//   test_sommerfeld_and_crpbc(
+//       true,
+//       std::make_unique<
+//          Ccz4::BoundaryConditions::ConstraintsRadiationPreserving>(2));
+//   test_sommerfeld_and_crpbc(
+//       false,
+//       std::make_unique<
+//          Ccz4::BoundaryConditions::ConstraintsRadiationPreserving>(2));
 }
 }  // namespace
 

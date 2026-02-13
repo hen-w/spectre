@@ -115,6 +115,9 @@ struct KreissOligerEpsilon : db::SimpleTag {
   }
 };
 
+/// \brief Tags sent for second-order Ccz4 evolution.
+using spacetime_reconstruction_tags = System::variables_tag_list;
+
 template <typename DataType>
 struct ConstraintCharacteristicSpeeds : db::SimpleTag {
   using type = std::array<DataType, 3>;
@@ -162,9 +165,6 @@ struct RadiationCharacteristicFields : db::SimpleTag {
   using type = Variables<tmpl::list<CTensorPlus<DataType, Dim, Frame>,
                                     CTensorMinus<DataType, Dim, Frame>>>;
 };
-
-/// \brief Tags sent for second-order Ccz4 evolution.
-using spacetime_reconstruction_tags = System::variables_tag_list;
 
 template <typename DataType>
 struct CPhi : db::SimpleTag {

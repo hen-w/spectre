@@ -5,6 +5,7 @@ set(LIBRARY "Test_Ccz4")
 
 set(LIBRARY_SOURCES
   BoundaryConditions/Test_DirichletAnalytic.cpp
+  BoundaryConditions/Test_ConstraintsRadiationPreserving.cpp
   BoundaryConditions/Test_Sommerfeld.cpp
   FiniteDifference/Test_AddUpperSpatialZ4Constraint.cpp
   FiniteDifference/Test_ApplyFilter.cpp

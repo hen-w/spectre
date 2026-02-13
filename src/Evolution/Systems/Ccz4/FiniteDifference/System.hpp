@@ -22,6 +22,7 @@ struct System {
   static constexpr bool shifting_shift = false;
 
   // The free parameter f in the Gamma-driver condition.
+  // We assume in cpbc that f has no spatial dependenc.
   static constexpr double f = 0.75;
 
   // the order of the following evolved variables is important
@@ -32,6 +33,13 @@ struct System {
       ::Ccz4::Tags::ATilde<DataVector, 3>,
       gr::Tags::TraceExtrinsicCurvature<DataVector>,
       ::Ccz4::Tags::Theta<DataVector>, ::Ccz4::Tags::GammaHat<DataVector, 3>,
+      // first-order reduction variables used in cpbc
+      ::Tags::deriv<::Ccz4::Tags::ConformalMetric<DataVector, 3>,
+                    tmpl::size_t<3>, Frame::Inertial>,
+      ::Tags::deriv<::Ccz4::Tags::ConformalFactor<DataVector>,
+                    tmpl::size_t<3>, Frame::Inertial>,
+      ::Tags::deriv<gr::Tags::Lapse<DataVector>, tmpl::size_t<3>, Frame::Inertial>,
+      ::Tags::deriv<gr::Tags::Shift<DataVector, 3>, tmpl::size_t<3>, Frame::Inertial>,
       // gauge variables
       gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
       ::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>>;
