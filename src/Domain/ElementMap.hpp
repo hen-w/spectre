@@ -133,7 +133,10 @@ class ElementMap {
       const domain::FunctionsOfTimeMap& functions_of_time = {}) const {
     auto block_source_point =
         apply_affine_transformation_to_point(source_point);
+    auto block_inv_jac = block_map_->inv_jacobian(block_source_point,
+                                                  time, functions_of_time);
     auto block_inv_hes = block_map_->inv_hessian(std::move(block_source_point),
+                                                 block_inv_jac,
                                                  time, functions_of_time);
     InverseHessian<T, Dim, Frame::ElementLogical, TargetFrame> inv_hes;
     for (size_t i = 0; i < Dim; ++i) {

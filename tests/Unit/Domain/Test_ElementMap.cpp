@@ -83,12 +83,22 @@ void test_element_impl(
       element_map_deserialized.inv_jacobian(logical_point_double),
       composed_map.inv_jacobian(logical_point_double));
 
-  CHECK_ITERABLE_APPROX(element_map.inv_jacobian(logical_point_dv),
-                        composed_map.inv_jacobian(logical_point_dv));
+  CHECK_ITERABLE_APPROX(element_map.inv_hessian(logical_point_dv),
+                        composed_map.inv_hessian(logical_point_dv));
+  CHECK_ITERABLE_APPROX(element_map.inv_hessian(logical_point_double),
+                        composed_map.inv_hessian(logical_point_double));
+  CHECK_ITERABLE_APPROX(element_map_deserialized.inv_hessian(logical_point_dv),
+                        composed_map.inv_hessian(logical_point_dv));
+  CHECK_ITERABLE_APPROX(
+      element_map_deserialized.inv_hessian(logical_point_double),
+      composed_map.inv_hessian(logical_point_double));
+
+  CHECK_ITERABLE_APPROX(element_map.jacobian(logical_point_dv),
+                        composed_map.jacobian(logical_point_dv));
   CHECK_ITERABLE_APPROX(element_map.jacobian(logical_point_double),
                         composed_map.jacobian(logical_point_double));
-  CHECK_ITERABLE_APPROX(element_map_deserialized.inv_jacobian(logical_point_dv),
-                        composed_map.inv_jacobian(logical_point_dv));
+  CHECK_ITERABLE_APPROX(element_map_deserialized.jacobian(logical_point_dv),
+                        composed_map.jacobian(logical_point_dv));
   CHECK_ITERABLE_APPROX(element_map_deserialized.jacobian(logical_point_double),
                         composed_map.jacobian(logical_point_double));
 
