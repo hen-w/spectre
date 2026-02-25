@@ -592,7 +592,9 @@ ComputeTimeDerivative<Dim, EvolutionSystem, DgStepChoosers, LocalTimeStepping,
               db::wrap_tags_in<::Tags::dt, typename variables_tag::tags_list>>*>
               dt_vars_ptr,
           const auto&... time_derivative_args) {
-        detail::volume_terms<compute_volume_time_derivative_terms>(
+        detail::volume_terms<
+            compute_volume_time_derivative_terms,
+            detail::get_use_cg_collocation_scheme<EvolutionSystem>()>(
             dt_vars_ptr, make_not_null(&volume_fluxes),
             make_not_null(&partial_derivs), make_not_null(&temporaries),
             make_not_null(&div_fluxes), evolved_variables, dg_formulation, mesh,

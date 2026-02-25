@@ -29,6 +29,7 @@
 #include "Domain/Tags/NeighborMesh.hpp"
 #include "Evolution/BoundaryCorrection.hpp"
 #include "Evolution/BoundaryCorrectionTags.hpp"
+#include "Evolution/DiscontinuousGalerkin/Actions/ComputeTimeDerivativeHelpers.hpp"
 #include "Evolution/DiscontinuousGalerkin/BoundaryData.hpp"
 #include "Evolution/DiscontinuousGalerkin/InboxTags.hpp"
 #include "Evolution/DiscontinuousGalerkin/MortarData.hpp"
@@ -736,11 +737,14 @@ struct ApplyBoundaryCorrections {
               }
 
               if (using_gauss_lobatto_points) {
-                // The lift_flux function lifts only on the slice, it does not
-                // add the contribution to the volume.
-                ::dg::lift_flux(make_not_null(&dt_boundary_correction),
-                                volume_mesh.extents(direction.dimension()),
-                                magnitude_of_face_normal);
+                if constexpr (not evolution::dg::Actions::detail::
+                                  get_use_cg_collocation_scheme<system>()) {
+                  // The lift_flux function lifts only on the slice, it does not
+                  // add the contribution to the volume.
+                  ::dg::lift_flux(make_not_null(&dt_boundary_correction),
+                                  volume_mesh.extents(direction.dimension()),
+                                  magnitude_of_face_normal);
+                }
                 return std::move(dt_boundary_correction);
               } else {
                 // We are using Gauss points.

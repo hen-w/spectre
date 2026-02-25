@@ -6,6 +6,7 @@
 #include <type_traits>
 
 #include "Utilities/TMPL.hpp"
+#include "Utilities/TypeTraits/CreateHasStaticMemberVariable.hpp"
 #include "Utilities/TypeTraits/CreateHasTypeAlias.hpp"
 
 namespace evolution::dg::Actions::detail {
@@ -14,6 +15,9 @@ CREATE_HAS_TYPE_ALIAS_V(boundary_conditions_base)
 
 CREATE_HAS_TYPE_ALIAS(inverse_spatial_metric_tag)
 CREATE_HAS_TYPE_ALIAS_V(inverse_spatial_metric_tag)
+
+CREATE_HAS_STATIC_MEMBER_VARIABLE(use_cg_collocation_scheme)
+CREATE_HAS_STATIC_MEMBER_VARIABLE_V(use_cg_collocation_scheme)
 
 template <bool HasInverseSpatialMetricTag = false>
 struct inverse_spatial_metric_tag_impl {
@@ -137,4 +141,16 @@ template <typename BoundaryCondition>
 using get_deriv_vars_from_boundary_condition =
     typename get_deriv_vars_from_boundary_condition_impl<
         BoundaryCondition>::type;
+
+/// Returns `true` if the System has `use_cg_collocation_scheme` set to `true`,
+/// otherwise returns `false`. This is used to enable CG-specific logic in the
+/// DG infrastructure.
+template <typename System>
+constexpr bool get_use_cg_collocation_scheme() {
+  if constexpr (has_use_cg_collocation_scheme_v<System, bool>) {
+    return System::use_cg_collocation_scheme;
+  } else {
+    return false;
+  }
+}
 }  // namespace evolution::dg::Actions::detail

@@ -5,11 +5,14 @@
 
 #include <cstddef>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
+
+#include "Evolution/Systems/SoScalarWave/Tags.hpp"
 
 #include "DataStructures/DataBox/DataBox.hpp"
 #include "DataStructures/DataBox/MetavariablesTag.hpp"
@@ -572,12 +575,21 @@ void apply_boundary_condition_on_face(
         number_of_points_on_face};
 
     // Compute boundary correction
-    boundary_correction.dg_boundary_terms(
-        make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
-            boundary_corrections_on_face))...,
-        get<PackageFieldTags>(internal_packaged_data)...,
-        get<PackageFieldTags>(external_packaged_data)..., dg_formulation,
-        get<BoundaryTermsVolumeTags>(*box)...);
+    if constexpr (get_use_cg_collocation_scheme<System>()) {
+      boundary_correction.dg_boundary_terms(
+          make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
+              boundary_corrections_on_face))...,
+          get<PackageFieldTags>(internal_packaged_data)...,
+          get<PackageFieldTags>(external_packaged_data)..., dg_formulation,
+          true, get<BoundaryTermsVolumeTags>(*box)...);
+    } else {
+      boundary_correction.dg_boundary_terms(
+          make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
+              boundary_corrections_on_face))...,
+          get<PackageFieldTags>(internal_packaged_data)...,
+          get<PackageFieldTags>(external_packaged_data)..., dg_formulation,
+          get<BoundaryTermsVolumeTags>(*box)...);
+    }
 
     // Lift the boundary correction
     const auto& magnitude_of_interior_face_normal =
@@ -587,9 +599,11 @@ void apply_boundary_condition_on_face(
     if (volume_mesh.quadrature(0) == Spectral::Quadrature::GaussLobatto) {
       // The lift_flux function lifts only on the slice, it does not add
       // the contribution to the volume.
-      ::dg::lift_flux(make_not_null(&boundary_corrections_on_face),
-                      volume_mesh.extents(direction.dimension()),
-                      magnitude_of_interior_face_normal);
+      if constexpr (not get_use_cg_collocation_scheme<System>()) {
+        ::dg::lift_flux(make_not_null(&boundary_corrections_on_face),
+                        volume_mesh.extents(direction.dimension()),
+                        magnitude_of_interior_face_normal);
+      }
 
       // Add the flux contribution to the volume data
       db::mutate<dt_variables_tag>(
