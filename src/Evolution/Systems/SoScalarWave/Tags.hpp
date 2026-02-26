@@ -33,4 +33,8 @@ struct Psi : db::SimpleTag {
 struct Pi : db::SimpleTag {
   using type = Scalar<DataVector>;
 };
+
+struct NormalDotDerivPsi : db::SimpleTag {
+  using type = Scalar<DataVector>;
+};
 }  // namespace SoScalarWave::Tags

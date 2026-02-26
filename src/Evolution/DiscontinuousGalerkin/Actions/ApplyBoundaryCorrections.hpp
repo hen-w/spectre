@@ -737,14 +737,11 @@ struct ApplyBoundaryCorrections {
               }
 
               if (using_gauss_lobatto_points) {
-                if constexpr (not evolution::dg::Actions::detail::
-                                  get_use_cg_collocation_scheme<system>()) {
-                  // The lift_flux function lifts only on the slice, it does not
-                  // add the contribution to the volume.
-                  ::dg::lift_flux(make_not_null(&dt_boundary_correction),
-                                  volume_mesh.extents(direction.dimension()),
-                                  magnitude_of_face_normal);
-                }
+                // The lift_flux function lifts only on the slice, it does not
+                // add the contribution to the volume.
+                ::dg::lift_flux(make_not_null(&dt_boundary_correction),
+                                volume_mesh.extents(direction.dimension()),
+                                magnitude_of_face_normal);
                 return std::move(dt_boundary_correction);
               } else {
                 // We are using Gauss points.

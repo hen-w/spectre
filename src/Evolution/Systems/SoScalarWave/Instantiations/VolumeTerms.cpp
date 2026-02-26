@@ -59,7 +59,10 @@
       const Mesh<DIM(data)>& mesh_args,                                       \
       const InverseJacobian<DataVector, DIM(data), Frame::ElementLogical,     \
                             Frame::Inertial>&                                 \
-          logical_to_inertial_inverse_jacobian_args);                         \
+          logical_to_inertial_inverse_jacobian_args,                          \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&                  \
+          inertial_coordinates_args,                                          \
+      const double& time_args);                                               \
   template void partial_derivatives<                                          \
       tmpl::list<::Tags::deriv<SoScalarWave::Tags::Psi,                       \
                                tmpl::size_t<DIM(data)>, Frame::Inertial>,     \

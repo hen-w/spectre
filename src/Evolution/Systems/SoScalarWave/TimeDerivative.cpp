@@ -21,11 +21,14 @@ evolution::dg::TimeDerivativeDecisions<Dim> TimeDerivative<Dim>::apply(
 
     const gsl::not_null<Scalar<DataVector>*> temp_dt_psi,
     const gsl::not_null<Scalar<DataVector>*> temp_dt_pi,
+    const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> temp_d_psi,
 
     const Variables<tmpl::list<Tags::Psi, Tags::Pi>>& evolved_vars,
     const Mesh<Dim>& mesh,
     const InverseJacobian<DataVector, Dim, Frame::ElementLogical,
-                          Frame::Inertial>& inverse_jacobian) {
+                          Frame::Inertial>& inverse_jacobian,
+    const tnsr::I<DataVector, Dim, Frame::Inertial>& inertial_coords,
+    const double& time) {
   // Compute first derivatives of Psi
   using first_deriv_var_tag =
       tmpl::list<::Tags::deriv<Tags::Psi, tmpl::size_t<Dim>, Frame::Inertial>,
@@ -58,10 +61,18 @@ evolution::dg::TimeDerivativeDecisions<Dim> TimeDerivative<Dim>::apply(
   const auto& pi = get<Tags::Pi>(evolved_vars);
   get(*dt_psi) = -get(pi);
 
+  std::cout << "coords: " << inertial_coords.get(0) << std::endl;
+  std::cout << "dt_pi max error: "
+            << (abs(get(*dt_pi) - sin(inertial_coords.get(0) - time)))
+            << std::endl;
+
   // Copy time derivatives to temporary tags so they can be projected to faces
   // for CG collocation boundary corrections
   get(*temp_dt_psi) = get(*dt_psi);
   get(*temp_dt_pi) = get(*dt_pi);
+  *temp_d_psi =
+      get<::Tags::deriv<Tags::Psi, tmpl::size_t<Dim>, Frame::Inertial>>(
+          first_derivs);
 
   // No flux divergence for non-conservative system, so
   // it does not matter whether we return true or false.

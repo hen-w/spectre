@@ -55,7 +55,7 @@ const Matrix& differentiation_matrix_transpose(const Mesh<1>& mesh);
  * weights that appear in DG integrals:
  *
  * \begin{equation}
- * \frac{D^T_{ij}} \frac{w_j}{w_i}
+ * D^T_{ij} \frac{w_j}{w_i}
  * \end{equation}
  *
  * \param num_points The number of collocation points
