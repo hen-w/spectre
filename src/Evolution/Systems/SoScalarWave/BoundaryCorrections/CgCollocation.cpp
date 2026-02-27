@@ -37,11 +37,13 @@ double CgCollocation<Dim>::dg_package_data(
     const gsl::not_null<Scalar<DataVector>*> packaged_dt_psi,
     const gsl::not_null<Scalar<DataVector>*> packaged_dt_pi,
     const gsl::not_null<Scalar<DataVector>*> packaged_normal_dot_d_psi,
+    const gsl::not_null<Scalar<DataVector>*> packaged_det_jac,
 
     const Scalar<DataVector>& /*psi*/, const Scalar<DataVector>& /*pi*/,
 
     const Scalar<DataVector>& dt_psi, const Scalar<DataVector>& dt_pi,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& d_psi,
+    const Scalar<DataVector>& det_jac,
 
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
     const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
@@ -57,6 +59,7 @@ double CgCollocation<Dim>::dg_package_data(
     // In Euclidean \partial_i\psi is the same as \partial^i\psi
     get(*packaged_normal_dot_d_psi) += normal_covector.get(d) * d_psi.get(d);
   }
+  get(*packaged_det_jac) = get(det_jac);
 
   // CG doesn't need characteristic speeds for CFL condition
   return 0.0;
@@ -68,24 +71,28 @@ void CgCollocation<Dim>::dg_boundary_terms(
     const gsl::not_null<Scalar<DataVector>*> pi_boundary_correction,
 
     const Scalar<DataVector>& dt_psi_int, const Scalar<DataVector>& dt_pi_int,
-    const Scalar<DataVector>& normal_dot_d_psi_int,
+    const Scalar<DataVector>& /*normal_dot_d_psi_int*/,
+    const Scalar<DataVector>& det_jac_int,
 
     const Scalar<DataVector>& dt_psi_ext, const Scalar<DataVector>& dt_pi_ext,
-    const Scalar<DataVector>& normal_dot_d_psi_ext,
+    const Scalar<DataVector>& /*normal_dot_d_psi_ext*/,
+    const Scalar<DataVector>& det_jac_ext,
 
     const dg::Formulation /*dg_formulation*/,
     const bool used_for_external_bc) const {
   // Apply penalty term based on difference in time derivatives
-  // D_Psi = 0.5 * (dt_Psi_ext - dt_Psi_int)
-  // D_Pi = 0.5 * (dt_Pi_ext - dt_Pi_int)
-
   if (used_for_external_bc) {
     get(*psi_boundary_correction) = 1.0 * (get(dt_psi_ext) - get(dt_psi_int));
     get(*pi_boundary_correction) = 1.0 * (get(dt_pi_ext) - get(dt_pi_int));
   } else {
-    get(*psi_boundary_correction) = 0.0;
-    get(*pi_boundary_correction) =
-        -0.5 * (get(normal_dot_d_psi_ext) + get(normal_dot_d_psi_int));
+    get(*psi_boundary_correction) = (get(det_jac_ext) * get(dt_psi_ext) +
+                                     get(det_jac_int) * get(dt_psi_int)) /
+                                        (get(det_jac_ext) + get(det_jac_int)) -
+                                    get(dt_psi_int);
+    get(*pi_boundary_correction) = (get(det_jac_ext) * get(dt_pi_ext) +
+                                    get(det_jac_int) * get(dt_pi_int)) /
+                                       (get(det_jac_ext) + get(det_jac_int)) -
+                                   get(dt_pi_int);
   }
 }
 

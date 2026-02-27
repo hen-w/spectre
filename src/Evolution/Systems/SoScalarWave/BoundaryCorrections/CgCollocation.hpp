@@ -8,6 +8,7 @@
 
 #include "DataStructures/DataBox/Prefixes.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
+#include "Domain/Tags.hpp"
 #include "Evolution/BoundaryCorrection.hpp"
 #include "Evolution/Systems/SoScalarWave/Tags.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
@@ -61,13 +62,14 @@ class CgCollocation final : public evolution::BoundaryCorrection {
 
   std::unique_ptr<BoundaryCorrection> get_clone() const override;
 
-  using dg_package_field_tags =
-      tmpl::list<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
-                 Tags::NormalDotDerivPsi>;
+  using dg_package_field_tags = tmpl::list<
+      ::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>, Tags::NormalDotDerivPsi,
+      domain::Tags::DetJacobian<Frame::ElementLogical, Frame::Inertial>>;
 
-  using dg_package_data_temporary_tags =
-      tmpl::list<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
-                 ::Tags::deriv<Tags::Psi, tmpl::size_t<Dim>, Frame::Inertial>>;
+  using dg_package_data_temporary_tags = tmpl::list<
+      ::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
+      ::Tags::deriv<Tags::Psi, tmpl::size_t<Dim>, Frame::Inertial>,
+      domain::Tags::DetJacobian<Frame::ElementLogical, Frame::Inertial>>;
 
   using dg_package_data_volume_tags = tmpl::list<>;
   using dg_boundary_terms_volume_tags = tmpl::list<>;
@@ -76,11 +78,13 @@ class CgCollocation final : public evolution::BoundaryCorrection {
       gsl::not_null<Scalar<DataVector>*> packaged_dt_psi,
       gsl::not_null<Scalar<DataVector>*> packaged_dt_pi,
       gsl::not_null<Scalar<DataVector>*> packaged_normal_dot_d_psi,
+      gsl::not_null<Scalar<DataVector>*> packaged_det_jac,
 
       const Scalar<DataVector>& /*psi*/, const Scalar<DataVector>& /*pi*/,
 
       const Scalar<DataVector>& dt_psi, const Scalar<DataVector>& dt_pi,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& d_psi,
+      const Scalar<DataVector>& det_jac,
 
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
@@ -93,10 +97,12 @@ class CgCollocation final : public evolution::BoundaryCorrection {
       gsl::not_null<Scalar<DataVector>*> pi_boundary_correction,
 
       const Scalar<DataVector>& dt_psi_int, const Scalar<DataVector>& dt_pi_int,
-      const Scalar<DataVector>& normal_dot_d_psi_int,
+      const Scalar<DataVector>& /*normal_dot_d_psi_int*/,
+      const Scalar<DataVector>& det_jac_int,
 
       const Scalar<DataVector>& dt_psi_ext, const Scalar<DataVector>& dt_pi_ext,
-      const Scalar<DataVector>& normal_dot_d_psi_ext,
+      const Scalar<DataVector>& /*normal_dot_d_psi_ext*/,
+      const Scalar<DataVector>& det_jac_ext,
 
       dg::Formulation /*dg_formulation*/,
       bool used_for_external_bc = false) const;

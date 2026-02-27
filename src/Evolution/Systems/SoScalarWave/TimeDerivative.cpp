@@ -9,7 +9,9 @@
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "Domain/Structure/Element.hpp"
+#include "NumericalAlgorithms/DiscontinuousGalerkin/MetricIdentityJacobian.hpp"
 #include "NumericalAlgorithms/LinearOperators/PartialDerivatives.hpp"
+#include "NumericalAlgorithms/LinearOperators/WeakDivergence.hpp"
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
 #include "Utilities/Gsl.hpp"
 
@@ -22,6 +24,7 @@ evolution::dg::TimeDerivativeDecisions<Dim> TimeDerivative<Dim>::apply(
     const gsl::not_null<Scalar<DataVector>*> temp_dt_psi,
     const gsl::not_null<Scalar<DataVector>*> temp_dt_pi,
     const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> temp_d_psi,
+    const gsl::not_null<Scalar<DataVector>*> temp_det_jacobian,
 
     const Variables<tmpl::list<Tags::Psi, Tags::Pi>>& evolved_vars,
     const Mesh<Dim>& mesh,
@@ -37,27 +40,30 @@ evolution::dg::TimeDerivativeDecisions<Dim> TimeDerivative<Dim>::apply(
   partial_derivatives(make_not_null(&first_derivs), evolved_vars, mesh,
                       inverse_jacobian);
 
-  // Compute second derivatives of Psi by differentiating the first derivatives.
-  // We have to use ::Tags::deriv twice instead of ::Tags::second_deriv as here
-  // we are taking the derivative of the first derivatives.
-  using second_deriv_var_tag = tmpl::list<
-      ::Tags::deriv<
-          ::Tags::deriv<Tags::Psi, tmpl::size_t<Dim>, Frame::Inertial>,
-          tmpl::size_t<Dim>, Frame::Inertial>,
-      ::Tags::deriv<::Tags::deriv<Tags::Pi, tmpl::size_t<Dim>, Frame::Inertial>,
-                    tmpl::size_t<Dim>, Frame::Inertial>>;
-  Variables<second_deriv_var_tag> second_derivs(mesh.number_of_grid_points());
-  partial_derivatives(make_not_null(&second_derivs), first_derivs, mesh,
-                      inverse_jacobian);
-
-  // Compute time derivative
-  const auto& d_d_psi = get<::Tags::deriv<
-      ::Tags::deriv<Tags::Psi, tmpl::size_t<Dim>, Frame::Inertial>,
-      tmpl::size_t<Dim>, Frame::Inertial>>(second_derivs);
-  get(*dt_pi) = 0.0;
+  Variables<tmpl::list<Tags::Flux<DataVector, Dim, Frame::Inertial>>> psi_flux(
+      mesh.number_of_grid_points());
   for (size_t d = 0; d < Dim; ++d) {
-    get(*dt_pi) -= d_d_psi.get(d, d);
+    get<Tags::Flux<DataVector, Dim, Frame::Inertial>>(psi_flux).get(d) =
+        get<::Tags::deriv<Tags::Psi, tmpl::size_t<Dim>, Frame::Inertial>>(
+            first_derivs)
+            .get(d);
   }
+
+  const auto [det_inverse_jacobian, jacobian] =
+      determinant_and_inverse(inverse_jacobian);
+  InverseJacobian<DataVector, Dim, Frame::ElementLogical, Frame::Inertial>
+      det_jac_times_inverse_jacobian{};
+  ::dg::metric_identity_det_jac_times_inv_jac(
+      make_not_null(&det_jac_times_inverse_jacobian), mesh, inertial_coords,
+      jacobian);
+
+  Variables<tmpl::list<Tags::Psi>> divergence_of_psi_flux(
+      mesh.number_of_grid_points());
+  weak_divergence(make_not_null(&divergence_of_psi_flux), psi_flux, mesh,
+                  det_jac_times_inverse_jacobian);
+
+  get(*dt_pi) =
+      get(get<Tags::Psi>(divergence_of_psi_flux)) * get(det_inverse_jacobian);
   const auto& pi = get<Tags::Pi>(evolved_vars);
   get(*dt_psi) = -get(pi);
 
@@ -73,6 +79,7 @@ evolution::dg::TimeDerivativeDecisions<Dim> TimeDerivative<Dim>::apply(
   *temp_d_psi =
       get<::Tags::deriv<Tags::Psi, tmpl::size_t<Dim>, Frame::Inertial>>(
           first_derivs);
+  get(*temp_det_jacobian) = 1.0 / get(det_inverse_jacobian);
 
   // No flux divergence for non-conservative system, so
   // it does not matter whether we return true or false.

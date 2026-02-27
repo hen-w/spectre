@@ -56,6 +56,7 @@ std::optional<std::string> DirichletAnalytic<Dim>::dg_ghost(
     const gsl::not_null<Scalar<DataVector>*> dt_psi,
     const gsl::not_null<Scalar<DataVector>*> dt_pi,
     const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> d_psi,
+    const gsl::not_null<Scalar<DataVector>*> det_jacobian,
     const std::optional<
         tnsr::I<DataVector, Dim, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& /*normal_covector*/,
@@ -96,6 +97,8 @@ std::optional<std::string> DirichletAnalytic<Dim>::dg_ghost(
   for (size_t d = 0; d < Dim; ++d) {
     d_psi->get(d) = 0.0;
   }
+  // det_jacobian is unused at external boundary
+  get(*det_jacobian) = std::numeric_limits<double>::signaling_NaN();
 
   return std::nullopt;
 }

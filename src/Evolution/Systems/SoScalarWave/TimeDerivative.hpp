@@ -29,9 +29,10 @@ template <size_t Dim>
 struct TimeDerivative {
   // Include time derivatives as temporary tags so they can be
   // projected to faces and sent to neighbors for CG boundary corrections
-  using temporary_tags =
-      tmpl::list<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
-                 ::Tags::deriv<Tags::Psi, tmpl::size_t<Dim>, Frame::Inertial>>;
+  using temporary_tags = tmpl::list<
+      ::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
+      ::Tags::deriv<Tags::Psi, tmpl::size_t<Dim>, Frame::Inertial>,
+      domain::Tags::DetJacobian<Frame::ElementLogical, Frame::Inertial>>;
 
   using argument_tags =
       tmpl::list<::Tags::Variables<tmpl::list<Tags::Psi, Tags::Pi>>,
@@ -50,6 +51,7 @@ struct TimeDerivative {
       gsl::not_null<Scalar<DataVector>*> temp_dt_psi,
       gsl::not_null<Scalar<DataVector>*> temp_dt_pi,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> temp_d_psi,
+      gsl::not_null<Scalar<DataVector>*> temp_det_jacobian,
 
       // Partial derivative arguments. Listed in the system struct as
       // gradient_variables.
