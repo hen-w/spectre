@@ -6,12 +6,14 @@
 #include <cstddef>
 #include <iostream>
 
+#include "DataStructures/ApplyMatrices.hpp"
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "Domain/Structure/Element.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/MetricIdentityJacobian.hpp"
 #include "NumericalAlgorithms/LinearOperators/PartialDerivatives.hpp"
 #include "NumericalAlgorithms/LinearOperators/WeakDivergence.hpp"
+#include "NumericalAlgorithms/Spectral/Filtering.hpp"
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
 #include "Utilities/Gsl.hpp"
 
@@ -66,6 +68,23 @@ evolution::dg::TimeDerivativeDecisions<Dim> TimeDerivative<Dim>::apply(
       get(get<Tags::Psi>(divergence_of_psi_flux)) * get(det_inverse_jacobian);
   const auto& pi = get<Tags::Pi>(evolved_vars);
   get(*dt_psi) = -get(pi);
+
+  // Filter evolved variables
+  std::array<Matrix, Dim> filter;
+  for (size_t d = 0; d < Dim; ++d) {
+    filter[d] = Spectral::filtering::exponential_filter(mesh.slice_through(d),
+                                                        36.0, 36);
+  }
+
+  //   // Filter the time derivatives
+  //   std::array<Matrix, Dim> filter;
+  //   for (size_t d = 0; d < Dim; ++d) {
+  //     filter[d] =
+  //     Spectral::filtering::exponential_filter(mesh.slice_through(d), 36.0,
+  //                                                         36);
+  //   }
+  //   get(*dt_psi) = apply_matrices(filter, get(*dt_psi), mesh.extents());
+  //   get(*dt_pi) = apply_matrices(filter, get(*dt_pi), mesh.extents());
 
   std::cout << "coords: " << inertial_coords.get(0) << std::endl;
   std::cout << "dt_pi max error: "

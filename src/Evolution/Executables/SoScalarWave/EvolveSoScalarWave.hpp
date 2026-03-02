@@ -35,6 +35,7 @@
 #include "IO/Observer/ObserverComponent.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Tags.hpp"
+#include "NumericalAlgorithms/LinearOperators/CgFilter.hpp"
 #include "NumericalAlgorithms/LinearOperators/ExponentialFilter.hpp"
 #include "Options/Protocols/FactoryCreation.hpp"
 #include "Options/String.hpp"
@@ -217,7 +218,7 @@ struct EvolutionMetavars {
   // possibly on certain deformed domains.  Here a filter is added in 2D for
   // testing purposes.  When performing numerical experiments with the scalar
   // wave system, the user should determine whether this filter can be removed.
-  static constexpr bool use_filtering = false;  //(2 == volume_dim);
+  static constexpr bool use_filtering = true;  //(2 == volume_dim);
 
   using step_actions = tmpl::flatten<tmpl::list<
       evolution::dg::Actions::ComputeTimeDerivative<
@@ -244,6 +245,12 @@ struct EvolutionMetavars {
       tmpl::conditional_t<
           local_time_stepping,
           Actions::MutateApply<evolution::dg::CleanMortarHistory<system>>,
+          tmpl::list<>>,
+      tmpl::conditional_t<
+          use_filtering,
+          dg::Actions::Filter<
+              Filters::CgFilter<0>,
+              tmpl::list<SoScalarWave::Tags::Psi, SoScalarWave::Tags::Pi>>,
           tmpl::list<>>,
       tmpl::conditional_t<
           use_filtering,
