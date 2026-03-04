@@ -34,12 +34,17 @@ struct Pi : db::SimpleTag {
   using type = Scalar<DataVector>;
 };
 
-struct NormalDotDerivPsi : db::SimpleTag {
+template <size_t Dim>
+struct Phi : db::SimpleTag {
+  using type = tnsr::i<DataVector, Dim, Frame::Inertial>;
+};
+
+struct NormalDotPhi : db::SimpleTag {
   using type = Scalar<DataVector>;
 };
 
-template <typename DataType, size_t Dim, typename Frame>
-struct Flux : db::SimpleTag {
-  using type = tnsr::I<DataType, Dim, Frame>;
+template <size_t Dim>
+struct PsiTimesNormal : db::SimpleTag {
+  using type = tnsr::i<DataVector, Dim, Frame::Inertial>;
 };
 }  // namespace SoScalarWave::Tags

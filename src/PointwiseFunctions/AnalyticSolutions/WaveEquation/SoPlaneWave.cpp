@@ -112,22 +112,26 @@ tnsr::ii<T, Dim> SoPlaneWave<Dim>::d2psi_dxdx(const tnsr::I<T, Dim>& x,
 }
 
 template <size_t Dim>
-tuples::TaggedTuple<Tags::Psi, Tags::Pi> SoPlaneWave<Dim>::variables(
+tuples::TaggedTuple<Tags::Psi, Tags::Pi, Tags::Phi<Dim>>
+SoPlaneWave<Dim>::variables(
     const tnsr::I<DataVector, Dim>& x, double t,
-    const tmpl::list<Tags::Psi, Tags::Pi> /*meta*/) const {
-  tuples::TaggedTuple<Tags::Psi, Tags::Pi> variables{psi(x, t), dpsi_dt(x, t)};
+    const tmpl::list<Tags::Psi, Tags::Pi, Tags::Phi<Dim>> /*meta*/) const {
+  tuples::TaggedTuple<Tags::Psi, Tags::Pi, Tags::Phi<Dim>> variables{
+      psi(x, t), dpsi_dt(x, t), dpsi_dx(x, t)};
   get<Tags::Pi>(variables).get() *= -1.0;
   return variables;
 }
 
 template <size_t Dim>
-tuples::TaggedTuple<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>>
+tuples::TaggedTuple<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
+                    ::Tags::dt<Tags::Phi<Dim>>>
 SoPlaneWave<Dim>::variables(
     const tnsr::I<DataVector, Dim>& x, double t,
-    const tmpl::list<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>> /*meta*/)
-    const {
-  tuples::TaggedTuple<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>> dt_variables{
-      dpsi_dt(x, t), d2psi_dt2(x, t)};
+    const tmpl::list<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
+                     ::Tags::dt<Tags::Phi<Dim>>> /*meta*/) const {
+  tuples::TaggedTuple<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
+                      ::Tags::dt<Tags::Phi<Dim>>>
+      dt_variables{dpsi_dt(x, t), d2psi_dt2(x, t), d2psi_dtdx(x, t)};
   get<::Tags::dt<Tags::Pi>>(dt_variables).get() *= -1.0;
   return dt_variables;
 }

@@ -71,8 +71,7 @@ namespace evolution::dg::Actions::detail {
  *    time derivative must be done *after* the mesh velocity is subtracted
  *    from the fluxes.
  */
-template <typename ComputeVolumeTimeDerivativeTerms,
-          bool UseCgCollocation = false, size_t Dim,
+template <typename ComputeVolumeTimeDerivativeTerms, size_t Dim,
           typename... TimeDerivativeArguments, typename... VariablesTags,
           typename... PartialDerivTags, typename... FluxVariablesTags,
           typename... TemporaryTags>
@@ -106,8 +105,9 @@ void volume_terms(
     const TimeDerivativeArguments&... time_derivative_args) {
   static constexpr bool has_partial_derivs = sizeof...(PartialDerivTags) != 0;
   static constexpr bool has_fluxes = sizeof...(FluxVariablesTags) != 0;
+
   static_assert(
-      has_fluxes or has_partial_derivs or UseCgCollocation,
+      has_fluxes or has_partial_derivs,
       "Must have either fluxes or partial derivatives in a "
       "DG evolution scheme. This means the evolution system struct (usually in "
       "Evolution/Systems/YourSystem/System.hpp) being used does not specify "
@@ -157,15 +157,13 @@ void volume_terms(
   }
 
   // Add volume terms for moving meshes
-  if constexpr (not UseCgCollocation) {
-    // CG collocation scheme does not support moving meshes for now
-    if (mesh_velocity.has_value()) {
-      if (not time_derivative_decisions.compute_flux_divergence) {
-        goto end_of_flux_mesh_velocity;  // NOLINT(cppcoreguidelines-avoid-goto)
-      }
-      tmpl::for_each<flux_variables>([&div_mesh_velocity, &dt_vars_ptr,
-                                      &evolved_vars, &mesh_velocity,
-                                      &volume_fluxes](auto tag_v) {
+  if (mesh_velocity.has_value()) {
+    if (not time_derivative_decisions.compute_flux_divergence) {
+      goto end_of_flux_mesh_velocity;  // NOLINT(cppcoreguidelines-avoid-goto)
+    }
+    tmpl::for_each<flux_variables>([&div_mesh_velocity, &dt_vars_ptr,
+                                    &evolved_vars, &mesh_velocity,
+                                    &volume_fluxes](auto tag_v) {
         // Modify fluxes for moving mesh
         using var_tag = typename decltype(tag_v)::type;
         using flux_var_tag =
@@ -203,47 +201,46 @@ void volume_terms(
               get(*div_mesh_velocity);
         }
       });
-    end_of_flux_mesh_velocity:
+  end_of_flux_mesh_velocity:
 
-      // We add the mesh velocity to all equations that don't have flux terms.
-      // This doesn't need to be equal to the equations that have partial
-      // derivatives. For example, the scalar field evolution equation in
-      // first-order form does not have any partial derivatives but still needs
-      // the velocity term added. This is because the velocity term arises from
-      // transforming the time derivative.
-      using non_flux_tags =
-          tmpl::list_difference<tmpl::list<VariablesTags...>, flux_variables>;
+    // We add the mesh velocity to all equations that don't have flux terms.
+    // This doesn't need to be equal to the equations that have partial
+    // derivatives. For example, the scalar field evolution equation in
+    // first-order form does not have any partial derivatives but still needs
+    // the velocity term added. This is because the velocity term arises from
+    // transforming the time derivative.
+    using non_flux_tags =
+        tmpl::list_difference<tmpl::list<VariablesTags...>, flux_variables>;
 
-      tmpl::for_each<non_flux_tags>([&dt_vars_ptr, &mesh_velocity,
-                                    &partial_derivs](auto var_tag_v) {
-        using var_tag = typename decltype(var_tag_v)::type;
-        using dt_var_tag = ::Tags::dt<var_tag>;
-        using deriv_var_tag =
-            ::Tags::deriv<var_tag, tmpl::size_t<Dim>, Frame::Inertial>;
+    tmpl::for_each<non_flux_tags>([&dt_vars_ptr, &mesh_velocity,
+                                   &partial_derivs](auto var_tag_v) {
+      using var_tag = typename decltype(var_tag_v)::type;
+      using dt_var_tag = ::Tags::dt<var_tag>;
+      using deriv_var_tag =
+          ::Tags::deriv<var_tag, tmpl::size_t<Dim>, Frame::Inertial>;
 
-        const auto& deriv_var = get<deriv_var_tag>(*partial_derivs);
-        auto& dt_var = get<dt_var_tag>(*dt_vars_ptr);
+      const auto& deriv_var = get<deriv_var_tag>(*partial_derivs);
+      auto& dt_var = get<dt_var_tag>(*dt_vars_ptr);
 
-        // Loop over all independent components of the derivative of the
-        // variable.
-        for (size_t deriv_var_storage_index = 0;
-            deriv_var_storage_index < deriv_var.size();
-            ++deriv_var_storage_index) {
-          // We grab the `deriv_tensor_index`, which would be e.g.
-          // `(i, a, b)`, so `(0, 2, 3)`
-          const auto deriv_var_tensor_index =
-              deriv_var.get_tensor_index(deriv_var_storage_index);
-          // Then we drop the derivative index (the first entry) to get
-          // `(a, b)` (or `(2, 3)`)
-          const auto dt_var_tensor_index =
-              all_but_specified_element_of(deriv_var_tensor_index, 0);
-          // Set `deriv_index` to `i` (or `0` in the example)
-          const size_t deriv_index = gsl::at(deriv_var_tensor_index, 0);
-          dt_var.get(dt_var_tensor_index) += mesh_velocity->get(deriv_index) *
-                                            deriv_var[deriv_var_storage_index];
-        }
-      });
-    }
+      // Loop over all independent components of the derivative of the
+      // variable.
+      for (size_t deriv_var_storage_index = 0;
+           deriv_var_storage_index < deriv_var.size();
+           ++deriv_var_storage_index) {
+        // We grab the `deriv_tensor_index`, which would be e.g.
+        // `(i, a, b)`, so `(0, 2, 3)`
+        const auto deriv_var_tensor_index =
+            deriv_var.get_tensor_index(deriv_var_storage_index);
+        // Then we drop the derivative index (the first entry) to get
+        // `(a, b)` (or `(2, 3)`)
+        const auto dt_var_tensor_index =
+            all_but_specified_element_of(deriv_var_tensor_index, 0);
+        // Set `deriv_index` to `i` (or `0` in the example)
+        const size_t deriv_index = gsl::at(deriv_var_tensor_index, 0);
+        dt_var.get(dt_var_tensor_index) += mesh_velocity->get(deriv_index) *
+                                           deriv_var[deriv_var_storage_index];
+      }
+    });
   }
 
   // Add the flux divergence term to du_\alpha/dt, which must be done

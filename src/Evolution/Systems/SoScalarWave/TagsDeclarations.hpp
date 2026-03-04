@@ -9,4 +9,6 @@
 namespace SoScalarWave::Tags {
 struct Psi;
 struct Pi;
+struct Phi;
+struct NormalDotPhi;
 }  // namespace SoScalarWave::Tags

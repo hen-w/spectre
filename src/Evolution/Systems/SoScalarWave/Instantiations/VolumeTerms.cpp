@@ -10,14 +10,14 @@
 #include "NumericalAlgorithms/LinearOperators/PartialDerivatives.tpp"
 #include "Utilities/GenerateInstantiations.hpp"
 
-// SoScalarWave computes derivatives internally, so we manually instantiate
-// the specific partial_derivatives calls used in TimeDerivative.cpp
+// Instantiate volume_terms and the partial_derivatives call used by the
+// infrastructure for gradient_variables = {Pi, Phi<Dim>}.
 
 #define DIM(data) BOOST_PP_TUPLE_ELEM(0, data)
 
 #define INSTANTIATION(_, data)                                                \
   template void evolution::dg::Actions::detail::volume_terms<                 \
-      ::SoScalarWave::TimeDerivative<DIM(data)>, true>(                       \
+      ::SoScalarWave::TimeDerivative<DIM(data)>>(                             \
       const gsl::not_null<Variables<db::wrap_tags_in<                         \
           ::Tags::dt, typename ::SoScalarWave::System<DIM(                    \
                           data)>::variables_tag::tags_list>>*>                \
@@ -54,8 +54,8 @@
       const std::optional<tnsr::I<DataVector, DIM(data), Frame::Inertial>>&   \
           mesh_velocity,                                                      \
       const std::optional<Scalar<DataVector>>& div_mesh_velocity,             \
-      const Variables<typename ::SoScalarWave::System<DIM(                    \
-          data)>::variables_tag::tags_list>& evolved_vars_args,               \
+      const Scalar<DataVector>& pi,                                           \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>& phi,             \
       const Mesh<DIM(data)>& mesh_args,                                       \
       const InverseJacobian<DataVector, DIM(data), Frame::ElementLogical,     \
                             Frame::Inertial>&                                 \
@@ -64,55 +64,23 @@
           inertial_coordinates_args,                                          \
       const double& time_args);                                               \
   template void partial_derivatives<                                          \
-      tmpl::list<::Tags::deriv<SoScalarWave::Tags::Psi,                       \
-                               tmpl::size_t<DIM(data)>, Frame::Inertial>,     \
-                 ::Tags::deriv<SoScalarWave::Tags::Pi,                        \
-                               tmpl::size_t<DIM(data)>, Frame::Inertial>>,    \
-      tmpl::list<SoScalarWave::Tags::Psi, SoScalarWave::Tags::Pi>, DIM(data), \
-      Frame::Inertial>(                                                       \
-      gsl::not_null<Variables<tmpl::list<                                     \
-          ::Tags::deriv<SoScalarWave::Tags::Psi, tmpl::size_t<DIM(data)>,     \
-                        Frame::Inertial>,                                     \
-          ::Tags::deriv<SoScalarWave::Tags::Pi, tmpl::size_t<DIM(data)>,      \
-                        Frame::Inertial>>>*>                                  \
-          du,                                                                 \
-      const Variables<                                                        \
-          tmpl::list<SoScalarWave::Tags::Psi, SoScalarWave::Tags::Pi>>& u,    \
-      const Mesh<DIM(data)>& mesh,                                            \
-      const InverseJacobian<DataVector, DIM(data), Frame::ElementLogical,     \
-                            Frame::Inertial>& inverse_jacobian);              \
-  template void partial_derivatives<                                          \
-      tmpl::list<::Tags::deriv<                                               \
-                     ::Tags::deriv<SoScalarWave::Tags::Psi,                   \
-                                   tmpl::size_t<DIM(data)>, Frame::Inertial>, \
-                     tmpl::size_t<DIM(data)>, Frame::Inertial>,               \
-                 ::Tags::deriv<                                               \
-                     ::Tags::deriv<SoScalarWave::Tags::Pi,                    \
-                                   tmpl::size_t<DIM(data)>, Frame::Inertial>, \
-                     tmpl::size_t<DIM(data)>, Frame::Inertial>>,              \
-      tmpl::list<::Tags::deriv<SoScalarWave::Tags::Psi,                       \
-                               tmpl::size_t<DIM(data)>, Frame::Inertial>,     \
-                 ::Tags::deriv<SoScalarWave::Tags::Pi,                        \
-                               tmpl::size_t<DIM(data)>, Frame::Inertial>>,    \
+      db::wrap_tags_in<                                                       \
+          ::Tags::deriv,                                                      \
+          typename ::SoScalarWave::System<DIM(data)>::gradient_variables,     \
+          tmpl::size_t<DIM(data)>, Frame::Inertial>,                          \
+      typename ::SoScalarWave::System<DIM(data)>::variables_tag::tags_list,   \
       DIM(data), Frame::Inertial>(                                            \
-      gsl::not_null<Variables<tmpl::list<                                     \
-          ::Tags::deriv<                                                      \
-              ::Tags::deriv<SoScalarWave::Tags::Psi, tmpl::size_t<DIM(data)>, \
-                            Frame::Inertial>,                                 \
-              tmpl::size_t<DIM(data)>, Frame::Inertial>,                      \
-          ::Tags::deriv<                                                      \
-              ::Tags::deriv<SoScalarWave::Tags::Pi, tmpl::size_t<DIM(data)>,  \
-                            Frame::Inertial>,                                 \
-              tmpl::size_t<DIM(data)>, Frame::Inertial>>>*>                   \
+      gsl::not_null<Variables<db::wrap_tags_in<                               \
+          ::Tags::deriv,                                                      \
+          typename ::SoScalarWave::System<DIM(data)>::gradient_variables,     \
+          tmpl::size_t<DIM(data)>, Frame::Inertial>>*>                        \
           du,                                                                 \
-      const Variables<tmpl::list<                                             \
-          ::Tags::deriv<SoScalarWave::Tags::Psi, tmpl::size_t<DIM(data)>,     \
-                        Frame::Inertial>,                                     \
-          ::Tags::deriv<SoScalarWave::Tags::Pi, tmpl::size_t<DIM(data)>,      \
-                        Frame::Inertial>>>& u,                                \
+      const Variables<typename ::SoScalarWave::System<DIM(                    \
+          data)>::variables_tag::tags_list>& u,                               \
       const Mesh<DIM(data)>& mesh,                                            \
       const InverseJacobian<DataVector, DIM(data), Frame::ElementLogical,     \
-                            Frame::Inertial>& inverse_jacobian);
+                            Frame::Inertial>& inverse_jacobian,               \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>& inertial_coords);
 
 GENERATE_INSTANTIATIONS(INSTANTIATION, (1, 2, 3))
 

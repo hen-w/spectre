@@ -59,8 +59,7 @@ namespace evolution::dg::Actions::detail {
  *    time derivative must be done *after* the mesh velocity is subtracted
  *    from the fluxes.
  */
-template <typename ComputeVolumeTimeDerivativeTerms,
-          bool UseCgCollocation = false, size_t Dim,
+template <typename ComputeVolumeTimeDerivativeTerms, size_t Dim,
           typename... TimeDerivativeArguments, typename... VariablesTags,
           typename... PartialDerivTags, typename... FluxVariablesTags,
           typename... TemporaryTags>

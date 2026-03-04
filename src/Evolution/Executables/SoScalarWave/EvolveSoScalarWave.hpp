@@ -29,6 +29,7 @@
 #include "Evolution/Systems/SoScalarWave/BoundaryConditions/Factory.hpp"
 #include "Evolution/Systems/SoScalarWave/BoundaryCorrections/Factory.hpp"
 #include "Evolution/Systems/SoScalarWave/System.hpp"
+#include "Evolution/Systems/SoScalarWave/UpdateAuxiliaryVariables.hpp"
 #include "Evolution/Tags/Filter.hpp"
 #include "IO/Observer/Actions/RegisterEvents.hpp"
 #include "IO/Observer/Helpers.hpp"
@@ -221,6 +222,12 @@ struct EvolutionMetavars {
   static constexpr bool use_filtering = true;  //(2 == volume_dim);
 
   using step_actions = tmpl::flatten<tmpl::list<
+      Actions::MutateApply<SoScalarWave::UpdateAuxiliaryVariables<volume_dim>>,
+      evolution::dg::Actions::ComputeTimeDerivative<
+          volume_dim, system, AllStepChoosers, local_time_stepping,
+          use_dg_element_collection, true>,
+      evolution::dg::Actions::ApplyAuxiliaryBoundaryCorrectionsToVariables<
+          volume_dim, use_dg_element_collection>,
       evolution::dg::Actions::ComputeTimeDerivative<
           volume_dim, system, AllStepChoosers, local_time_stepping,
           use_dg_element_collection>,
@@ -246,12 +253,12 @@ struct EvolutionMetavars {
           local_time_stepping,
           Actions::MutateApply<evolution::dg::CleanMortarHistory<system>>,
           tmpl::list<>>,
-      tmpl::conditional_t<
-          use_filtering,
-          dg::Actions::Filter<
-              Filters::CgFilter<0>,
-              tmpl::list<SoScalarWave::Tags::Psi, SoScalarWave::Tags::Pi>>,
-          tmpl::list<>>,
+      //   tmpl::conditional_t<
+      //       use_filtering,
+      //       dg::Actions::Filter<
+      //           Filters::CgFilter<0>,
+      //           tmpl::list<SoScalarWave::Tags::Psi, SoScalarWave::Tags::Pi>>,
+      //       tmpl::list<>>,
       tmpl::conditional_t<
           use_filtering,
           dg::Actions::Filter<

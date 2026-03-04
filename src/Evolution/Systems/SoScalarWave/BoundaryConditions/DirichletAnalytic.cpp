@@ -53,26 +53,15 @@ template <size_t Dim>
 std::optional<std::string> DirichletAnalytic<Dim>::dg_ghost(
     const gsl::not_null<Scalar<DataVector>*> psi,
     const gsl::not_null<Scalar<DataVector>*> pi,
-    const gsl::not_null<Scalar<DataVector>*> dt_psi,
-    const gsl::not_null<Scalar<DataVector>*> dt_pi,
-    const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> d_psi,
-    const gsl::not_null<Scalar<DataVector>*> det_jacobian,
+    const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> phi,
     const std::optional<
         tnsr::I<DataVector, Dim, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& /*normal_covector*/,
     const tnsr::I<DataVector, Dim, Frame::Inertial>& coords,
     [[maybe_unused]] const double time) const {
-  // Set Psi and Pi to zero since they are not used by CgCollocation.
-  // Only dt<Psi> and dt<Pi> are actually used by dg_package_data.
-  // Setting to zero helps catch bugs if something unexpectedly uses these
-  // values.
-  get(*psi) = std::numeric_limits<double>::signaling_NaN();
-  get(*pi) = std::numeric_limits<double>::signaling_NaN();
-
-  // Set the time derivatives from the analytic solution.
   auto boundary_values = call_with_dynamic_type<
-      tuples::TaggedTuple<::Tags::dt<SoScalarWave::Tags::Psi>,
-                          ::Tags::dt<SoScalarWave::Tags::Pi>>,
+      tuples::TaggedTuple<SoScalarWave::Tags::Psi, SoScalarWave::Tags::Pi,
+                          SoScalarWave::Tags::Phi<Dim>>,
       tmpl::append<SoScalarWave::Solutions::all_solutions<Dim>>>(
       analytic_prescription_.get(),
       [&coords, &time](const auto* const analytic_solution_or_data) {
@@ -80,25 +69,19 @@ std::optional<std::string> DirichletAnalytic<Dim>::dg_ghost(
                           std::decay_t<decltype(*analytic_solution_or_data)>>) {
           return analytic_solution_or_data->variables(
               coords, time,
-              tmpl::list<::Tags::dt<SoScalarWave::Tags::Psi>,
-                         ::Tags::dt<SoScalarWave::Tags::Pi>>{});
-
+              tmpl::list<SoScalarWave::Tags::Psi, SoScalarWave::Tags::Pi,
+                         SoScalarWave::Tags::Phi<Dim>>{});
         } else {
           (void)time;
           return analytic_solution_or_data->variables(
-              coords, tmpl::list<::Tags::dt<SoScalarWave::Tags::Psi>,
-                                 ::Tags::dt<SoScalarWave::Tags::Pi>>{});
+              coords,
+              tmpl::list<SoScalarWave::Tags::Psi, SoScalarWave::Tags::Pi,
+                         SoScalarWave::Tags::Phi<Dim>>{});
         }
       });
-  *dt_psi = get<::Tags::dt<SoScalarWave::Tags::Psi>>(boundary_values);
-  *dt_pi = get<::Tags::dt<SoScalarWave::Tags::Pi>>(boundary_values);
-
-  // d_psi is unused at external boundary
-  for (size_t d = 0; d < Dim; ++d) {
-    d_psi->get(d) = 0.0;
-  }
-  // det_jacobian is unused at external boundary
-  get(*det_jacobian) = std::numeric_limits<double>::signaling_NaN();
+  *psi = get<SoScalarWave::Tags::Psi>(boundary_values);
+  *pi = get<SoScalarWave::Tags::Pi>(boundary_values);
+  *phi = get<SoScalarWave::Tags::Phi<Dim>>(boundary_values);
 
   return std::nullopt;
 }

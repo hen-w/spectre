@@ -42,8 +42,9 @@ struct TimeStepId;
 /// \endcond
 
 namespace evolution::dg::Actions::detail {
-template <typename System, size_t Dim, typename BoundaryCorrection,
-          typename TemporaryTags, typename... PackageDataVolumeArgs>
+template <typename System, size_t Dim, bool ComputeAuxiliary = false,
+          typename BoundaryCorrection, typename TemporaryTags,
+          typename... PackageDataVolumeArgs>
 void internal_mortar_data_impl(
     const gsl::not_null<
         DirectionMap<Dim, std::optional<Variables<tmpl::list<
@@ -77,12 +78,17 @@ void internal_mortar_data_impl(
   using flux_variables = typename System::flux_variables;
   using fluxes_tags = db::wrap_tags_in<::Tags::Flux, flux_variables,
                                        tmpl::size_t<Dim>, Frame::Inertial>;
-  using temporary_tags_for_face =
-      typename BoundaryCorrection::dg_package_data_temporary_tags;
+  using temporary_tags_for_face = tmpl::conditional_t<
+      ComputeAuxiliary,
+      typename BoundaryCorrection::dg_auxiliary_package_data_temporary_tags,
+      typename BoundaryCorrection::dg_package_data_temporary_tags>;
   using primitive_tags_for_face = typename detail::get_primitive_vars<
       System::has_primitive_and_conservative_vars>::
       template f<BoundaryCorrection>;
-  using mortar_tags_list = typename BoundaryCorrection::dg_package_field_tags;
+  using mortar_tags_list = tmpl::conditional_t<
+      ComputeAuxiliary,
+      typename BoundaryCorrection::dg_auxiliary_package_field_tags,
+      typename BoundaryCorrection::dg_package_field_tags>;
 
   using dg_package_data_projected_tags =
       tmpl::append<variables_tags, fluxes_tags, temporary_tags_for_face,
@@ -274,12 +280,21 @@ void internal_mortar_data_impl(
       packaged_data.set_data_ref(packaged_data_buffer->data(), total_face_size);
     }
 
-    detail::dg_package_data<System>(
-        make_not_null(&packaged_data), boundary_correction, fields_on_face,
-        get<evolution::dg::Tags::NormalCovector<Dim>>(
-            *normal_covector_and_magnitude_ptr->at(direction)),
-        face_mesh_velocity, dg_package_data_projected_tags{},
-        package_data_volume_args...);
+    if constexpr (ComputeAuxiliary) {
+      detail::dg_auxiliary_package_data<System>(
+          make_not_null(&packaged_data), boundary_correction, fields_on_face,
+          get<evolution::dg::Tags::NormalCovector<Dim>>(
+              *normal_covector_and_magnitude_ptr->at(direction)),
+          face_mesh_velocity, dg_package_data_projected_tags{},
+          package_data_volume_args...);
+    } else {
+      detail::dg_package_data<System>(
+          make_not_null(&packaged_data), boundary_correction, fields_on_face,
+          get<evolution::dg::Tags::NormalCovector<Dim>>(
+              *normal_covector_and_magnitude_ptr->at(direction)),
+          face_mesh_velocity, dg_package_data_projected_tags{},
+          package_data_volume_args...);
+    }
 
     // Perform step 3
     // This will only do something if
@@ -318,8 +333,9 @@ void internal_mortar_data_impl(
   }
 }
 
-template <typename System, size_t Dim, typename BoundaryCorrection,
-          typename DbTagsList, typename... PackageDataVolumeTags>
+template <typename System, size_t Dim, bool ComputeAuxiliary = false,
+          typename BoundaryCorrection, typename DbTagsList,
+          typename... PackageDataVolumeTags>
 void internal_mortar_data(
     const gsl::not_null<db::DataBox<DbTagsList>*> box,
     const gsl::not_null<gsl::span<double>*> face_temporaries,
@@ -352,7 +368,7 @@ void internal_mortar_data(
        &primitive_vars, &temporaries, &volume_fluxes](
           const auto normal_covector_and_magnitude_ptr,
           const auto mortar_data_ptr, const auto&... package_data_volume_args) {
-        detail::internal_mortar_data_impl<System>(
+        detail::internal_mortar_data_impl<System, Dim, ComputeAuxiliary>(
             normal_covector_and_magnitude_ptr, mortar_data_ptr,
             face_temporaries, packaged_data_buffer, boundary_correction,
             evolved_variables, volume_fluxes, temporaries, primitive_vars,

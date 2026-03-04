@@ -85,17 +85,14 @@ class DirichletAnalytic final : public BoundaryCondition<Dim> {
   using dg_gridless_tags = tmpl::list<::Tags::Time>;
 
   std::optional<std::string> dg_ghost(
-      const gsl::not_null<Scalar<DataVector>*> psi,
-      const gsl::not_null<Scalar<DataVector>*> pi,
-      const gsl::not_null<Scalar<DataVector>*> dt_psi,
-      const gsl::not_null<Scalar<DataVector>*> dt_pi,
-      const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> d_psi,
-      const gsl::not_null<Scalar<DataVector>*> det_jacobian,
+      gsl::not_null<Scalar<DataVector>*> psi,
+      gsl::not_null<Scalar<DataVector>*> pi,
+      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> phi,
       const std::optional<
           tnsr::I<DataVector, Dim, Frame::Inertial>>& /*face_mesh_velocity*/,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& /*normal_covector*/,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& coords,
-      [[maybe_unused]] const double time) const;
+      [[maybe_unused]] double time) const;
 
  private:
   std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription_;

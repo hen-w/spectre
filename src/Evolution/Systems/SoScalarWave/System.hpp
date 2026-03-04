@@ -31,13 +31,11 @@ struct System {
   static constexpr bool is_in_flux_conservative_form = false;
   static constexpr bool has_primitive_and_conservative_vars = false;
   static constexpr size_t volume_dim = Dim;
-  static constexpr bool use_cg_collocation_scheme = true;
 
-  using variables_tag = ::Tags::Variables<tmpl::list<Tags::Psi, Tags::Pi>>;
+  using variables_tag =
+      ::Tags::Variables<tmpl::list<Tags::Psi, Tags::Pi, Tags::Phi<Dim>>>;
   using flux_variables = tmpl::list<>;
-  // We will compute the first and second derivatives of
-  // Psi manually instead of using the DG infrastructure
-  using gradient_variables = tmpl::list<>;
+  using gradient_variables = tmpl::list<Tags::Psi, Tags::Pi, Tags::Phi<Dim>>;
 
   using compute_volume_time_derivative_terms = TimeDerivative<Dim>;
 };

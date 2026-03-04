@@ -4,7 +4,7 @@
 spectre_target_sources(
   ${LIBRARY}
   PRIVATE
-  CgCollocation.cpp
+  LaxFriedrichs.cpp
   )
 
 spectre_target_headers(
@@ -12,5 +12,5 @@ spectre_target_headers(
   INCLUDE_DIRECTORY ${CMAKE_SOURCE_DIR}/src
   HEADERS
   Factory.hpp
-  CgCollocation.hpp
+  LaxFriedrichs.hpp
   )
