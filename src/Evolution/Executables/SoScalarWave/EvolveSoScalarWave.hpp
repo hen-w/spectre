@@ -30,6 +30,7 @@
 #include "Evolution/Systems/SoScalarWave/BoundaryCorrections/Factory.hpp"
 #include "Evolution/Systems/SoScalarWave/System.hpp"
 #include "Evolution/Systems/SoScalarWave/UpdateAuxiliaryVariables.hpp"
+#include "Evolution/Systems/SoScalarWave/Actions/OverwriteExternalBoundaryDt.hpp"
 #include "Evolution/Tags/Filter.hpp"
 #include "IO/Observer/Actions/RegisterEvents.hpp"
 #include "IO/Observer/Helpers.hpp"
@@ -245,6 +246,9 @@ struct EvolutionMetavars {
           tmpl::list<
               evolution::dg::Actions::ApplyBoundaryCorrectionsToTimeDerivative<
                   volume_dim, use_dg_element_collection>,
+              Actions::MutateApply<
+                  SoScalarWave::Actions::OverwriteExternalBoundaryDt<
+                      volume_dim>>,
               Actions::MutateApply<RecordTimeStepperData<system>>,
               evolution::Actions::RunEventsAndDenseTriggers<tmpl::list<>>,
               Actions::MutateApply<UpdateU<system, local_time_stepping>>>>,
