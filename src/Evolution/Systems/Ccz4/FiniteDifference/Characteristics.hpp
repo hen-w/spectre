@@ -246,7 +246,7 @@ struct CharacteristicSpeedsCompute : Tags::CharacteristicSpeeds<DataVector>,
  * = b^\perp_i\ + V_\Gamma^\pm\hat{\Gamma}_i^\perp +
  * V_\beta^\pm\partial_n\beta^\perp_i. \f]
  * where $V_\Gamma^\pm=\beta^n\phi^2
- * V_\beta^\pm = \beta^n\phi^2 \left( \frac{\beta^n}{2f} \pm
+ * V_\beta^\pm = \beta^n\phi^2 \left( \frac{\beta^n}{2f} \mp
  * \frac{\sqrt{4f+(\beta^n\phi)^2}}{2f\phi} \right)$
  *
  * u_scalar5_plus/minus:
