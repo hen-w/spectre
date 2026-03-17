@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "DataStructures/DataBox/Protocols/Mutator.hpp"
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
@@ -17,7 +19,8 @@ namespace Ccz4::fd {
 /*!
  * \brief Zero-initialize the characteristic field and speed Variables tags in
  * the DataBox so they can be filled during time derivative computation and
- * observed.
+ * observed. Also default-initialize the InitialBoundaryCharacteristicFields
+ * tag to std::nullopt (will be lazily filled on first CRPBC encounter).
  */
 struct InitializeCharacteristicObserverTags
     : tt::ConformsTo<db::protocols::Mutator> {
@@ -27,7 +30,8 @@ struct InitializeCharacteristicObserverTags
       Tags::ObserverRadiationCharacteristicFieldsTag<3, Frame::Inertial>,
       Tags::ObserverCharacteristicSpeedsTag,
       Tags::ObserverConstraintCharacteristicSpeedsTag,
-      Tags::ObserverRadiationCharacteristicSpeedsTag>;
+      Tags::ObserverRadiationCharacteristicSpeedsTag,
+      Tags::InitialBoundaryCharacteristicFields<3, Frame::Inertial>>;
   using argument_tags = tmpl::list<gr::Tags::Lapse<DataVector>>;
 
   static void apply(
@@ -51,6 +55,9 @@ struct InitializeCharacteristicObserverTags
       const gsl::not_null<
           Variables<Tags::radiation_characteristic_speeds_tags_list>*>
           radiation_char_speeds,
+      const gsl::not_null<typename Tags::InitialBoundaryCharacteristicFields<
+          3, Frame::Inertial>::type*>
+          initial_boundary_char_fields,
       const Scalar<DataVector>& lapse) {
     const size_t num_pts = get(lapse).size();
     char_fields->initialize(num_pts, 0.0);
@@ -59,6 +66,7 @@ struct InitializeCharacteristicObserverTags
     char_speeds->initialize(num_pts, 0.0);
     constraint_char_speeds->initialize(num_pts, 0.0);
     radiation_char_speeds->initialize(num_pts, 0.0);
+    *initial_boundary_char_fields = std::nullopt;
   }
 };
 }  // namespace Ccz4::fd

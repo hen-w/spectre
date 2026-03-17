@@ -4,9 +4,11 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <string>
 
 #include "DataStructures/DataBox/Tag.hpp"
+#include "DataStructures/Variables.hpp"
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
 #include "DataStructures/VariablesTag.hpp"
@@ -323,6 +325,16 @@ struct CharacteristicFields : db::SimpleTag {
       UScalar2Plus<DataType>, UScalar2Minus<DataType>, UScalar3Plus<DataType>,
       UScalar3Minus<DataType>, UScalar4Plus<DataType>, UScalar4Minus<DataType>,
       UScalar5Plus<DataType>, UScalar5Minus<DataType>>>;
+};
+
+/// \brief Tag to store the initial characteristic fields at the outermost
+/// boundary for use as target values in CRPBC gauge penalty terms.
+/// The optional is empty until the first time step with CRPBC, at which
+/// point it is filled and cached.
+template <size_t Dim, typename Frame>
+struct InitialBoundaryCharacteristicFields : db::SimpleTag {
+  using type = std::optional<
+      typename CharacteristicFields<DataVector, Dim, Frame>::type>;
 };
 
 template <typename DataType, size_t Dim, typename Frame>

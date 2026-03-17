@@ -1171,8 +1171,12 @@ struct SoTimeDerivative {
                               ConstraintsRadiationPreserving*>(
                  external_bcs.at(Direction<Dim>::upper_zeta()).get()) !=
              nullptr) {
-      db::mutate<dt_variables_tag>(
-          [&](const auto dt_vars_ptr, const auto& inertial_coords,
+      db::mutate<dt_variables_tag,
+                 Tags::InitialBoundaryCharacteristicFields<Dim,
+                                                           Frame::Inertial>>(
+          [&](const auto dt_vars_ptr,
+              const auto initial_boundary_char_fields_ptr,
+              const auto& inertial_coords,
               const auto& evolved_vars,
               const auto& cell_centered_logical_to_inertial_inv_jacobian,
               const auto& spatial_z4_constraint_up) {
@@ -1459,6 +1463,30 @@ struct SoTimeDerivative {
                 outermost_lapse, outermost_shift, outermost_conformal_factor, f,
                 unit_normal_one_form);
 
+            // Compute current characteristic fields at the outermost boundary
+            const auto& outermost_gamma_hat =
+                get<::Ccz4::Tags::GammaHat<DataVector, Dim>>(
+                    outermost_evolved_vars);
+            const auto& outermost_auxiliary_shift_b =
+                get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, Dim>>(
+                    outermost_evolved_vars);
+            const auto current_char_fields = characteristic_fields(
+                unit_normal_one_form, outermost_conformal_metric,
+                outermost_conformal_factor, outermost_lapse, outermost_shift,
+                outermost_trace_extrinsic_curvature, outermost_a_tilde,
+                outermost_theta, outermost_gamma_hat,
+                outermost_auxiliary_shift_b,
+                outermost_d_conformal_metric, outermost_d_conformal_factor,
+                outermost_d_lapse, outermost_d_shift, f);
+
+            // On first CRPBC encounter, cache the initial characteristic
+            // fields at the boundary as target values for gauge penalty terms
+            if (not initial_boundary_char_fields_ptr->has_value()) {
+              *initial_boundary_char_fields_ptr = current_char_fields;
+            }
+            const auto& initial_char_fields =
+                initial_boundary_char_fields_ptr->value();
+
             // Loop over outer boundary points, check characteristic speeds are
             // valid, and modify the evolution of approximately zero speed modes
             for (size_t i = 0; i < num_face_pts; ++i) {
@@ -1482,44 +1510,146 @@ struct SoTimeDerivative {
                     << ", char_speeds[14] = " << char_speeds[14][i]
                     << ", char_speeds[15] = " << char_speeds[15][i]);
               }
-              // Modify the evolution of approximately zero speed modes
-              if (char_speeds[2][i] < 0.0) {
-                auto& dt_u_vector1_zero = get<::Tags::dt<
-                    Tags::UVector1Zero<DataVector, Dim, Frame::Inertial>>>(
-                    dt_char_fields);
-                for (size_t j = 0; j < Dim; ++j) {
-                  (dt_u_vector1_zero.get(j))[i] = 0.0;
+            }
+
+            // Compute the radial grid spacing and penalty strength for
+            // gauge and constraint penalty terms
+            tnsr::I<DataVector, Dim> second_outermost_inertial_coords;
+            for (size_t i = 0; i < Dim; ++i) {
+              make_const_view<DataVector>(
+                  make_not_null(&second_outermost_inertial_coords.get(i)),
+                  inertial_coords.get(i),
+                  (subcell_mesh.extents(2) - 2) * num_face_pts, num_face_pts);
+            }
+            Scalar<DataVector> outermost_radial_grid_spacing;
+            get(outermost_radial_grid_spacing) =
+                sqrt(square(outermost_inertial_coords.get(0)) +
+                     square(outermost_inertial_coords.get(1)) +
+                     square(outermost_inertial_coords.get(2))) -
+                sqrt(square(second_outermost_inertial_coords.get(0)) +
+                     square(second_outermost_inertial_coords.get(1)) +
+                     square(second_outermost_inertial_coords.get(2)));
+            Scalar<DataVector> penalty_strength;
+            const DataVector inv_radial_grid_spacing =
+                1.0 / get(outermost_radial_grid_spacing);
+            // Constraint penalty uses speed index 4 (UVector2Minus speed)
+            get(penalty_strength) = abs(char_speeds[4]) * inv_radial_grid_spacing;
+
+            // Apply gauge penalty terms to approximately zero-speed modes:
+            // dt_U = -penalty * (U_current - U_initial) instead of dt_U = 0
+            // Each mode uses its own characteristic speed for penalty strength.
+            {
+              // UVector1Zero: speed index 2 (-β^n)
+              const DataVector penalty_vector1_zero =
+                  abs(char_speeds[2]) * inv_radial_grid_spacing;
+              auto& dt_u_vector1_zero = get<::Tags::dt<
+                  Tags::UVector1Zero<DataVector, Dim, Frame::Inertial>>>(
+                  dt_char_fields);
+              const auto& current_u_vector1_zero =
+                  get<Tags::UVector1Zero<DataVector, Dim, Frame::Inertial>>(
+                      current_char_fields);
+              const auto& initial_u_vector1_zero =
+                  get<Tags::UVector1Zero<DataVector, Dim, Frame::Inertial>>(
+                      initial_char_fields);
+              for (size_t i = 0; i < num_face_pts; ++i) {
+                if (char_speeds[2][i] < 0.0) {
+                  for (size_t j = 0; j < Dim; ++j) {
+                    (dt_u_vector1_zero.get(j))[i] =
+                        -penalty_vector1_zero[i] *
+                        (current_u_vector1_zero.get(j)[i] -
+                         initial_u_vector1_zero.get(j)[i]);
+                  }
                 }
               }
-              if (char_speeds[7][i] < 0.0) {
-                auto& dt_u_scalar1_zero =
-                    get<::Tags::dt<Tags::UScalar1Zero<DataVector>>>(
-                        dt_char_fields);
-                get(dt_u_scalar1_zero)[i] = 0.0;
+
+              // UScalar1Zero: speed index 7 (-β^n)
+              const DataVector penalty_scalar1_zero =
+                  abs(char_speeds[7]) * inv_radial_grid_spacing;
+              auto& dt_u_scalar1_zero =
+                  get<::Tags::dt<Tags::UScalar1Zero<DataVector>>>(
+                      dt_char_fields);
+              const auto& current_u_scalar1_zero =
+                  get<Tags::UScalar1Zero<DataVector>>(current_char_fields);
+              const auto& initial_u_scalar1_zero =
+                  get<Tags::UScalar1Zero<DataVector>>(initial_char_fields);
+              for (size_t i = 0; i < num_face_pts; ++i) {
+                if (char_speeds[7][i] < 0.0) {
+                  get(dt_u_scalar1_zero)[i] =
+                      -penalty_scalar1_zero[i] *
+                      (get(current_u_scalar1_zero)[i] -
+                       get(initial_u_scalar1_zero)[i]);
+                }
               }
             }
 
-            // Set the evolution of all incoming modes except UTensorMius,
-            // UVector2Minus, and UScalar2Minus to zero, which are reserved to
-            // impose constraint radiation preserving BCs.
-            auto& dt_u_vector3_minus = get<::Tags::dt<
-                Tags::UVector3Minus<DataVector, Dim, Frame::Inertial>>>(
-                dt_char_fields);
-            for (size_t i = 0; i < Dim; ++i) {
-              dt_u_vector3_minus.get(i) = DataVector(num_face_pts, 0.0);
+            // Apply gauge penalty terms to incoming minus-speed modes:
+            // dt_U = -penalty * (U_current - U_initial) instead of dt_U = 0
+            // Each mode uses its own characteristic speed for penalty strength.
+            {
+              // UVector3Minus: speed index 6 (λ_-)
+              const DataVector penalty_vector3_minus =
+                  abs(char_speeds[6]) * inv_radial_grid_spacing;
+              auto& dt_u_vector3_minus = get<::Tags::dt<
+                  Tags::UVector3Minus<DataVector, Dim, Frame::Inertial>>>(
+                  dt_char_fields);
+              const auto& current_u_vector3_minus =
+                  get<Tags::UVector3Minus<DataVector, Dim, Frame::Inertial>>(
+                      current_char_fields);
+              const auto& initial_u_vector3_minus =
+                  get<Tags::UVector3Minus<DataVector, Dim, Frame::Inertial>>(
+                      initial_char_fields);
+              for (size_t i = 0; i < Dim; ++i) {
+                dt_u_vector3_minus.get(i) =
+                    -penalty_vector3_minus *
+                    (current_u_vector3_minus.get(i) -
+                     initial_u_vector3_minus.get(i));
+              }
+
+              // UScalar3Minus: speed index 11 (-(α+β^n))
+              const DataVector penalty_scalar3_minus =
+                  abs(char_speeds[11]) * inv_radial_grid_spacing;
+              auto& dt_u_scalar3_minus =
+                  get<::Tags::dt<Tags::UScalar3Minus<DataVector>>>(
+                      dt_char_fields);
+              const auto& current_u_scalar3_minus =
+                  get<Tags::UScalar3Minus<DataVector>>(current_char_fields);
+              const auto& initial_u_scalar3_minus =
+                  get<Tags::UScalar3Minus<DataVector>>(initial_char_fields);
+              get(dt_u_scalar3_minus) =
+                  -penalty_scalar3_minus *
+                  (get(current_u_scalar3_minus) -
+                   get(initial_u_scalar3_minus));
+
+              // UScalar4Minus: speed index 13 (-(√(2α)+β^n))
+              const DataVector penalty_scalar4_minus =
+                  abs(char_speeds[13]) * inv_radial_grid_spacing;
+              auto& dt_u_scalar4_minus =
+                  get<::Tags::dt<Tags::UScalar4Minus<DataVector>>>(
+                      dt_char_fields);
+              const auto& current_u_scalar4_minus =
+                  get<Tags::UScalar4Minus<DataVector>>(current_char_fields);
+              const auto& initial_u_scalar4_minus =
+                  get<Tags::UScalar4Minus<DataVector>>(initial_char_fields);
+              get(dt_u_scalar4_minus) =
+                  -penalty_scalar4_minus *
+                  (get(current_u_scalar4_minus) -
+                   get(initial_u_scalar4_minus));
+
+              // UScalar5Minus: speed index 15 (μ_-)
+              const DataVector penalty_scalar5_minus =
+                  abs(char_speeds[15]) * inv_radial_grid_spacing;
+              auto& dt_u_scalar5_minus =
+                  get<::Tags::dt<Tags::UScalar5Minus<DataVector>>>(
+                      dt_char_fields);
+              const auto& current_u_scalar5_minus =
+                  get<Tags::UScalar5Minus<DataVector>>(current_char_fields);
+              const auto& initial_u_scalar5_minus =
+                  get<Tags::UScalar5Minus<DataVector>>(initial_char_fields);
+              get(dt_u_scalar5_minus) =
+                  -penalty_scalar5_minus *
+                  (get(current_u_scalar5_minus) -
+                   get(initial_u_scalar5_minus));
             }
-            auto& dt_u_scalar3_minus =
-                get<::Tags::dt<Tags::UScalar3Minus<DataVector>>>(
-                    dt_char_fields);
-            get(dt_u_scalar3_minus) = DataVector(num_face_pts, 0.0);
-            auto& dt_u_scalar4_minus =
-                get<::Tags::dt<Tags::UScalar4Minus<DataVector>>>(
-                    dt_char_fields);
-            get(dt_u_scalar4_minus) = DataVector(num_face_pts, 0.0);
-            auto& dt_u_scalar5_minus =
-                get<::Tags::dt<Tags::UScalar5Minus<DataVector>>>(
-                    dt_char_fields);
-            get(dt_u_scalar5_minus) = DataVector(num_face_pts, 0.0);
 
             // Compute the constraint characteristics
             tnsr::I<DataVector, Dim> outermost_spatial_z4_constraint_up;
@@ -1538,27 +1668,6 @@ struct SoTimeDerivative {
             const auto& c_vector_zero =
                 get<Tags::CVectorZero<DataVector, Dim, Frame::Inertial>>(
                     constraint_char_fields);
-
-            // Compute the radial grid spacing to derive the penalty strength
-            // for UVector2Minus and UScalar2Minus.
-            tnsr::I<DataVector, Dim> second_outermost_inertial_coords;
-            for (size_t i = 0; i < Dim; ++i) {
-              make_const_view<DataVector>(
-                  make_not_null(&second_outermost_inertial_coords.get(i)),
-                  inertial_coords.get(i),
-                  (subcell_mesh.extents(2) - 2) * num_face_pts, num_face_pts);
-            }
-            Scalar<DataVector> outermost_radial_grid_spacing;
-            get(outermost_radial_grid_spacing) =
-                sqrt(square(outermost_inertial_coords.get(0)) +
-                     square(outermost_inertial_coords.get(1)) +
-                     square(outermost_inertial_coords.get(2))) -
-                sqrt(square(second_outermost_inertial_coords.get(0)) +
-                     square(second_outermost_inertial_coords.get(1)) +
-                     square(second_outermost_inertial_coords.get(2)));
-            Scalar<DataVector> penalty_strength;
-            get(penalty_strength) =
-                abs(char_speeds[4]) / get(outermost_radial_grid_spacing);
 
             // Modify the evolution of UVector2Minus and UScalar2Minus to
             // impose constraint preserving BCs. We use the fact below that

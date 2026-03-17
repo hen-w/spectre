@@ -4,6 +4,7 @@
 #include "Framework/TestingFramework.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <utility>
 
 #include "DataStructures/DataBox/PrefixHelpers.hpp"
@@ -165,6 +166,8 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
       ::Ccz4::fd::Tags::ObserverCharacteristicSpeedsTag,
       ::Ccz4::fd::Tags::ObserverConstraintCharacteristicSpeedsTag,
       ::Ccz4::fd::Tags::ObserverRadiationCharacteristicSpeedsTag,
+      ::Ccz4::fd::Tags::InitialBoundaryCharacteristicFields<SpatialDim,
+                                                             Frame::Inertial>,
       dt_variables_tag,
       evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
@@ -194,6 +197,8 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
           subcell_mesh.number_of_grid_points(), 0.0},
       Variables<::Ccz4::fd::Tags::radiation_characteristic_speeds_tags_list>{
           subcell_mesh.number_of_grid_points(), 0.0},
+      std::optional<Variables<::Ccz4::fd::Tags::characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>>{std::nullopt},
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -332,6 +337,8 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
       ::Ccz4::fd::Tags::ObserverCharacteristicSpeedsTag,
       ::Ccz4::fd::Tags::ObserverConstraintCharacteristicSpeedsTag,
       ::Ccz4::fd::Tags::ObserverRadiationCharacteristicSpeedsTag,
+      ::Ccz4::fd::Tags::InitialBoundaryCharacteristicFields<SpatialDim,
+                                                             Frame::Inertial>,
       dt_variables_tag,
       evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
@@ -361,6 +368,8 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
           subcell_mesh.number_of_grid_points(), 0.0},
       Variables<::Ccz4::fd::Tags::radiation_characteristic_speeds_tags_list>{
           subcell_mesh.number_of_grid_points(), 0.0},
+      std::optional<Variables<::Ccz4::fd::Tags::characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>>{std::nullopt},
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -524,6 +533,8 @@ void test_gauge_plane_wave(
       ::Ccz4::fd::Tags::ObserverCharacteristicSpeedsTag,
       ::Ccz4::fd::Tags::ObserverConstraintCharacteristicSpeedsTag,
       ::Ccz4::fd::Tags::ObserverRadiationCharacteristicSpeedsTag,
+      ::Ccz4::fd::Tags::InitialBoundaryCharacteristicFields<SpatialDim,
+                                                             Frame::Inertial>,
       dt_variables_tag,
       evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
@@ -553,6 +564,8 @@ void test_gauge_plane_wave(
           subcell_mesh.number_of_grid_points(), 0.0},
       Variables<::Ccz4::fd::Tags::radiation_characteristic_speeds_tags_list>{
           subcell_mesh.number_of_grid_points(), 0.0},
+      std::optional<Variables<::Ccz4::fd::Tags::characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>>{std::nullopt},
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -902,6 +915,8 @@ void test_constraint_radiation_preserving_bc(
         ::Ccz4::fd::Tags::ObserverCharacteristicSpeedsTag,
         ::Ccz4::fd::Tags::ObserverConstraintCharacteristicSpeedsTag,
         ::Ccz4::fd::Tags::ObserverRadiationCharacteristicSpeedsTag,
+        ::Ccz4::fd::Tags::InitialBoundaryCharacteristicFields<SpatialDim,
+                                                               Frame::Inertial>,
         dt_variables_tag,
         evolution::dg::subcell::Tags::Mesh<SpatialDim>,
         evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
@@ -935,6 +950,9 @@ void test_constraint_radiation_preserving_bc(
             subcell_mesh.number_of_grid_points(), 0.0},
         Variables<::Ccz4::fd::Tags::radiation_characteristic_speeds_tags_list>{
             subcell_mesh.number_of_grid_points(), 0.0},
+        std::optional<
+            Variables<::Ccz4::fd::Tags::characteristic_fields_tags_list<
+                DataVector, SpatialDim, Frame::Inertial>>>{std::nullopt},
         Variables<typename dt_variables_tag::tags_list>{
             subcell_mesh.number_of_grid_points()},
         subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -1019,6 +1037,8 @@ void test_constraint_radiation_preserving_bc(
         ::Ccz4::fd::Tags::ObserverCharacteristicSpeedsTag,
         ::Ccz4::fd::Tags::ObserverConstraintCharacteristicSpeedsTag,
         ::Ccz4::fd::Tags::ObserverRadiationCharacteristicSpeedsTag,
+        ::Ccz4::fd::Tags::InitialBoundaryCharacteristicFields<SpatialDim,
+                                                               Frame::Inertial>,
         dt_variables_tag,
         evolution::dg::subcell::Tags::Mesh<SpatialDim>,
         evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
@@ -1052,6 +1072,9 @@ void test_constraint_radiation_preserving_bc(
             subcell_mesh.number_of_grid_points(), 0.0},
         Variables<::Ccz4::fd::Tags::radiation_characteristic_speeds_tags_list>{
             subcell_mesh.number_of_grid_points(), 0.0},
+        std::optional<
+            Variables<::Ccz4::fd::Tags::characteristic_fields_tags_list<
+                DataVector, SpatialDim, Frame::Inertial>>>{std::nullopt},
         Variables<typename dt_variables_tag::tags_list>{
             subcell_mesh.number_of_grid_points()},
         subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -1628,6 +1651,8 @@ void test_sommerfeld(
       ::Ccz4::fd::Tags::ObserverCharacteristicSpeedsTag,
       ::Ccz4::fd::Tags::ObserverConstraintCharacteristicSpeedsTag,
       ::Ccz4::fd::Tags::ObserverRadiationCharacteristicSpeedsTag,
+      ::Ccz4::fd::Tags::InitialBoundaryCharacteristicFields<SpatialDim,
+                                                             Frame::Inertial>,
       dt_variables_tag,
       evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
@@ -1662,6 +1687,8 @@ void test_sommerfeld(
           subcell_mesh.number_of_grid_points(), 0.0},
       Variables<::Ccz4::fd::Tags::radiation_characteristic_speeds_tags_list>{
           subcell_mesh.number_of_grid_points(), 0.0},
+      std::optional<Variables<::Ccz4::fd::Tags::characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>>{std::nullopt},
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -1941,6 +1968,8 @@ void test_dirichlet_analytic_bc(const bool evolve_lapse_and_shift) {
       ::Ccz4::fd::Tags::ObserverCharacteristicSpeedsTag,
       ::Ccz4::fd::Tags::ObserverConstraintCharacteristicSpeedsTag,
       ::Ccz4::fd::Tags::ObserverRadiationCharacteristicSpeedsTag,
+      ::Ccz4::fd::Tags::InitialBoundaryCharacteristicFields<SpatialDim,
+                                                             Frame::Inertial>,
       dt_variables_tag,
       evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
@@ -1975,6 +2004,8 @@ void test_dirichlet_analytic_bc(const bool evolve_lapse_and_shift) {
           subcell_mesh.number_of_grid_points(), 0.0},
       Variables<::Ccz4::fd::Tags::radiation_characteristic_speeds_tags_list>{
           subcell_mesh.number_of_grid_points(), 0.0},
+      std::optional<Variables<::Ccz4::fd::Tags::characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>>{std::nullopt},
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -2033,6 +2064,7 @@ void test() {
   test_constraint_radiation_preserving_bc(
       true, std::make_unique<
                 Ccz4::BoundaryConditions::ConstraintsRadiationPreserving>(4));
+#ifdef SPECTRE_DEBUG
   CHECK_THROWS_WITH(
       test_constraint_radiation_preserving_bc(
           false,
@@ -2040,6 +2072,7 @@ void test() {
               Ccz4::BoundaryConditions::ConstraintsRadiationPreserving>(4)),
       Catch::Matchers::ContainsSubstring(
           "ConstraintsRadiationPreserving BC is not implemented"));
+#endif
 }
 }  // namespace
 
