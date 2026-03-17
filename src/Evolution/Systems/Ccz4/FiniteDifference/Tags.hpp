@@ -9,6 +9,7 @@
 #include "DataStructures/DataBox/Tag.hpp"
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
+#include "DataStructures/VariablesTag.hpp"
 #include "Evolution/DgSubcell/Tags/SubcellOptions.hpp"
 #include "Evolution/DgSubcell/Tags/SubcellSolver.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Reconstructor.hpp"
@@ -201,6 +202,37 @@ struct CharacteristicSpeeds : db::SimpleTag {
   using type = std::array<DataType, 16>;
 };
 
+/// Individual Scalar tags for characteristic speeds (for observation).
+/// See Ccz4::fd::characteristic_speeds() for the mapping of indices to
+/// physical speeds.
+template <typename DataType, size_t Index>
+struct CharSpeed : db::SimpleTag {
+  using type = Scalar<DataType>;
+  static std::string name() {
+    return "CharSpeed" + std::to_string(Index);
+  }
+};
+
+/// Individual Scalar tags for constraint characteristic speeds.
+/// Index 0: zero speed, 1: +alpha-beta^n, 2: -alpha-beta^n
+template <typename DataType, size_t Index>
+struct ConstraintCharSpeed : db::SimpleTag {
+  using type = Scalar<DataType>;
+  static std::string name() {
+    return "ConstraintCharSpeed" + std::to_string(Index);
+  }
+};
+
+/// Individual Scalar tags for radiation characteristic speeds.
+/// Index 0: +alpha-beta^n, 1: -alpha-beta^n
+template <typename DataType, size_t Index>
+struct RadiationCharSpeed : db::SimpleTag {
+  using type = Scalar<DataType>;
+  static std::string name() {
+    return "RadiationCharSpeed" + std::to_string(Index);
+  }
+};
+
 template <typename DataType, size_t Dim, typename Frame>
 struct UTensorPlus : db::SimpleTag {
   using type = tnsr::ii<DataType, Dim, Frame>;
@@ -324,5 +356,70 @@ struct EvolvedSpaceFromCharacteristicFields : db::SimpleTag {
                  ::Ccz4::Tags::GammaHat<DataType, Dim, Frame>,
                  ::Ccz4::Tags::AuxiliaryShiftB<DataType, Dim, Frame>>>;
 };
+
+/// Type aliases for the tag lists used by characteristic field Variables.
+/// These are used with ::Tags::Variables<...> to create DataBox-compatible
+/// parent tags whose subitems are the individual characteristic tensors.
+template <typename DataType, size_t Dim, typename Frame>
+using characteristic_fields_tags_list = tmpl::list<
+    UTensorPlus<DataType, Dim, Frame>, UTensorMinus<DataType, Dim, Frame>,
+    UVector1Zero<DataType, Dim, Frame>, UVector2Plus<DataType, Dim, Frame>,
+    UVector2Minus<DataType, Dim, Frame>, UVector3Plus<DataType, Dim, Frame>,
+    UVector3Minus<DataType, Dim, Frame>, UScalar1Zero<DataType>,
+    UScalar2Plus<DataType>, UScalar2Minus<DataType>, UScalar3Plus<DataType>,
+    UScalar3Minus<DataType>, UScalar4Plus<DataType>, UScalar4Minus<DataType>,
+    UScalar5Plus<DataType>, UScalar5Minus<DataType>>;
+
+template <typename DataType, size_t Dim, typename Frame>
+using constraint_characteristic_fields_tags_list =
+    tmpl::list<CVectorZero<DataType, Dim, Frame>, CScalarPlus<DataType>,
+               CScalarMinus<DataType>>;
+
+template <typename DataType, size_t Dim, typename Frame>
+using radiation_characteristic_fields_tags_list =
+    tmpl::list<CTensorPlus<DataType, Dim, Frame>,
+               CTensorMinus<DataType, Dim, Frame>>;
+
+/// Observer-friendly parent tags (derive from ::Tags::Variables so that
+/// subitems machinery expands them in the DataBox).
+template <size_t Dim, typename Frame>
+using ObserverCharacteristicFieldsTag =
+    ::Tags::Variables<characteristic_fields_tags_list<DataVector, Dim, Frame>>;
+
+template <size_t Dim, typename Frame>
+using ObserverConstraintCharacteristicFieldsTag = ::Tags::Variables<
+    constraint_characteristic_fields_tags_list<DataVector, Dim, Frame>>;
+
+template <size_t Dim, typename Frame>
+using ObserverRadiationCharacteristicFieldsTag = ::Tags::Variables<
+    radiation_characteristic_fields_tags_list<DataVector, Dim, Frame>>;
+
+/// Tag lists for characteristic speeds (individual Scalar tags).
+using characteristic_speeds_tags_list = tmpl::list<
+    CharSpeed<DataVector, 0>, CharSpeed<DataVector, 1>,
+    CharSpeed<DataVector, 2>, CharSpeed<DataVector, 3>,
+    CharSpeed<DataVector, 4>, CharSpeed<DataVector, 5>,
+    CharSpeed<DataVector, 6>, CharSpeed<DataVector, 7>,
+    CharSpeed<DataVector, 8>, CharSpeed<DataVector, 9>,
+    CharSpeed<DataVector, 10>, CharSpeed<DataVector, 11>,
+    CharSpeed<DataVector, 12>, CharSpeed<DataVector, 13>,
+    CharSpeed<DataVector, 14>, CharSpeed<DataVector, 15>>;
+
+using constraint_characteristic_speeds_tags_list = tmpl::list<
+    ConstraintCharSpeed<DataVector, 0>, ConstraintCharSpeed<DataVector, 1>,
+    ConstraintCharSpeed<DataVector, 2>>;
+
+using radiation_characteristic_speeds_tags_list = tmpl::list<
+    RadiationCharSpeed<DataVector, 0>, RadiationCharSpeed<DataVector, 1>>;
+
+using ObserverCharacteristicSpeedsTag =
+    ::Tags::Variables<characteristic_speeds_tags_list>;
+
+using ObserverConstraintCharacteristicSpeedsTag =
+    ::Tags::Variables<constraint_characteristic_speeds_tags_list>;
+
+using ObserverRadiationCharacteristicSpeedsTag =
+    ::Tags::Variables<radiation_characteristic_speeds_tags_list>;
+
 }  // namespace Tags
 }  // namespace Ccz4::fd

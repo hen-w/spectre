@@ -754,10 +754,33 @@ struct SoTimeDerivative {
     // variables
     using dt_variables_tag = db::add_tag_prefix<::Tags::dt, evolved_vars_tag>;
 
-    db::mutate<dt_variables_tag,
-               ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, Dim>>(
+    // Extract inertial coordinates before db::mutate (cannot db::get inside
+    // mutate)
+    const auto& inertial_coords_for_char =
+        db::get<evolution::dg::subcell::Tags::Coordinates<Dim,
+                                                          Frame::Inertial>>(
+            *box);
+
+    db::mutate<
+        dt_variables_tag,
+        ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, Dim>,
+        ::Ccz4::fd::Tags::ObserverCharacteristicFieldsTag<Dim,
+                                                           Frame::Inertial>,
+        ::Ccz4::fd::Tags::ObserverConstraintCharacteristicFieldsTag<
+            Dim, Frame::Inertial>,
+        ::Ccz4::fd::Tags::ObserverRadiationCharacteristicFieldsTag<
+            Dim, Frame::Inertial>,
+        ::Ccz4::fd::Tags::ObserverCharacteristicSpeedsTag,
+        ::Ccz4::fd::Tags::ObserverConstraintCharacteristicSpeedsTag,
+        ::Ccz4::fd::Tags::ObserverRadiationCharacteristicSpeedsTag>(
         [&](const auto dt_vars_ptr,
-            const auto upper_spatial_z4_constraint_ptr) {
+            const auto upper_spatial_z4_constraint_ptr,
+            const auto char_fields_ptr,
+            const auto constraint_char_fields_ptr,
+            const auto radiation_char_fields_ptr,
+            const auto char_speeds_ptr,
+            const auto constraint_char_speeds_ptr,
+            const auto radiation_char_speeds_ptr) {
           // resize here
           dt_vars_ptr->initialize(subcell_mesh.number_of_grid_points());
           auto& [conformal_factor_squared, det_conformal_spatial_metric,
@@ -911,6 +934,112 @@ struct SoTimeDerivative {
                                 tmpl::size_t<Dim>, Frame::Inertial>>(
                   cell_centered_Ccz4_derivs),
               shifting_shift, evolve_lapse_and_shift);
+
+          // Compute characteristic fields for observation
+          // Compute spatial metric: gamma_ij = tilde_gamma_ij / phi^2
+          const auto& conformal_spatial_metric =
+              get<::Ccz4::Tags::ConformalMetric<DataVector, Dim>>(evolved_vars);
+          tnsr::ii<DataVector, Dim> spatial_metric_for_char;
+          ::tenex::evaluate<ti::i, ti::j>(
+              make_not_null(&spatial_metric_for_char),
+              conformal_spatial_metric(ti::i, ti::j) /
+                  conformal_factor_squared());
+
+          // Compute radial unit normal from inertial coordinates
+          tnsr::I<DataVector, Dim> unit_normal_vector =
+              inertial_coords_for_char;
+          Scalar<DataVector> magnitude;
+          ::tenex::evaluate(
+              make_not_null(&magnitude),
+              sqrt(spatial_metric_for_char(ti::k, ti::l) *
+                   unit_normal_vector(ti::K) * unit_normal_vector(ti::L)));
+          for (size_t d = 0; d < Dim; ++d) {
+            unit_normal_vector.get(d) /= get(magnitude);
+          }
+          const tnsr::i<DataVector, Dim> unit_normal_one_form =
+              raise_or_lower_index(unit_normal_vector, spatial_metric_for_char);
+
+          // Main characteristic fields
+          characteristic_fields(
+              char_fields_ptr, unit_normal_one_form,
+              conformal_spatial_metric,
+              get<::Ccz4::Tags::ConformalFactor<DataVector>>(evolved_vars),
+              get<gr::Tags::Lapse<DataVector>>(evolved_vars),
+              get<gr::Tags::Shift<DataVector, Dim>>(evolved_vars),
+              get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(evolved_vars),
+              get<::Ccz4::Tags::ATilde<DataVector, Dim>>(evolved_vars),
+              get<::Ccz4::Tags::Theta<DataVector>>(evolved_vars),
+              get<::Ccz4::Tags::GammaHat<DataVector, Dim>>(evolved_vars),
+              get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, Dim>>(evolved_vars),
+              d_spatial_conformal_metric, d_conformal_factor, d_lapse, d_shift,
+              f);
+
+          // Constraint characteristic fields
+          constraint_characteristic_fields(
+              constraint_char_fields_ptr,
+              get<::Ccz4::Tags::Theta<DataVector>>(evolved_vars),
+              upper_spatial_z4_constraint, spatial_metric_for_char,
+              unit_normal_one_form);
+
+          // Radiation characteristic fields
+          radiation_characteristic_fields(
+              radiation_char_fields_ptr,
+              get<::Ccz4::Tags::ConformalFactor<DataVector>>(evolved_vars),
+              conformal_factor_squared, conformal_spatial_metric,
+              spatial_metric_for_char, inv_spatial_metric,
+              get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(evolved_vars),
+              get<::Ccz4::Tags::ATilde<DataVector, Dim>>(evolved_vars),
+              d_conformal_factor,
+              get<::Tags::deriv<gr::Tags::TraceExtrinsicCurvature<DataVector>,
+                                tmpl::size_t<Dim>, Frame::Inertial>>(
+                  cell_centered_Ccz4_derivs),
+              d_spatial_conformal_metric,
+              get<::Tags::deriv<::Ccz4::Tags::ATilde<DataVector, Dim>,
+                                tmpl::size_t<Dim>, Frame::Inertial>>(
+                  cell_centered_Ccz4_derivs),
+              spatial_ricci_tensor, christoffel_second_kind,
+              unit_normal_one_form);
+
+          // Characteristic speeds
+          {
+            std::array<DataVector, 16> main_speeds{};
+            characteristic_speeds(
+                make_not_null(&main_speeds),
+                get<gr::Tags::Lapse<DataVector>>(evolved_vars),
+                get<gr::Tags::Shift<DataVector, Dim>>(evolved_vars),
+                get<::Ccz4::Tags::ConformalFactor<DataVector>>(evolved_vars), f,
+                unit_normal_one_form);
+            // Copy each array element into the corresponding Scalar in the
+            // Variables
+            const auto copy_speeds_to_vars =
+                [](const auto speeds_vars_ptr, const auto& speeds_array) {
+                  size_t idx = 0;
+                  tmpl::for_each<
+                      typename std::decay_t<decltype(*speeds_vars_ptr)>::
+                          tags_list>([&](auto tag_v) {
+                    using tag = tmpl::type_from<decltype(tag_v)>;
+                    get(get<tag>(*speeds_vars_ptr)) = speeds_array[idx];
+                    ++idx;
+                  });
+                };
+            copy_speeds_to_vars(char_speeds_ptr, main_speeds);
+
+            std::array<DataVector, 3> constr_speeds{};
+            constraint_characteristic_speeds(
+                make_not_null(&constr_speeds),
+                get<gr::Tags::Lapse<DataVector>>(evolved_vars),
+                get<gr::Tags::Shift<DataVector, Dim>>(evolved_vars),
+                unit_normal_one_form);
+            copy_speeds_to_vars(constraint_char_speeds_ptr, constr_speeds);
+
+            std::array<DataVector, 2> rad_speeds{};
+            radiation_characteristic_speeds(
+                make_not_null(&rad_speeds),
+                get<gr::Tags::Lapse<DataVector>>(evolved_vars),
+                get<gr::Tags::Shift<DataVector, Dim>>(evolved_vars),
+                unit_normal_one_form);
+            copy_speeds_to_vars(radiation_char_speeds_ptr, rad_speeds);
+          }
 
           *upper_spatial_z4_constraint_ptr =
               std::move(upper_spatial_z4_constraint);

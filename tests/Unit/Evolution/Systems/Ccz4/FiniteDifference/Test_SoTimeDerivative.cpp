@@ -155,7 +155,17 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<false>>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
       ::Ccz4::Tags::K0<DataVector>,
-      ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
+      ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>,
+      ::Ccz4::fd::Tags::ObserverCharacteristicFieldsTag<SpatialDim,
+                                                         Frame::Inertial>,
+      ::Ccz4::fd::Tags::ObserverConstraintCharacteristicFieldsTag<
+          SpatialDim, Frame::Inertial>,
+      ::Ccz4::fd::Tags::ObserverRadiationCharacteristicFieldsTag<
+          SpatialDim, Frame::Inertial>,
+      ::Ccz4::fd::Tags::ObserverCharacteristicSpeedsTag,
+      ::Ccz4::fd::Tags::ObserverConstraintCharacteristicSpeedsTag,
+      ::Ccz4::fd::Tags::ObserverRadiationCharacteristicSpeedsTag,
+      dt_variables_tag,
       evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
           SpatialDim>,
@@ -169,6 +179,21 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
       DummyEvolutionMetaVars<false>{}, evolved_vars, eta, k_0,
       upper_spatial_z4_constraint,
+      Variables<::Ccz4::fd::Tags::characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::constraint_characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::radiation_characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::characteristic_speeds_tags_list>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::constraint_characteristic_speeds_tags_list>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::radiation_characteristic_speeds_tags_list>{
+          subcell_mesh.number_of_grid_points(), 0.0},
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -297,7 +322,17 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<false>>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
       ::Ccz4::Tags::K0<DataVector>,
-      ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
+      ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>,
+      ::Ccz4::fd::Tags::ObserverCharacteristicFieldsTag<SpatialDim,
+                                                         Frame::Inertial>,
+      ::Ccz4::fd::Tags::ObserverConstraintCharacteristicFieldsTag<
+          SpatialDim, Frame::Inertial>,
+      ::Ccz4::fd::Tags::ObserverRadiationCharacteristicFieldsTag<
+          SpatialDim, Frame::Inertial>,
+      ::Ccz4::fd::Tags::ObserverCharacteristicSpeedsTag,
+      ::Ccz4::fd::Tags::ObserverConstraintCharacteristicSpeedsTag,
+      ::Ccz4::fd::Tags::ObserverRadiationCharacteristicSpeedsTag,
+      dt_variables_tag,
       evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
           SpatialDim>,
@@ -311,6 +346,21 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
       DummyEvolutionMetaVars<false>{}, evolved_vars, eta, k_0,
       upper_spatial_z4_constraint,
+      Variables<::Ccz4::fd::Tags::characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::constraint_characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::radiation_characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::characteristic_speeds_tags_list>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::constraint_characteristic_speeds_tags_list>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::radiation_characteristic_speeds_tags_list>{
+          subcell_mesh.number_of_grid_points(), 0.0},
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -464,7 +514,17 @@ void test_gauge_plane_wave(
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<false>>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
       ::Ccz4::Tags::K0<DataVector>,
-      ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
+      ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>,
+      ::Ccz4::fd::Tags::ObserverCharacteristicFieldsTag<SpatialDim,
+                                                         Frame::Inertial>,
+      ::Ccz4::fd::Tags::ObserverConstraintCharacteristicFieldsTag<
+          SpatialDim, Frame::Inertial>,
+      ::Ccz4::fd::Tags::ObserverRadiationCharacteristicFieldsTag<
+          SpatialDim, Frame::Inertial>,
+      ::Ccz4::fd::Tags::ObserverCharacteristicSpeedsTag,
+      ::Ccz4::fd::Tags::ObserverConstraintCharacteristicSpeedsTag,
+      ::Ccz4::fd::Tags::ObserverRadiationCharacteristicSpeedsTag,
+      dt_variables_tag,
       evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
           SpatialDim>,
@@ -478,6 +538,21 @@ void test_gauge_plane_wave(
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
       DummyEvolutionMetaVars<false>{}, evolved_vars, eta, k_0,
       upper_spatial_z4_constraint,
+      Variables<::Ccz4::fd::Tags::characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::constraint_characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::radiation_characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::characteristic_speeds_tags_list>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::constraint_characteristic_speeds_tags_list>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::radiation_characteristic_speeds_tags_list>{
+          subcell_mesh.number_of_grid_points(), 0.0},
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -817,7 +892,17 @@ void test_constraint_radiation_preserving_bc(
         Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<true>>,
         Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
         ::Ccz4::Tags::K0<DataVector>,
-        ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
+        ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>,
+        ::Ccz4::fd::Tags::ObserverCharacteristicFieldsTag<SpatialDim,
+                                                           Frame::Inertial>,
+        ::Ccz4::fd::Tags::ObserverConstraintCharacteristicFieldsTag<
+            SpatialDim, Frame::Inertial>,
+        ::Ccz4::fd::Tags::ObserverRadiationCharacteristicFieldsTag<
+            SpatialDim, Frame::Inertial>,
+        ::Ccz4::fd::Tags::ObserverCharacteristicSpeedsTag,
+        ::Ccz4::fd::Tags::ObserverConstraintCharacteristicSpeedsTag,
+        ::Ccz4::fd::Tags::ObserverRadiationCharacteristicSpeedsTag,
+        dt_variables_tag,
         evolution::dg::subcell::Tags::Mesh<SpatialDim>,
         evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
             SpatialDim>,
@@ -835,6 +920,21 @@ void test_constraint_radiation_preserving_bc(
             std::make_unique<std::decay_t<decltype(recons)>>(recons)},
         DummyEvolutionMetaVars<true>{}, evolved_vars, eta, k_0,
         upper_spatial_z4_constraint,
+        Variables<::Ccz4::fd::Tags::characteristic_fields_tags_list<
+            DataVector, SpatialDim, Frame::Inertial>>{
+            subcell_mesh.number_of_grid_points(), 0.0},
+        Variables<::Ccz4::fd::Tags::constraint_characteristic_fields_tags_list<
+            DataVector, SpatialDim, Frame::Inertial>>{
+            subcell_mesh.number_of_grid_points(), 0.0},
+        Variables<::Ccz4::fd::Tags::radiation_characteristic_fields_tags_list<
+            DataVector, SpatialDim, Frame::Inertial>>{
+            subcell_mesh.number_of_grid_points(), 0.0},
+        Variables<::Ccz4::fd::Tags::characteristic_speeds_tags_list>{
+            subcell_mesh.number_of_grid_points(), 0.0},
+        Variables<::Ccz4::fd::Tags::constraint_characteristic_speeds_tags_list>{
+            subcell_mesh.number_of_grid_points(), 0.0},
+        Variables<::Ccz4::fd::Tags::radiation_characteristic_speeds_tags_list>{
+            subcell_mesh.number_of_grid_points(), 0.0},
         Variables<typename dt_variables_tag::tags_list>{
             subcell_mesh.number_of_grid_points()},
         subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -909,7 +1009,17 @@ void test_constraint_radiation_preserving_bc(
         Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<true>>,
         Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
         ::Ccz4::Tags::K0<DataVector>,
-        ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
+        ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>,
+        ::Ccz4::fd::Tags::ObserverCharacteristicFieldsTag<SpatialDim,
+                                                           Frame::Inertial>,
+        ::Ccz4::fd::Tags::ObserverConstraintCharacteristicFieldsTag<
+            SpatialDim, Frame::Inertial>,
+        ::Ccz4::fd::Tags::ObserverRadiationCharacteristicFieldsTag<
+            SpatialDim, Frame::Inertial>,
+        ::Ccz4::fd::Tags::ObserverCharacteristicSpeedsTag,
+        ::Ccz4::fd::Tags::ObserverConstraintCharacteristicSpeedsTag,
+        ::Ccz4::fd::Tags::ObserverRadiationCharacteristicSpeedsTag,
+        dt_variables_tag,
         evolution::dg::subcell::Tags::Mesh<SpatialDim>,
         evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
             SpatialDim>,
@@ -927,6 +1037,21 @@ void test_constraint_radiation_preserving_bc(
             std::make_unique<std::decay_t<decltype(recons)>>(recons)},
         DummyEvolutionMetaVars<true>{}, evolved_vars, eta, k_0,
         upper_spatial_z4_constraint,
+        Variables<::Ccz4::fd::Tags::characteristic_fields_tags_list<
+            DataVector, SpatialDim, Frame::Inertial>>{
+            subcell_mesh.number_of_grid_points(), 0.0},
+        Variables<::Ccz4::fd::Tags::constraint_characteristic_fields_tags_list<
+            DataVector, SpatialDim, Frame::Inertial>>{
+            subcell_mesh.number_of_grid_points(), 0.0},
+        Variables<::Ccz4::fd::Tags::radiation_characteristic_fields_tags_list<
+            DataVector, SpatialDim, Frame::Inertial>>{
+            subcell_mesh.number_of_grid_points(), 0.0},
+        Variables<::Ccz4::fd::Tags::characteristic_speeds_tags_list>{
+            subcell_mesh.number_of_grid_points(), 0.0},
+        Variables<::Ccz4::fd::Tags::constraint_characteristic_speeds_tags_list>{
+            subcell_mesh.number_of_grid_points(), 0.0},
+        Variables<::Ccz4::fd::Tags::radiation_characteristic_speeds_tags_list>{
+            subcell_mesh.number_of_grid_points(), 0.0},
         Variables<typename dt_variables_tag::tags_list>{
             subcell_mesh.number_of_grid_points()},
         subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -1493,7 +1618,17 @@ void test_sommerfeld(
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<true>>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
       ::Ccz4::Tags::K0<DataVector>,
-      ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
+      ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>,
+      ::Ccz4::fd::Tags::ObserverCharacteristicFieldsTag<SpatialDim,
+                                                         Frame::Inertial>,
+      ::Ccz4::fd::Tags::ObserverConstraintCharacteristicFieldsTag<
+          SpatialDim, Frame::Inertial>,
+      ::Ccz4::fd::Tags::ObserverRadiationCharacteristicFieldsTag<
+          SpatialDim, Frame::Inertial>,
+      ::Ccz4::fd::Tags::ObserverCharacteristicSpeedsTag,
+      ::Ccz4::fd::Tags::ObserverConstraintCharacteristicSpeedsTag,
+      ::Ccz4::fd::Tags::ObserverRadiationCharacteristicSpeedsTag,
+      dt_variables_tag,
       evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
           SpatialDim>,
@@ -1512,6 +1647,21 @@ void test_sommerfeld(
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
       DummyEvolutionMetaVars<true>{}, evolved_vars, eta, k_0,
       upper_spatial_z4_constraint,
+      Variables<::Ccz4::fd::Tags::characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::constraint_characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::radiation_characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::characteristic_speeds_tags_list>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::constraint_characteristic_speeds_tags_list>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::radiation_characteristic_speeds_tags_list>{
+          subcell_mesh.number_of_grid_points(), 0.0},
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -1781,7 +1931,17 @@ void test_dirichlet_analytic_bc(const bool evolve_lapse_and_shift) {
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<true>>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
       ::Ccz4::Tags::K0<DataVector>,
-      ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
+      ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>,
+      ::Ccz4::fd::Tags::ObserverCharacteristicFieldsTag<SpatialDim,
+                                                         Frame::Inertial>,
+      ::Ccz4::fd::Tags::ObserverConstraintCharacteristicFieldsTag<
+          SpatialDim, Frame::Inertial>,
+      ::Ccz4::fd::Tags::ObserverRadiationCharacteristicFieldsTag<
+          SpatialDim, Frame::Inertial>,
+      ::Ccz4::fd::Tags::ObserverCharacteristicSpeedsTag,
+      ::Ccz4::fd::Tags::ObserverConstraintCharacteristicSpeedsTag,
+      ::Ccz4::fd::Tags::ObserverRadiationCharacteristicSpeedsTag,
+      dt_variables_tag,
       evolution::dg::subcell::Tags::Mesh<SpatialDim>,
       evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
           SpatialDim>,
@@ -1800,6 +1960,21 @@ void test_dirichlet_analytic_bc(const bool evolve_lapse_and_shift) {
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
       DummyEvolutionMetaVars<true>{}, evolved_vars, eta, k_0,
       upper_spatial_z4_constraint,
+      Variables<::Ccz4::fd::Tags::characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::constraint_characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::radiation_characteristic_fields_tags_list<
+          DataVector, SpatialDim, Frame::Inertial>>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::characteristic_speeds_tags_list>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::constraint_characteristic_speeds_tags_list>{
+          subcell_mesh.number_of_grid_points(), 0.0},
+      Variables<::Ccz4::fd::Tags::radiation_characteristic_speeds_tags_list>{
+          subcell_mesh.number_of_grid_points(), 0.0},
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,

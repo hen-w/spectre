@@ -29,6 +29,7 @@
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/AddUpperSpatialZ4Constraint.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/ApplyFilter.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/InitializeCharacteristicObserverTags.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/EnforceConstrainedEvolution.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/GhostData.hpp"
@@ -114,7 +115,45 @@ struct EvolutionMetavars {
   using observe_fields = tmpl::push_back<
       tmpl::append<
           typename system::variables_tag::tags_list, error_tags,
-          tmpl::list<::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>>,
+          tmpl::list<::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>,
+                     // Characteristic field observer tags
+                     ::Ccz4::fd::Tags::UTensorPlus<DataVector, 3,
+                                                    Frame::Inertial>,
+                     ::Ccz4::fd::Tags::UTensorMinus<DataVector, 3,
+                                                     Frame::Inertial>,
+                     ::Ccz4::fd::Tags::UVector1Zero<DataVector, 3,
+                                                     Frame::Inertial>,
+                     ::Ccz4::fd::Tags::UVector2Plus<DataVector, 3,
+                                                     Frame::Inertial>,
+                     ::Ccz4::fd::Tags::UVector2Minus<DataVector, 3,
+                                                      Frame::Inertial>,
+                     ::Ccz4::fd::Tags::UVector3Plus<DataVector, 3,
+                                                     Frame::Inertial>,
+                     ::Ccz4::fd::Tags::UVector3Minus<DataVector, 3,
+                                                      Frame::Inertial>,
+                     ::Ccz4::fd::Tags::UScalar1Zero<DataVector>,
+                     ::Ccz4::fd::Tags::UScalar2Plus<DataVector>,
+                     ::Ccz4::fd::Tags::UScalar2Minus<DataVector>,
+                     ::Ccz4::fd::Tags::UScalar3Plus<DataVector>,
+                     ::Ccz4::fd::Tags::UScalar3Minus<DataVector>,
+                     ::Ccz4::fd::Tags::UScalar4Plus<DataVector>,
+                     ::Ccz4::fd::Tags::UScalar4Minus<DataVector>,
+                     ::Ccz4::fd::Tags::UScalar5Plus<DataVector>,
+                     ::Ccz4::fd::Tags::UScalar5Minus<DataVector>,
+                     // Constraint characteristic tags
+                     ::Ccz4::fd::Tags::CVectorZero<DataVector, 3,
+                                                    Frame::Inertial>,
+                     ::Ccz4::fd::Tags::CScalarPlus<DataVector>,
+                     ::Ccz4::fd::Tags::CScalarMinus<DataVector>,
+                     // Radiation characteristic tags
+                     ::Ccz4::fd::Tags::CTensorPlus<DataVector, 3,
+                                                    Frame::Inertial>,
+                     ::Ccz4::fd::Tags::CTensorMinus<DataVector, 3,
+                                                     Frame::Inertial>>,
+          // Characteristic speed tags
+          ::Ccz4::fd::Tags::characteristic_speeds_tags_list,
+          ::Ccz4::fd::Tags::constraint_characteristic_speeds_tags_list,
+          ::Ccz4::fd::Tags::radiation_characteristic_speeds_tags_list,
           typename db::add_tag_prefix<::Tags::dt,
                                       system::variables_tag>::tags_list,
           tmpl::conditional_t<
@@ -278,7 +317,8 @@ struct EvolutionMetavars {
       evolution::Actions::InitializeRunEventsAndDenseTriggers,
       Initialization::Actions::AddSimpleTags<
           ::Ccz4::fd::SetInitialEta, ::Ccz4::fd::SetK0,
-          ::Ccz4::fd::AddUpperSpatialZ4Constraint>,
+          ::Ccz4::fd::AddUpperSpatialZ4Constraint,
+          ::Ccz4::fd::InitializeCharacteristicObserverTags>,
       Parallel::Actions::TerminatePhase>>;
 
   using dg_element_array_component = DgElementArray<
