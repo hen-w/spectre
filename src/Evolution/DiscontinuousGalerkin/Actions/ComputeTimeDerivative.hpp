@@ -107,6 +107,14 @@ template <typename T>
 struct get_dg_package_field_tags {
   using type = typename T::dg_package_field_tags;
 };
+template <typename T>
+struct get_dg_auxiliary_package_temporary_tags {
+  using type = typename T::dg_auxiliary_package_data_temporary_tags;
+};
+template <typename T>
+struct get_dg_auxiliary_package_field_tags {
+  using type = typename T::dg_auxiliary_package_field_tags;
+};
 template <typename System, typename T>
 struct get_primitive_tags_for_face {
   using type = typename get_primitive_vars<
@@ -354,11 +362,12 @@ struct get_primitive_tags_for_face {
  *   - `evolution::dg::Tags::MortarData<Dim>`
  */
 template <size_t Dim, typename EvolutionSystem, typename DgStepChoosers,
-          bool LocalTimeStepping, bool UseNodegroupDgElements>
+          bool LocalTimeStepping, bool UseNodegroupDgElements,
+          bool ComputeAuxiliary = false>
 struct ComputeTimeDerivative {
   using inbox_tags =
       tmpl::list<evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
-          Dim, UseNodegroupDgElements>>;
+          Dim, UseNodegroupDgElements, ComputeAuxiliary>>;
   using const_global_cache_tags = tmpl::append<
       tmpl::list<::dg::Tags::Formulation, evolution::Tags::BoundaryCorrection,
                  domain::Tags::ExternalBoundaryConditions<Dim>>,
@@ -389,13 +398,14 @@ struct ComputeTimeDerivative {
 };
 
 template <size_t Dim, typename EvolutionSystem, typename DgStepChoosers,
-          bool LocalTimeStepping, bool UseNodegroupDgElements>
+          bool LocalTimeStepping, bool UseNodegroupDgElements,
+          bool ComputeAuxiliary>
 template <typename DbTagsList, typename... InboxTags, typename ArrayIndex,
           typename ActionList, typename ParallelComponent,
           typename Metavariables>
 Parallel::iterable_action_return_t
 ComputeTimeDerivative<Dim, EvolutionSystem, DgStepChoosers, LocalTimeStepping,
-                      UseNodegroupDgElements>::
+                      UseNodegroupDgElements, ComputeAuxiliary>::
     apply(db::DataBox<DbTagsList>& box,
           tuples::TaggedTuple<InboxTags...>& /*inboxes*/,
           Parallel::GlobalCache<Metavariables>& cache,
@@ -453,9 +463,14 @@ ComputeTimeDerivative<Dim, EvolutionSystem, DgStepChoosers, LocalTimeStepping,
   // runtime, we just gather all possible tags from all possible boundary
   // corrections and lump them into the allocation. This may result in a
   // larger-than-necessary allocation, but it won't be that much larger.
+  // We also include auxiliary package tags so that the same buffer can be
+  // used for both the auxiliary and physical boundary correction passes.
   using all_dg_package_temporary_tags =
       tmpl::transform<derived_boundary_corrections,
                       detail::get_dg_package_temporary_tags<tmpl::_1>>;
+  using all_dg_auxiliary_package_temporary_tags = tmpl::transform<
+      derived_boundary_corrections,
+      detail::get_dg_auxiliary_package_temporary_tags<tmpl::_1>>;
   using all_primitive_tags_for_face =
       tmpl::transform<derived_boundary_corrections,
                       detail::get_primitive_tags_for_face<
@@ -464,7 +479,9 @@ ComputeTimeDerivative<Dim, EvolutionSystem, DgStepChoosers, LocalTimeStepping,
                                        tmpl::size_t<Dim>, Frame::Inertial>;
   using dg_package_data_projected_tags =
       tmpl::list<typename variables_tag::tags_list, fluxes_tags,
-                 all_dg_package_temporary_tags, all_primitive_tags_for_face>;
+                 all_dg_package_temporary_tags,
+                 all_dg_auxiliary_package_temporary_tags,
+                 all_primitive_tags_for_face>;
   using all_face_temporary_tags =
       tmpl::remove_duplicates<tmpl::flatten<tmpl::push_back<
           tmpl::list<dg_package_data_projected_tags,
@@ -472,10 +489,13 @@ ComputeTimeDerivative<Dim, EvolutionSystem, DgStepChoosers, LocalTimeStepping,
           detail::OneOverNormalVectorMagnitude, detail::NormalVector<Dim>>>>;
   // To avoid additional allocations in internal_mortar_data, we provide a
   // buffer used to compute the packaged data before it has to be projected to
-  // the mortar. We get all mortar tags for similar reasons as described above
-  using all_mortar_tags = tmpl::remove_duplicates<tmpl::flatten<
+  // the mortar. We get all mortar tags for similar reasons as described above.
+  // We union the physical and auxiliary package field tags.
+  using all_mortar_tags = tmpl::remove_duplicates<tmpl::flatten<tmpl::append<
       tmpl::transform<derived_boundary_corrections,
-                      detail::get_dg_package_field_tags<tmpl::_1>>>>;
+                      detail::get_dg_package_field_tags<tmpl::_1>>,
+      tmpl::transform<derived_boundary_corrections,
+                      detail::get_dg_auxiliary_package_field_tags<tmpl::_1>>>>>;
 
   // We also don't use the number of volume mesh grid points. We instead use the
   // max number of grid points from each face. That way, our allocation will be
@@ -576,40 +596,48 @@ ComputeTimeDerivative<Dim, EvolutionSystem, DgStepChoosers, LocalTimeStepping,
       DgPackagedDataVarsOnFace::number_of_independent_components *
           num_face_temporary_grid_points);
 
-  const Scalar<DataVector>* det_inverse_jacobian = nullptr;
-  if constexpr (tmpl::size<flux_variables>::value != 0) {
-    if (dg_formulation == ::dg::Formulation::WeakInertial) {
-      det_inverse_jacobian = &db::get<
-          domain::Tags::DetInvJacobian<Frame::ElementLogical, Frame::Inertial>>(
-          box);
+  // Skip the expensive volume time derivative computation during the
+  // auxiliary pass.  The auxiliary pass only needs evolved variables on
+  // element faces for dg_auxiliary_package_data; none of the volume_terms
+  // outputs (dt_vars, volume_fluxes, partial_derivs, temporaries) are
+  // consumed before the physical pass recomputes them.
+  if constexpr (not ComputeAuxiliary) {
+    const Scalar<DataVector>* det_inverse_jacobian = nullptr;
+    if constexpr (tmpl::size<flux_variables>::value != 0) {
+      if (dg_formulation == ::dg::Formulation::WeakInertial) {
+        det_inverse_jacobian =
+            &db::get<domain::Tags::DetInvJacobian<Frame::ElementLogical,
+                                                  Frame::Inertial>>(box);
+      }
     }
+    db::mutate_apply<
+        tmpl::list<dt_variables_tag>,
+        typename compute_volume_time_derivative_terms::argument_tags>(
+        [&dg_formulation, &div_fluxes, &det_inverse_jacobian,
+         &div_mesh_velocity = db::get<::domain::Tags::DivMeshVelocity>(box),
+         &evolved_variables = db::get<variables_tag>(box),
+         &inertial_coordinates =
+             db::get<domain::Tags::Coordinates<Dim, Frame::Inertial>>(box),
+         &logical_to_inertial_inv_jacobian =
+             db::get<::domain::Tags::InverseJacobian<Dim, Frame::ElementLogical,
+                                                     Frame::Inertial>>(box),
+         &mesh,
+         &mesh_velocity = db::get<::domain::Tags::MeshVelocity<Dim>>(box),
+         &partial_derivs, &temporaries,
+         &volume_fluxes](const gsl::not_null<Variables<db::wrap_tags_in<
+                             ::Tags::dt, typename variables_tag::tags_list>>*>
+                             dt_vars_ptr,
+                         const auto&... time_derivative_args) {
+          detail::volume_terms<compute_volume_time_derivative_terms>(
+              dt_vars_ptr, make_not_null(&volume_fluxes),
+              make_not_null(&partial_derivs), make_not_null(&temporaries),
+              make_not_null(&div_fluxes), evolved_variables, dg_formulation,
+              mesh, inertial_coordinates, logical_to_inertial_inv_jacobian,
+              det_inverse_jacobian, mesh_velocity, div_mesh_velocity,
+              time_derivative_args...);
+        },
+        make_not_null(&box));
   }
-  db::mutate_apply<
-      tmpl::list<dt_variables_tag>,
-      typename compute_volume_time_derivative_terms::argument_tags>(
-      [&dg_formulation, &div_fluxes, &det_inverse_jacobian,
-       &div_mesh_velocity = db::get<::domain::Tags::DivMeshVelocity>(box),
-       &evolved_variables = db::get<variables_tag>(box),
-       &inertial_coordinates =
-           db::get<domain::Tags::Coordinates<Dim, Frame::Inertial>>(box),
-       &logical_to_inertial_inv_jacobian =
-           db::get<::domain::Tags::InverseJacobian<Dim, Frame::ElementLogical,
-                                                   Frame::Inertial>>(box),
-       &mesh, &mesh_velocity = db::get<::domain::Tags::MeshVelocity<Dim>>(box),
-       &partial_derivs, &temporaries, &volume_fluxes](
-          const gsl::not_null<Variables<
-              db::wrap_tags_in<::Tags::dt, typename variables_tag::tags_list>>*>
-              dt_vars_ptr,
-          const auto&... time_derivative_args) {
-        detail::volume_terms<compute_volume_time_derivative_terms>(
-            dt_vars_ptr, make_not_null(&volume_fluxes),
-            make_not_null(&partial_derivs), make_not_null(&temporaries),
-            make_not_null(&div_fluxes), evolved_variables, dg_formulation, mesh,
-            inertial_coordinates, logical_to_inertial_inv_jacobian,
-            det_inverse_jacobian, mesh_velocity, div_mesh_velocity,
-            time_derivative_args...);
-      },
-      make_not_null(&box));
 
   const Variables<detail::get_primitive_vars_tags_from_system<EvolutionSystem>>*
       primitive_vars{nullptr};
@@ -629,29 +657,46 @@ ComputeTimeDerivative<Dim, EvolutionSystem, DgStepChoosers, LocalTimeStepping,
         using DerivedCorrection =
             tmpl::type_from<decltype(derived_correction_v)>;
         if (typeid(boundary_correction) == typeid(DerivedCorrection)) {
-          // Compute internal boundary quantities on the mortar for sides
-          // of the element that have neighbors, i.e. they are not an
-          // external side.
-          // Note: this call mutates:
-          //  - evolution::dg::Tags::NormalCovectorAndMagnitude<Dim>,
-          //  - evolution::dg::Tags::MortarData<Dim>
-          detail::internal_mortar_data<EvolutionSystem, Dim>(
-              make_not_null(&box), make_not_null(&face_temporaries),
-              make_not_null(&packaged_data_buffer),
-              dynamic_cast<const DerivedCorrection&>(boundary_correction),
-              db::get<variables_tag>(box), volume_fluxes, temporaries,
-              primitive_vars,
-              typename DerivedCorrection::dg_package_data_volume_tags{});
+          if constexpr (ComputeAuxiliary) {
+            // Auxiliary pass: package data using
+            // dg_auxiliary_package_data and send.
+            detail::internal_mortar_data<EvolutionSystem, Dim,
+                                         ComputeAuxiliary>(
+                make_not_null(&box), make_not_null(&face_temporaries),
+                make_not_null(&packaged_data_buffer),
+                dynamic_cast<const DerivedCorrection&>(boundary_correction),
+                db::get<variables_tag>(box), volume_fluxes, temporaries,
+                primitive_vars,
+                typename DerivedCorrection::
+                    dg_auxiliary_package_data_volume_tags{});
+          } else {
+            // Physical pass: use standard dg_package_data.
+            // Compute internal boundary quantities on the mortar for sides
+            // of the element that have neighbors, i.e. they are not an
+            // external side.
+            // Note: this call mutates:
+            //  - evolution::dg::Tags::NormalCovectorAndMagnitude<Dim>,
+            //  - evolution::dg::Tags::MortarData<Dim>
+            detail::internal_mortar_data<EvolutionSystem, Dim,
+                                         ComputeAuxiliary>(
+                make_not_null(&box), make_not_null(&face_temporaries),
+                make_not_null(&packaged_data_buffer),
+                dynamic_cast<const DerivedCorrection&>(boundary_correction),
+                db::get<variables_tag>(box), volume_fluxes, temporaries,
+                primitive_vars,
+                typename DerivedCorrection::dg_package_data_volume_tags{});
+          }
 
           detail::apply_boundary_conditions_on_all_external_faces<
-              EvolutionSystem, Dim>(
+              EvolutionSystem, Dim, ComputeAuxiliary>(
               make_not_null(&box),
               dynamic_cast<const DerivedCorrection&>(boundary_correction),
               temporaries, volume_fluxes, partial_derivs, primitive_vars);
         }
       });
 
-  if constexpr (LocalTimeStepping) {
+  if constexpr (not ComputeAuxiliary and LocalTimeStepping) {
+    // Only change step size during the physical pass.
     db::mutate_apply<ChangeStepSize<DgStepChoosers>>(make_not_null(&box));
   }
 
@@ -661,11 +706,13 @@ ComputeTimeDerivative<Dim, EvolutionSystem, DgStepChoosers, LocalTimeStepping,
 }
 
 template <size_t Dim, typename EvolutionSystem, typename DgStepChoosers,
-          bool LocalTimeStepping, bool UseNodegroupDgElements>
+          bool LocalTimeStepping, bool UseNodegroupDgElements,
+          bool ComputeAuxiliary>
 template <typename ParallelComponent, typename DbTagsList,
           typename Metavariables>
 void ComputeTimeDerivative<Dim, EvolutionSystem, DgStepChoosers,
-                           LocalTimeStepping, UseNodegroupDgElements>::
+                           LocalTimeStepping, UseNodegroupDgElements,
+                           ComputeAuxiliary>::
     send_data_for_fluxes(
         const gsl::not_null<Parallel::GlobalCache<Metavariables>*> cache,
         const gsl::not_null<db::DataBox<DbTagsList>*> box,
@@ -810,14 +857,14 @@ void ComputeTimeDerivative<Dim, EvolutionSystem, DgStepChoosers,
             Parallel::Actions::SendDataToElement>(
             receiver_proxy, cache,
             evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
-                Dim, UseNodegroupDgElements>{},
+                Dim, UseNodegroupDgElements, ComputeAuxiliary>{},
             neighbor, time_step_id,
             std::make_pair(DirectionalId{direction_from_neighbor, element.id()},
                            std::move(data)));
       } else {
         Parallel::receive_data<
             evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
-                Dim, UseNodegroupDgElements>>(
+                Dim, UseNodegroupDgElements, ComputeAuxiliary>>(
             receiver_proxy[neighbor], time_step_id,
             std::make_pair(DirectionalId{direction_from_neighbor, element.id()},
                            std::move(data)));

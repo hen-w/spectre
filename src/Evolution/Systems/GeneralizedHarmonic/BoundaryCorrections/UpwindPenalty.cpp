@@ -12,6 +12,7 @@
 #include "DataStructures/Tensor/EagerMath/DotProduct.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
 #include "Utilities/GenerateInstantiations.hpp"
 #include "Utilities/Gsl.hpp"
@@ -65,7 +66,8 @@ double UpwindPenalty<Dim>::dg_package_data(
     const tnsr::I<DataVector, Dim, Frame::Inertial>& normal_vector,
     const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
     /*mesh_velocity*/,
-    const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+    const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+    const Direction<Dim>& /*face_direction*/) const {
   // Compute the char speeds without the mesh movement, then add the mesh
   // movement. We compute the zero-speed first since it is just the normal
   // dotted into the shift.

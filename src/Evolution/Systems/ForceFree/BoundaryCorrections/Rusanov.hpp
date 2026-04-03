@@ -26,6 +26,8 @@ class not_null;
 namespace PUP {
 class er;
 }  // namespace PUP
+template <size_t Dim>
+class Direction;
 /// \endcond
 
 namespace ForceFree::BoundaryCorrections {
@@ -136,7 +138,8 @@ class Rusanov final : public evolution::BoundaryCorrection {
       const tnsr::I<DataVector, 3, Frame::Inertial>& normal_vector,
       const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&
       /*mesh_velocity*/,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity);
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<3>& /*face_direction*/);
 
   static void dg_boundary_terms(
       gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>

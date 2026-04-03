@@ -217,7 +217,6 @@ struct DetInverseJacobianLogicalToInertialCompute
   }
 };
 
-#ifdef SPECTRE_AUTODIFF
 /// Compute item for the inverse hessian matrix from logical to
 /// grid coordinates
 template <typename MapTagLogicalToGrid, size_t Dim>
@@ -314,5 +313,4 @@ struct InverseHessianLogicalToInertialCompute
     }
   }
 };
-#endif  // SPECTRE_AUTODIFF
 }  // namespace evolution::dg::subcell::fd::Tags

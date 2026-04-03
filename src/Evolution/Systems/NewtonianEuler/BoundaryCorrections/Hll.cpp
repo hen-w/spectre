@@ -13,6 +13,7 @@
 #include "DataStructures/Tensor/EagerMath/DotProduct.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "Evolution/Systems/NewtonianEuler/SoundSpeedSquared.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/NormalDotFlux.hpp"
@@ -65,6 +66,7 @@ double Hll<Dim>::dg_package_data(
     const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
     /*mesh_velocity*/,
     const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+    const Direction<Dim>& /*face_direction*/,
     const EquationsOfState::EquationOfState<false, 2>& equation_of_state)
     const {
   {

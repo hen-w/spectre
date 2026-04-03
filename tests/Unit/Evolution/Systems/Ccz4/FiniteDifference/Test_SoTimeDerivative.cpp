@@ -26,9 +26,11 @@
 #include "Evolution/DgSubcell/GhostData.hpp"
 #include "Evolution/Systems/Ccz4/ATilde.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
+#include "Evolution/Systems/Ccz4/BoundaryConditions/ConstraintsRadiationPreserving.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/DirichletAnalytic.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Sommerfeld.hpp"
+#include "Evolution/Systems/Ccz4/Ccz4WrappedGr.hpp"
 #include "Evolution/Systems/Ccz4/Christoffel.hpp"
 #include "Evolution/Systems/Ccz4/DerivChristoffel.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Derivatives.hpp"
@@ -43,7 +45,6 @@
 #include "Helpers/Evolution/Systems/Ccz4/PrimReconstructor.hpp"
 #include "NumericalAlgorithms/LinearOperators/PartialDerivatives.hpp"
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
-#include "Evolution/Systems/Ccz4/Ccz4WrappedGr.hpp"
 #include "PointwiseFunctions/AnalyticSolutions/GeneralRelativity/GaugePlaneWave.hpp"
 #include "PointwiseFunctions/AnalyticSolutions/GeneralRelativity/KerrSchild.hpp"
 #include "PointwiseFunctions/AnalyticSolutions/GeneralRelativity/Minkowski.hpp"
@@ -716,7 +717,692 @@ void test_gauge_plane_wave(
   CHECK_ITERABLE_CUSTOM_APPROX(dt_b_actual, dt_b_expected, custom_approx);
 }
 
-void test_sommerfeld_bc(const bool evolve_lapse_and_shift) {
+void test_constraint_radiation_preserving_bc(
+    const bool evolve_lapse_and_shift,
+    std::unique_ptr<Ccz4::BoundaryConditions::BoundaryCondition>
+        boundary_condition) {
+  const size_t SpatialDim = 3;
+  using FrameType = Frame::Inertial;
+  const size_t points_per_dimension = 10;
+  const Ccz4::fd::DummyReconstructor recons{};
+  const size_t ghost_zone_size = recons.ghost_zone_size();
+  const Mesh<SpatialDim> subcell_mesh{points_per_dimension,
+                                      Spectral::Basis::FiniteDifference,
+                                      Spectral::Quadrature::CellCentered};
+
+  const std::array<double, ::Ccz4::fd::System::volume_dim> lower_bound{5.8, 5.0,
+                                                                       2.3};
+  const std::array<double, ::Ccz4::fd::System::volume_dim> upper_bound{6.2, 5.2,
+                                                                       2.4};
+  const std::array<double, SpatialDim> coords_range = upper_bound - lower_bound;
+
+  // Create an element with an external boundary by omitting the last neighbor
+  // in the upper_zeta direction.
+  const Element<SpatialDim> element =
+      TestHelpers::Ccz4::fd::detail::set_element(true);
+
+  const auto logical_coords =
+      TestHelpers::Ccz4::fd::detail::set_logical_coordinates(subcell_mesh);
+
+  const auto grid_to_inertial_map =
+      domain::make_coordinate_map<Frame::Grid, FrameType>(
+          domain::CoordinateMaps::Identity<3>{});
+
+  InverseJacobian<DataVector, SpatialDim, Frame::ElementLogical,
+                  Frame::Inertial>
+      cell_centered_logical_to_inertial_inv_jacobian{
+          subcell_mesh.number_of_grid_points(), 0.0};
+  for (size_t i = 0; i < SpatialDim; ++i) {
+    cell_centered_logical_to_inertial_inv_jacobian.get(i, i) =
+        2.0 / gsl::at(coords_range, i);
+  }
+
+  InverseHessian<DataVector, SpatialDim, Frame::ElementLogical, Frame::Inertial>
+      cell_centered_logical_to_inertial_inv_hessian{
+          subcell_mesh.number_of_grid_points(), 0.0};
+
+  const DataVector used_for_size(subcell_mesh.number_of_grid_points(),
+                                 std::numeric_limits<double>::signaling_NaN());
+
+  const auto k_0 = make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
+  const auto eta = make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
+  const auto upper_spatial_z4_constraint =
+      make_with_value<tnsr::I<DataVector, 3>>(
+          used_for_size, std::numeric_limits<double>::signaling_NaN());
+
+  const double kappa_1 = 0.1;
+  const double kappa_2 = 0.2;
+  const double kappa_3 = 0.3;
+
+  using dt_variables_tag =
+      db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
+
+  const size_t num_pts = subcell_mesh.number_of_grid_points();
+  const size_t num_face_pts = subcell_mesh.extents(0) * subcell_mesh.extents(1);
+
+  const Approx approx = Approx::custom().epsilon(1.0e-9).scale(1.0);
+
+  // Test Minkowski case
+  {
+    INFO("Testing constraint-preserving BCs in Minkowski spacetime");
+    // We cannot declare element_map const because it is not copyable into the
+    // box NOLINTNEXTLINE(misc-const-correctness)
+    ElementMap element_map{
+        element.id(),
+        domain::make_coordinate_map<Frame::BlockLogical, Frame::Grid>(
+            Affine3D{Affine{-1., 1., lower_bound[0], upper_bound[0]},
+                     Affine{-1., 1., lower_bound[1], upper_bound[1]},
+                     Affine{-1., 1., lower_bound[2], upper_bound[2]}})
+            .get_clone()};
+    const auto x = grid_to_inertial_map(element_map(logical_coords));
+
+    auto evolved_vars = TestHelpers::Ccz4::fd::detail::Minkowski::
+        compute_prim_solution_for_Minkowski(x);
+
+    // Ghost data from interior neighbors (none for the external face, which is
+    // set by BCs)
+    const DirectionalIdMap<SpatialDim, evolution::dg::subcell::GhostData>
+        all_ghost_data =
+            TestHelpers::Ccz4::fd::detail::compute_ghost_data<Frame::Inertial>(
+                subcell_mesh, x, element.neighbors(), ghost_zone_size,
+                TestHelpers::Ccz4::fd::detail::Minkowski::
+                    compute_prim_solution_for_Minkowski<false>,
+                coords_range);
+
+    // Provide BC on the external face (upper_zeta)
+    std::vector<DirectionMap<
+        SpatialDim,
+        std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>
+        external_bcs_per_block(1);
+    external_bcs_per_block[0][Direction<SpatialDim>::upper_zeta()] =
+        boundary_condition->get_clone();
+
+    // NOLINTNEXTLINE(misc-const-correctness)
+    std::unordered_map<std::string,
+                       std::unique_ptr<domain::FunctionsOfTime::FunctionOfTime>>
+        functions_of_time{};
+
+    auto box = db::create<db::AddSimpleTags<
+        ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
+        ::Ccz4::fd::Tags::EvolveLapseAndShift,
+        domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
+        Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<true>>,
+        Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
+        ::Ccz4::Tags::K0<DataVector>,
+        ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
+        evolution::dg::subcell::Tags::Mesh<SpatialDim>,
+        evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
+            SpatialDim>,
+        evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertial<
+            SpatialDim>,
+        evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>,
+        domain::Tags::ExternalBoundaryConditions<SpatialDim>,
+        evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Inertial>,
+        ::Tags::Time, domain::Tags::FunctionsOfTime,
+        domain::Tags::ElementMap<SpatialDim, Frame::Grid>,
+        domain::CoordinateMaps::Tags::CoordinateMap<SpatialDim, Frame::Grid,
+                                                    Frame::Inertial>>>(
+        kappa_1, kappa_2, kappa_3, evolve_lapse_and_shift, element,
+        std::unique_ptr<Ccz4::fd::Reconstructor>{
+            std::make_unique<std::decay_t<decltype(recons)>>(recons)},
+        DummyEvolutionMetaVars<true>{}, evolved_vars, eta, k_0,
+        upper_spatial_z4_constraint,
+        Variables<typename dt_variables_tag::tags_list>{
+            subcell_mesh.number_of_grid_points()},
+        subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
+        cell_centered_logical_to_inertial_inv_hessian, all_ghost_data,
+        std::move(external_bcs_per_block), x, 0.0, std::move(functions_of_time),
+        std::move(element_map), grid_to_inertial_map.get_clone());
+
+    ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
+
+    tmpl::for_each<Ccz4::fd::System::variables_tag_list>(
+        [&]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
+          const std::string tag_name = db::tag_name<::Tags::dt<Tag>>();
+          CAPTURE(tag_name);
+          for (auto& component : get<::Tags::dt<Tag>>(box)) {
+            CHECK_ITERABLE_CUSTOM_APPROX(component, DataVector(num_pts, 0.0),
+                                         approx);
+          }
+        });
+  }
+  // Test KerrSchild case
+  {
+    INFO("Testing constraint-preserving BCs in KerrSchild spacetime");
+    const double t = std::numeric_limits<double>::signaling_NaN();
+    const double f = Ccz4::fd::System::f;
+    // Setup solution
+    const double mass = 2.0;
+    const std::array<double, Dim> spin{{0.2, 0.4, 0.8}};
+    const std::array<double, Dim> center{{0.2, 0.5, 0.1}};
+    const gr::Solutions::KerrSchild solution(mass, spin, center);
+
+    // We cannot declare element_map const because it is not copyable into the
+    // box NOLINTNEXTLINE(misc-const-correctness)
+    ElementMap element_map{
+        element.id(),
+        domain::make_coordinate_map<Frame::BlockLogical, Frame::Grid>(
+            Affine3D{Affine{-1., 1., lower_bound[0], upper_bound[0]},
+                     Affine{-1., 1., lower_bound[1], upper_bound[1]},
+                     Affine{-1., 1., lower_bound[2], upper_bound[2]}})
+            .get_clone()};
+    const auto x = grid_to_inertial_map(element_map(logical_coords));
+
+    const auto evolved_vars = TestHelpers::Ccz4::fd::detail::KerrSchild::
+        compute_prim_solution_for_KerrSchild(x, t, f, evolve_lapse_and_shift,
+                                             solution);
+    // Ghost data from interior neighbors (none for the external face, which is
+    // set by BCs)
+    const DirectionalIdMap<SpatialDim, evolution::dg::subcell::GhostData>
+        all_ghost_data =
+            TestHelpers::Ccz4::fd::detail::compute_ghost_data<Frame::Inertial>(
+                subcell_mesh, x, element.neighbors(), ghost_zone_size,
+                TestHelpers::Ccz4::fd::detail::KerrSchild::
+                    compute_prim_solution_for_KerrSchild,
+                coords_range, t, f, evolve_lapse_and_shift, solution);
+
+    // Provide BC on the external face (upper_zeta)
+    std::vector<DirectionMap<
+        SpatialDim,
+        std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>
+        external_bcs_per_block(1);
+    external_bcs_per_block[0][Direction<SpatialDim>::upper_zeta()] =
+        boundary_condition->get_clone();
+
+    // NOLINTNEXTLINE(misc-const-correctness)
+    std::unordered_map<std::string,
+                       std::unique_ptr<domain::FunctionsOfTime::FunctionOfTime>>
+        functions_of_time{};
+
+    auto box = db::create<db::AddSimpleTags<
+        ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
+        ::Ccz4::fd::Tags::EvolveLapseAndShift,
+        domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
+        Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<true>>,
+        Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
+        ::Ccz4::Tags::K0<DataVector>,
+        ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
+        evolution::dg::subcell::Tags::Mesh<SpatialDim>,
+        evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
+            SpatialDim>,
+        evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertial<
+            SpatialDim>,
+        evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>,
+        domain::Tags::ExternalBoundaryConditions<SpatialDim>,
+        evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Inertial>,
+        ::Tags::Time, domain::Tags::FunctionsOfTime,
+        domain::Tags::ElementMap<SpatialDim, Frame::Grid>,
+        domain::CoordinateMaps::Tags::CoordinateMap<SpatialDim, Frame::Grid,
+                                                    Frame::Inertial>>>(
+        kappa_1, kappa_2, kappa_3, evolve_lapse_and_shift, element,
+        std::unique_ptr<Ccz4::fd::Reconstructor>{
+            std::make_unique<std::decay_t<decltype(recons)>>(recons)},
+        DummyEvolutionMetaVars<true>{}, evolved_vars, eta, k_0,
+        upper_spatial_z4_constraint,
+        Variables<typename dt_variables_tag::tags_list>{
+            subcell_mesh.number_of_grid_points()},
+        subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
+        cell_centered_logical_to_inertial_inv_hessian, all_ghost_data,
+        std::move(external_bcs_per_block), x, 0.0, std::move(functions_of_time),
+        std::move(element_map), grid_to_inertial_map.get_clone());
+
+    ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
+
+    using deriv_var_tag =
+        db::wrap_tags_in<::Tags::deriv, System::gradients_tags,
+                         tmpl::size_t<Dim>, Frame::Inertial>;
+    Variables<deriv_var_tag> deriv_vars{num_pts};
+    ::Ccz4::fd::spacetime_derivatives(
+        make_not_null(&deriv_vars), evolved_vars,
+        db::get<evolution::dg::subcell::Tags::GhostDataForReconstruction<
+            SpatialDim>>(box),
+        4, subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian);
+
+    using second_deriv_var_tag =
+        db::wrap_tags_in<::Tags::second_deriv, System::gradients_tags,
+                         tmpl::size_t<Dim>, Frame::Inertial>;
+    Variables<second_deriv_var_tag> second_deriv_vars{num_pts};
+    Ccz4::fd::second_spacetime_derivatives(
+        make_not_null(&second_deriv_vars), evolved_vars,
+        db::get<evolution::dg::subcell::Tags::GhostDataForReconstruction<
+            SpatialDim>>(box),
+        4, subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
+        cell_centered_logical_to_inertial_inv_hessian);
+
+    const auto& conformal_spatial_metric =
+        get<::Ccz4::Tags::ConformalMetric<DataVector, SpatialDim>>(
+            evolved_vars);
+    const auto& conformal_factor =
+        get<::Ccz4::Tags::ConformalFactor<DataVector>>(evolved_vars);
+    const auto& lapse = get<gr::Tags::Lapse<DataVector>>(evolved_vars);
+    const auto& shift =
+        get<gr::Tags::Shift<DataVector, SpatialDim>>(evolved_vars);
+    const auto& trace_extrinsic_curvature =
+        get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(evolved_vars);
+    const auto& theta = get<::Ccz4::Tags::Theta<DataVector>>(evolved_vars);
+
+    auto dt_conformal_spatial_metric =
+        make_with_value<tnsr::ii<DataVector, SpatialDim>>(used_for_size, 0.0);
+    auto dt_a_tilde =
+        make_with_value<tnsr::ii<DataVector, SpatialDim>>(used_for_size, 0.0);
+    auto dt_conformal_factor =
+        make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
+    auto dt_trace_extrinsic_curvature =
+        make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
+    auto dt_theta = make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
+    auto dt_gamma_hat =
+        make_with_value<tnsr::I<DataVector, SpatialDim>>(used_for_size, 0.0);
+    auto dt_lapse = make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
+    const auto& d_lapse =
+        get<::Tags::deriv<gr::Tags::Lapse<DataVector>, tmpl::size_t<SpatialDim>,
+                          FrameType>>(deriv_vars);
+    ::tenex::evaluate(
+        make_not_null(&dt_lapse),
+        -2.0 * lapse() * (trace_extrinsic_curvature() - k_0() - 2.0 * theta()) +
+            shift(ti::K) * d_lapse(ti::k));
+    auto dt_shift =
+        make_with_value<tnsr::I<DataVector, SpatialDim>>(used_for_size, 0.0);
+    auto dt_d_conformal_spatial_metric =
+        make_with_value<tnsr::ijj<DataVector, SpatialDim>>(used_for_size, 0.0);
+    auto dt_d_conformal_factor =
+        make_with_value<tnsr::i<DataVector, SpatialDim>>(used_for_size, 0.0);
+    const auto& d_trace_extrinsic_curvature =
+        get<::Tags::deriv<gr::Tags::TraceExtrinsicCurvature<DataVector>,
+                          tmpl::size_t<SpatialDim>, FrameType>>(deriv_vars);
+    const auto& d_theta =
+        get<::Tags::deriv<::Ccz4::Tags::Theta<DataVector>,
+                          tmpl::size_t<SpatialDim>, FrameType>>(deriv_vars);
+    const auto& d_shift =
+        get<::Tags::deriv<gr::Tags::Shift<DataVector, SpatialDim, FrameType>,
+                          tmpl::size_t<SpatialDim>, FrameType>>(deriv_vars);
+    const auto& d_d_lapse =
+        get<::Tags::second_deriv<gr::Tags::Lapse<DataVector>,
+                                 tmpl::size_t<SpatialDim>, FrameType>>(
+            second_deriv_vars);
+    auto dt_d_lapse =
+        make_with_value<tnsr::i<DataVector, SpatialDim>>(used_for_size, 0.0);
+    ::tenex::evaluate<ti::i>(
+        make_not_null(&dt_d_lapse),
+        -2.0 * lapse() *
+                (d_trace_extrinsic_curvature(ti::i) - 2.0 * d_theta(ti::i)) -
+            2.0 * d_lapse(ti::i) *
+                (trace_extrinsic_curvature() - k_0() - 2.0 * theta()) +
+            d_shift(ti::i, ti::K) * d_lapse(ti::k) +
+            shift(ti::K) * d_d_lapse(ti::i, ti::k));
+    auto dt_d_shift =
+        make_with_value<tnsr::iJ<DataVector, SpatialDim>>(used_for_size, 0.0);
+    const auto& d_b =
+        get<::Tags::deriv<::Ccz4::Tags::AuxiliaryShiftB<DataVector, SpatialDim>,
+                          tmpl::size_t<SpatialDim>, FrameType>>(deriv_vars);
+    const auto& d_d_shift =
+        get<::Tags::second_deriv<gr::Tags::Shift<DataVector, SpatialDim>,
+                                 tmpl::size_t<SpatialDim>, FrameType>>(
+            second_deriv_vars);
+    ::tenex::evaluate<ti::k, ti::I>(make_not_null(&dt_d_shift),
+                                    f * d_b(ti::k, ti::I));
+    if (System::shifting_shift) {
+      ::tenex::update<ti::k, ti::I>(
+          make_not_null(&dt_d_shift),
+          dt_d_shift(ti::k, ti::I) +
+              d_shift(ti::k, ti::L) * d_shift(ti::l, ti::I) +
+              shift(ti::L) * d_d_shift(ti::k, ti::l, ti::I));
+    }
+
+    const auto& d_gamma_hat =
+        get<::Tags::deriv<::Ccz4::Tags::GammaHat<DataVector, SpatialDim>,
+                          tmpl::size_t<SpatialDim>, FrameType>>(deriv_vars);
+    const auto& auxiliary_field_b =
+        get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, SpatialDim>>(
+            evolved_vars);
+    const tnsr::I<DataVector, SpatialDim, FrameType> dt_auxiliary_field_b =
+        TestHelpers::Ccz4::fd::detail::KerrSchild::get_dt_b_kerr_expected(
+            evolve_lapse_and_shift, eta, shift, d_gamma_hat, auxiliary_field_b,
+            d_b);
+    const auto normal_vector = x;
+    tnsr::ii<DataVector, SpatialDim, FrameType> spatial_metric;
+    ::tenex::evaluate<ti::i, ti::j>(
+        make_not_null(&spatial_metric),
+        conformal_spatial_metric(ti::i, ti::j) /
+            (conformal_factor() * conformal_factor()));
+    Scalar<DataVector> normal_vector_magnitude =
+        ::tenex::evaluate(spatial_metric(ti::i, ti::j) * normal_vector(ti::I) *
+                          normal_vector(ti::J));
+    get(normal_vector_magnitude) = sqrt(get(normal_vector_magnitude));
+    const auto unit_normal_vector = ::tenex::evaluate<ti::I>(
+        normal_vector(ti::I) / normal_vector_magnitude());
+    const auto unit_normal_one_form = ::tenex::evaluate<ti::i>(
+        spatial_metric(ti::i, ti::j) * unit_normal_vector(ti::J));
+
+    // Compute dt of characteristic variables
+    auto dt_char_fields = dt_characteristic_fields(
+        unit_normal_one_form, conformal_spatial_metric, conformal_factor, lapse,
+        shift, dt_trace_extrinsic_curvature, dt_a_tilde, dt_theta, dt_gamma_hat,
+        dt_auxiliary_field_b, dt_d_conformal_spatial_metric,
+        dt_d_conformal_factor, dt_d_lapse, dt_d_shift, f);
+
+    // Compute characteristic variables
+    const auto& a_tilde =
+        get<::Ccz4::Tags::ATilde<DataVector, SpatialDim>>(evolved_vars);
+    const auto& d_conformal_spatial_metric =
+        get<::Tags::deriv<::Ccz4::Tags::ConformalMetric<DataVector, SpatialDim>,
+                          tmpl::size_t<SpatialDim>, FrameType>>(deriv_vars);
+    const auto& d_conformal_factor =
+        get<::Tags::deriv<::Ccz4::Tags::ConformalFactor<DataVector>,
+                          tmpl::size_t<SpatialDim>, FrameType>>(deriv_vars);
+
+    // Compute constraint characteristic fields
+    const auto field_d = ::tenex::evaluate<ti::k, ti::i, ti::j>(
+        0.5 * d_conformal_spatial_metric(ti::k, ti::i, ti::j));
+    const auto inverse_conformal_spatial_metric =
+        determinant_and_inverse(conformal_spatial_metric).second;
+    const auto conformal_christoffel =
+        ::Ccz4::conformal_christoffel_second_kind(
+            inverse_conformal_spatial_metric, field_d);
+    const auto contracted_conformal_christoffel =
+        ::Ccz4::contracted_conformal_christoffel_second_kind(
+            inverse_conformal_spatial_metric, conformal_christoffel);
+    const auto& gamma_hat =
+        get<::Ccz4::Tags::GammaHat<DataVector, ::Ccz4::fd::System::volume_dim>>(
+            evolved_vars);
+    const auto gamma_hat_minus_contracted_conformal_christoffel =
+        ::tenex::evaluate<ti::I>(gamma_hat(ti::I) -
+                                 contracted_conformal_christoffel(ti::I));
+    const Scalar<DataVector> half_conformal_factor_squared =
+        ::tenex::evaluate(0.5 * conformal_factor() * conformal_factor());
+    const auto upper_spatial_z4 = ::Ccz4::upper_spatial_z4_constraint(
+        half_conformal_factor_squared,
+        gamma_hat_minus_contracted_conformal_christoffel);
+    const auto constraint_char_fields = constraint_characteristic_fields(
+        get<::Ccz4::Tags::Theta<DataVector>>(evolved_vars), upper_spatial_z4,
+        spatial_metric, unit_normal_one_form);
+
+    // Compute radiation characteristic fields
+    const auto& conformal_factor_squared =
+        ::tenex::evaluate(conformal_factor() * conformal_factor());
+    const auto inverse_spatial_metric =
+        determinant_and_inverse(spatial_metric).second;
+    const auto& d_a_tilde =
+        get<::Tags::deriv<::Ccz4::Tags::ATilde<DataVector, SpatialDim>,
+                          tmpl::size_t<SpatialDim>, FrameType>>(deriv_vars);
+    tnsr::i<DataVector, ::Ccz4::fd::System::volume_dim, FrameType> field_p;
+    ::tenex::evaluate<ti::i>(make_not_null(&field_p),
+                             d_conformal_factor(ti::i) / conformal_factor());
+    const auto christoffel = christoffel_second_kind(
+        conformal_spatial_metric, inverse_conformal_spatial_metric, field_p,
+        conformal_christoffel);
+    const auto contracted_christoffel =
+        ::tenex::evaluate<ti::l>(christoffel(ti::M, ti::l, ti::m));
+    tnsr::iJkk<DataVector, ::Ccz4::fd::System::volume_dim>
+        d_conformal_christoffel{};
+    const auto d_d_conformal_metric = get<::Tags::second_deriv<
+        ::Ccz4::Tags::ConformalMetric<
+            DataVector, ::Ccz4::fd::System::volume_dim, Frame::Inertial>,
+        tmpl::size_t<::Ccz4::fd::System::volume_dim>, Frame::Inertial>>(
+        second_deriv_vars);
+    tnsr::iijj<DataVector, ::Ccz4::fd::System::volume_dim> d_field_d{};
+    ::tenex::evaluate<ti::i, ti::j, ti::k, ti::l>(
+        make_not_null(&d_field_d),
+        0.5 * d_d_conformal_metric(ti::i, ti::j, ti::k, ti::l));
+    tnsr::iJJ<DataVector, ::Ccz4::fd::System::volume_dim> field_d_up{};
+    ::tenex::evaluate<ti::k, ti::I, ti::J>(
+        make_not_null(&field_d_up),
+        (inverse_conformal_spatial_metric)(ti::I, ti::N) *
+            (inverse_conformal_spatial_metric)(ti::M, ti::J) *
+            field_d(ti::k, ti::n, ti::m));
+    ::Ccz4::deriv_conformal_christoffel_second_kind(
+        make_not_null(&d_conformal_christoffel),
+        inverse_conformal_spatial_metric, field_d, d_field_d, field_d_up);
+    const auto contracted_d_conformal_christoffel_difference =
+        ::tenex::evaluate<ti::i, ti::j>(
+            (d_conformal_christoffel)(ti::m, ti::M, ti::i, ti::j) -
+            (d_conformal_christoffel)(ti::j, ti::M, ti::i, ti::m));
+    const auto contracted_field_d_up =
+        ::tenex::evaluate<ti::L>((field_d_up)(ti::m, ti::M, ti::L));
+    const auto& d_d_conformal_factor =
+        get<::Tags::second_deriv<Ccz4::Tags::ConformalFactor<DataVector>,
+                                 tmpl::size_t<::Ccz4::fd::System::volume_dim>,
+                                 Frame::Inertial>>(second_deriv_vars);
+    tnsr::ii<DataVector, ::Ccz4::fd::System::volume_dim> d_field_p{};
+    ::tenex::evaluate<ti::i, ti::j>(
+        make_not_null(&d_field_p),
+        (d_d_conformal_factor)(ti::i, ti::j) / conformal_factor() -
+            (d_conformal_factor(ti::i) * d_conformal_factor(ti::j)) /
+                (conformal_factor() * conformal_factor()));
+    tnsr::ii<DataVector, ::Ccz4::fd::System::volume_dim> spatial_ricci_tensor{};
+    ::Ccz4::spatial_ricci_tensor(
+        make_not_null(&spatial_ricci_tensor), christoffel,
+        contracted_christoffel, contracted_d_conformal_christoffel_difference,
+        conformal_spatial_metric, inverse_conformal_spatial_metric, field_d,
+        field_d_up, contracted_field_d_up, field_p, d_field_p);
+    const auto radiation_char_fields = radiation_characteristic_fields(
+        conformal_factor, conformal_factor_squared, conformal_spatial_metric,
+        spatial_metric, inverse_spatial_metric, trace_extrinsic_curvature,
+        a_tilde, d_conformal_factor, d_trace_extrinsic_curvature,
+        d_conformal_spatial_metric, d_a_tilde, spatial_ricci_tensor,
+        christoffel, unit_normal_one_form);
+
+    // Modify incoming expected dt char fields at the external boundary
+    auto& dt_u_vector1_zero =
+        get<::Tags::dt<Tags::UVector1Zero<DataVector, SpatialDim, FrameType>>>(
+            dt_char_fields);
+    const auto& dt_u_vector3_plus =
+        get<::Tags::dt<Tags::UVector3Plus<DataVector, SpatialDim, FrameType>>>(
+            dt_char_fields);
+    auto& dt_u_vector3_minus =
+        get<::Tags::dt<Tags::UVector3Minus<DataVector, SpatialDim, FrameType>>>(
+            dt_char_fields);
+    auto& dt_u_scalar1_zero =
+        get<::Tags::dt<Tags::UScalar1Zero<DataVector>>>(dt_char_fields);
+    const auto& dt_u_scalar3_plus =
+        get<::Tags::dt<Tags::UScalar3Plus<DataVector>>>(dt_char_fields);
+    auto& dt_u_scalar3_minus =
+        get<::Tags::dt<Tags::UScalar3Minus<DataVector>>>(dt_char_fields);
+    const auto& dt_u_scalar4_plus =
+        get<::Tags::dt<Tags::UScalar4Plus<DataVector>>>(dt_char_fields);
+    auto& dt_u_scalar4_minus =
+        get<::Tags::dt<Tags::UScalar4Minus<DataVector>>>(dt_char_fields);
+    const auto& dt_u_scalar5_plus =
+        get<::Tags::dt<Tags::UScalar5Plus<DataVector>>>(dt_char_fields);
+    auto& dt_u_scalar5_minus =
+        get<::Tags::dt<Tags::UScalar5Minus<DataVector>>>(dt_char_fields);
+
+    const auto set_zero_at_boundary =
+        [num_pts, num_face_pts]<typename TensorType>(TensorType& dt_tensor) {
+          for (size_t tensor_index = 0; tensor_index < dt_tensor.size();
+               ++tensor_index) {
+            for (size_t i = 0; i < num_face_pts; ++i) {
+              dt_tensor[tensor_index][num_pts - num_face_pts + i] = 0.0;
+            }
+          }
+        };
+    if (System::shifting_shift) {
+      set_zero_at_boundary(dt_u_vector1_zero);
+      set_zero_at_boundary(dt_u_scalar1_zero);
+    }
+    set_zero_at_boundary(dt_u_vector3_minus);
+    set_zero_at_boundary(dt_u_scalar3_minus);
+    set_zero_at_boundary(dt_u_scalar4_minus);
+    set_zero_at_boundary(dt_u_scalar5_minus);
+
+    const auto shift_n =
+        ::tenex::evaluate(shift(ti::K) * unit_normal_one_form(ti::k));
+    for (size_t i = 0; i < num_face_pts; ++i) {
+      CHECK(get(shift_n)[num_pts - num_face_pts + i] > 0.0);
+    }
+
+    Scalar<DataVector> inertial_radial_coords;
+    get(inertial_radial_coords) =
+        sqrt(square(get<0>(x)) + square(get<1>(x)) + square(get<2>(x)));
+    auto outermost_radial_spacing = make_with_value<Scalar<DataVector>>(
+        DataVector{num_face_pts, std::numeric_limits<double>::signaling_NaN()},
+        0.0);
+    for (size_t i = 0; i < num_face_pts; ++i) {
+      get(outermost_radial_spacing)[i] =
+          get(inertial_radial_coords)[num_pts - num_face_pts + i] -
+          get(inertial_radial_coords)[num_pts - 2 * num_face_pts + i];
+    }
+    auto penalty_strength = make_with_value<Scalar<DataVector>>(
+        DataVector{num_face_pts, std::numeric_limits<double>::signaling_NaN()},
+        0.0);
+    for (size_t i = 0; i < num_face_pts; ++i) {
+      get(penalty_strength)[i] = (get(lapse)[num_pts - num_face_pts + i] +
+                                  get(shift_n)[num_pts - num_face_pts + i]) /
+                                 get(outermost_radial_spacing)[i];
+    }
+    const auto& dt_u_vector2_plus =
+        get<::Tags::dt<Tags::UVector2Plus<DataVector, SpatialDim, FrameType>>>(
+            dt_char_fields);
+    auto& dt_u_vector2_minus =
+        get<::Tags::dt<Tags::UVector2Minus<DataVector, SpatialDim, FrameType>>>(
+            dt_char_fields);
+    const auto& c_vector_zero =
+        get<Tags::CVectorZero<DataVector, SpatialDim, FrameType>>(
+            constraint_char_fields);
+    for (size_t tensor_index = 0; tensor_index < dt_u_vector2_minus.size();
+         ++tensor_index) {
+      for (size_t i = 0; i < num_face_pts; ++i) {
+        dt_u_vector2_minus[tensor_index][num_pts - num_face_pts + i] =
+            -4.0 * get(penalty_strength)[i] /
+            square(get(conformal_factor)[num_pts - num_face_pts + i]) *
+            c_vector_zero[tensor_index][num_pts - num_face_pts + i];
+      }
+    }
+    const auto& dt_u_scalar2_plus =
+        get<::Tags::dt<Tags::UScalar2Plus<DataVector>>>(dt_char_fields);
+    auto& dt_u_scalar2_minus =
+        get<::Tags::dt<Tags::UScalar2Minus<DataVector>>>(dt_char_fields);
+    const auto& c_scalar_minus =
+        get<Tags::CScalarMinus<DataVector>>(constraint_char_fields);
+    for (size_t tensor_index = 0; tensor_index < dt_u_scalar2_minus.size();
+         ++tensor_index) {
+      for (size_t i = 0; i < num_face_pts; ++i) {
+        dt_u_scalar2_minus[tensor_index][num_pts - num_face_pts + i] =
+            -2.0 * get(penalty_strength)[i] *
+            square(get(conformal_factor)[num_pts - num_face_pts + i]) *
+            c_scalar_minus[tensor_index][num_pts - num_face_pts + i];
+      }
+    }
+    const auto& dt_u_tensor_plus =
+        get<::Tags::dt<Tags::UTensorPlus<DataVector, SpatialDim, FrameType>>>(
+            dt_char_fields);
+    auto& dt_u_tensor_minus =
+        get<::Tags::dt<Tags::UTensorMinus<DataVector, SpatialDim, FrameType>>>(
+            dt_char_fields);
+    const auto& c_tensor_minus =
+        get<Tags::CTensorMinus<DataVector, SpatialDim, FrameType>>(
+            radiation_char_fields);
+    for (size_t tensor_index = 0; tensor_index < dt_u_tensor_minus.size();
+         ++tensor_index) {
+      for (size_t i = 0; i < num_face_pts; ++i) {
+        dt_u_tensor_minus[tensor_index][num_pts - num_face_pts + i] -=
+            (get(lapse)[num_pts - num_face_pts + i] +
+             get(shift_n)[num_pts - num_face_pts + i]) *
+            square(get(conformal_factor)[num_pts - num_face_pts + i]) *
+            c_tensor_minus[tensor_index][num_pts - num_face_pts + i];
+      }
+    }
+
+    // Compute dt of evolved space
+    const auto modified_dt_vars =
+        dt_evolved_space_from_dt_characteristic_fields(
+            dt_u_tensor_plus, dt_u_tensor_minus, dt_u_vector1_zero,
+            dt_u_vector2_plus, dt_u_vector2_minus, dt_u_vector3_plus,
+            dt_u_vector3_minus, dt_u_scalar1_zero, dt_u_scalar2_plus,
+            dt_u_scalar2_minus, dt_u_scalar3_plus, dt_u_scalar3_minus,
+            dt_u_scalar4_plus, dt_u_scalar4_minus, dt_u_scalar5_plus,
+            dt_u_scalar5_minus, unit_normal_one_form, conformal_spatial_metric,
+            conformal_factor, lapse, shift, f);
+
+    CHECK_ITERABLE_CUSTOM_APPROX(
+        (get<::Tags::dt<::Ccz4::Tags::ATilde<DataVector, SpatialDim>>>(box)),
+        (get<::Tags::dt<::Ccz4::Tags::ATilde<DataVector, SpatialDim>>>(
+            modified_dt_vars)),
+        approx);
+    CHECK_ITERABLE_CUSTOM_APPROX(
+        (get<::Tags::dt<gr::Tags::TraceExtrinsicCurvature<DataVector>>>(box)),
+        (get<::Tags::dt<gr::Tags::TraceExtrinsicCurvature<DataVector>>>(
+            modified_dt_vars)),
+        approx);
+    CHECK_ITERABLE_CUSTOM_APPROX(
+        (get<::Tags::dt<::Ccz4::Tags::Theta<DataVector>>>(box)),
+        (get<::Tags::dt<::Ccz4::Tags::Theta<DataVector>>>(modified_dt_vars)),
+        approx);
+    CHECK_ITERABLE_CUSTOM_APPROX(
+        (get<::Tags::dt<::Ccz4::Tags::GammaHat<DataVector, SpatialDim>>>(box)),
+        (get<::Tags::dt<::Ccz4::Tags::GammaHat<DataVector, SpatialDim>>>(
+            modified_dt_vars)),
+        approx);
+    CHECK_ITERABLE_CUSTOM_APPROX(
+        (get<::Tags::dt<::Ccz4::Tags::AuxiliaryShiftB<DataVector, SpatialDim>>>(
+            box)),
+        (get<::Tags::dt<::Ccz4::Tags::AuxiliaryShiftB<DataVector, SpatialDim>>>(
+            modified_dt_vars)),
+        approx);
+
+    const double logical_cell_size = 2.0 / points_per_dimension;
+    const auto n_dot_inv_jac = ::tenex::evaluate<ti::I>(
+        unit_normal_vector(ti::J) *
+        cell_centered_logical_to_inertial_inv_jacobian(ti::I, ti::j));
+    Scalar<DataVector> jacobian_factor;
+    get(jacobian_factor) = n_dot_inv_jac.get(2);
+
+    const auto reconstruct_tensor_from_derivative =
+        [num_pts, num_face_pts, logical_cell_size,
+         &jacobian_factor]<typename TensorType>(const TensorType& dt_dn_tensor,
+                                                TensorType& dt_tensor) {
+          for (size_t tensor_index = 0; tensor_index < dt_tensor.size();
+               ++tensor_index) {
+            for (size_t i = 0; i < num_face_pts; ++i) {
+              dt_tensor[tensor_index][num_pts - num_face_pts + i] =
+                  (12.0 * logical_cell_size *
+                       dt_dn_tensor[tensor_index][num_pts - num_face_pts + i] /
+                       get(jacobian_factor)[num_pts - num_face_pts + i] +
+                   48.0 *
+                       dt_tensor[tensor_index][num_pts - 2 * num_face_pts + i] -
+                   36.0 *
+                       dt_tensor[tensor_index][num_pts - 3 * num_face_pts + i] +
+                   16.0 *
+                       dt_tensor[tensor_index][num_pts - 4 * num_face_pts + i] -
+                   3.0 * dt_tensor[tensor_index]
+                                  [num_pts - 5 * num_face_pts + i]) /
+                  25.0;
+            }
+          }
+        };
+
+    reconstruct_tensor_from_derivative(
+        get<::Tags::dt<
+            Tags::DnConformalMetric<DataVector, SpatialDim, FrameType>>>(
+            modified_dt_vars),
+        dt_conformal_spatial_metric);
+    reconstruct_tensor_from_derivative(
+        get<::Tags::dt<Tags::DnConformalFactor<DataVector>>>(modified_dt_vars),
+        dt_conformal_factor);
+    reconstruct_tensor_from_derivative(
+        get<::Tags::dt<Tags::DnLapse<DataVector>>>(modified_dt_vars), dt_lapse);
+    reconstruct_tensor_from_derivative(
+        get<::Tags::dt<Tags::DnShift<DataVector, SpatialDim, FrameType>>>(
+            modified_dt_vars),
+        dt_shift);
+    CHECK_ITERABLE_CUSTOM_APPROX(
+        (get<::Tags::dt<::Ccz4::Tags::ConformalMetric<DataVector, SpatialDim>>>(
+            box)),
+        dt_conformal_spatial_metric, approx);
+    CHECK_ITERABLE_CUSTOM_APPROX(
+        (get<::Tags::dt<::Ccz4::Tags::ConformalFactor<DataVector>>>(box)),
+        dt_conformal_factor, approx);
+    CHECK_ITERABLE_CUSTOM_APPROX(
+        (get<::Tags::dt<gr::Tags::Lapse<DataVector>>>(box)), dt_lapse, approx);
+    CHECK_ITERABLE_CUSTOM_APPROX(
+        (get<::Tags::dt<gr::Tags::Shift<DataVector, SpatialDim>>>(box)),
+        dt_shift, approx);
+  }
+}
+
+void test_sommerfeld(
+    const bool evolve_lapse_and_shift,
+    std::unique_ptr<Ccz4::BoundaryConditions::BoundaryCondition>
+        boundary_condition) {
   const size_t SpatialDim = 3;
   using FrameType = Frame::Inertial;
   const size_t points_per_dimension = 5;
@@ -809,7 +1495,7 @@ void test_sommerfeld_bc(const bool evolve_lapse_and_shift) {
       std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>
       external_bcs_per_block(1);
   external_bcs_per_block[0][Direction<SpatialDim>::upper_zeta()] =
-      std::make_unique<Ccz4::BoundaryConditions::Sommerfeld>();
+      std::move(boundary_condition);
 
   // NOLINTNEXTLINE(misc-const-correctness)
   std::unordered_map<std::string,
@@ -1074,9 +1760,6 @@ void test_dirichlet_analytic_bc(const bool evolve_lapse_and_shift) {
   auto evolved_vars = TestHelpers::Ccz4::fd::detail::Minkowski::
       compute_prim_solution_for_Minkowski(x);
 
-  const DataVector radial_coords =
-      sqrt(square(get<0>(x)) + square(get<1>(x)) + square(get<2>(x)));
-
   const DataVector used_for_size(subcell_mesh.number_of_grid_points(),
                                  std::numeric_limits<double>::signaling_NaN());
   // set dummy k_0 value to get non-trivial lapse evolution for testing
@@ -1183,8 +1866,21 @@ void test() {
   test_dirichlet_analytic_bc(true);
   test_dirichlet_analytic_bc(false);
   // Run Sommerfeld BC test
-  test_sommerfeld_bc(true);
-  test_sommerfeld_bc(false);
+  test_sommerfeld(true,
+                  std::make_unique<Ccz4::BoundaryConditions::Sommerfeld>(2));
+  test_sommerfeld(false,
+                  std::make_unique<Ccz4::BoundaryConditions::Sommerfeld>(2));
+  // Run constraint radiation preserving BC test
+  test_constraint_radiation_preserving_bc(
+      true, std::make_unique<
+                Ccz4::BoundaryConditions::ConstraintsRadiationPreserving>(4));
+  CHECK_THROWS_WITH(
+      test_constraint_radiation_preserving_bc(
+          false,
+          std::make_unique<
+              Ccz4::BoundaryConditions::ConstraintsRadiationPreserving>(4)),
+      Catch::Matchers::ContainsSubstring(
+          "ConstraintsRadiationPreserving BC is not implemented"));
 }
 }  // namespace
 

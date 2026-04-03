@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <optional>
 #include <pup.h>
 #include <string>
 
@@ -20,6 +21,7 @@
 #include "Evolution/DgSubcell/Tags/Coordinates.hpp"
 #include "Evolution/DgSubcell/Tags/Mesh.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Evolution/TypeTraits.hpp"
@@ -53,12 +55,21 @@ namespace Ccz4::BoundaryConditions {
  * condition.
  *
  * \warning This boundary condition assumes a complete sphere domain
- * (all wedges), as we only apply it on the upper_zeta
+ * (all wedges), as we only apply it on the \ref upper_zeta
  * direction in blocks with external boundaries.
  */
 class Sommerfeld final : public BoundaryCondition {
  public:
-  using options = tmpl::list<>;
+  /// \brief What extrapolation order to use to extrapolate
+  /// into the ghost zone.
+  struct ExtrapolationOrder {
+    static constexpr Options::String help =
+        "What extrapolation order to use to extrapolate into the ghost zone.";
+    using type = size_t;
+    static type lower_bound() { return 1; }
+    static type upper_bound() { return 4; }
+  };
+  using options = tmpl::list<ExtrapolationOrder>;
   static constexpr Options::String help{
       "Sommerfeld boundary conditions applied per tensor component."};
 
@@ -71,6 +82,8 @@ class Sommerfeld final : public BoundaryCondition {
 
   explicit Sommerfeld(CkMigrateMessage* msg);
 
+  explicit Sommerfeld(size_t extrapolation_order);
+
   WRAPPED_PUPable_decl_base_template(
       domain::BoundaryConditions::BoundaryCondition, Sommerfeld);
 
@@ -82,13 +95,40 @@ class Sommerfeld final : public BoundaryCondition {
 
   void pup(PUP::er& p) override;
 
+  // DG interface (not yet implemented — will ERROR if called)
+  using dg_interior_evolved_variables_tags = tmpl::list<>;
+  using dg_interior_temporary_tags = tmpl::list<>;
+  using dg_gridless_tags = tmpl::list<>;
+
+  std::optional<std::string> dg_ghost(
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>,
+      gsl::not_null<Scalar<DataVector>*>,
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>,
+      gsl::not_null<Scalar<DataVector>*>, gsl::not_null<Scalar<DataVector>*>,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>,
+      gsl::not_null<Scalar<DataVector>*>,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>,
+      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>,
+      gsl::not_null<tnsr::iJ<DataVector, 3, Frame::Inertial>*>,
+      gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*>,
+      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>,
+      gsl::not_null<Scalar<DataVector>*>,
+      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>,
+      gsl::not_null<Scalar<DataVector>*>,
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>,
+      const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&,
+      const tnsr::i<DataVector, 3, Frame::Inertial>&) const;
+
+  // FD interface
   using fd_interior_evolved_variables_tags =
-      ::Ccz4::fd::System::variables_tag_list;
+      tmpl::append<::Ccz4::fd::System::original_evolved_variables_tags,
+                   ::Ccz4::fd::System::auxiliary_variables_tags>;
   using fd_interior_temporary_tags =
       tmpl::list<evolution::dg::subcell::Tags::Mesh<3>>;
   using fd_interior_primitive_variables_tags = tmpl::list<>;
   using fd_gridless_tags = tmpl::list<::Ccz4::fd::Tags::Reconstructor>;
-  static void fd_ghost(
+  void fd_ghost(
       gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> conformal_metric,
       gsl::not_null<Scalar<DataVector>*> lapse,
       gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> shift,
@@ -115,6 +155,9 @@ class Sommerfeld final : public BoundaryCondition {
       const Mesh<3>& subcell_mesh,
 
       // fd_gridless_tags
-      const fd::Reconstructor& reconstructor);
+      const fd::Reconstructor& reconstructor) const;
+
+ private:
+  size_t extrapolation_order_;
 };
 }  // namespace Ccz4::BoundaryConditions

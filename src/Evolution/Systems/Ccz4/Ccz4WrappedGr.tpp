@@ -242,6 +242,207 @@ Ccz4WrappedGr<SolutionType>::variables(
 }
 
 template <typename SolutionType>
+tuples::TaggedTuple<::Tags::deriv<Ccz4::Tags::ConformalMetric<DataVector,
+    Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>,
+    tmpl::size_t<Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>,
+    Frame::Inertial>>
+Ccz4WrappedGr<SolutionType>::variables(
+    const tnsr::I<DataVector, Ccz4::Solutions::Ccz4WrappedGr<
+                                  SolutionType>::volume_dim>& /*x*/,
+    tmpl::list<::Tags::deriv<Ccz4::Tags::ConformalMetric<DataVector,
+        Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>,
+        tmpl::size_t<Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>,
+        Frame::Inertial>> /*meta*/,
+    const IntermediateVars& intermediate_vars) const {
+    const auto& sqrt_det_spatial_metric =
+        get<gr::Tags::SqrtDetSpatialMetric<DataVector>>(intermediate_vars);
+    const auto& d_spatial_metric = get<DerivSpatialMetric>(intermediate_vars);
+    Scalar<DataVector> conformal_factor;
+    get(conformal_factor) = pow(get(sqrt_det_spatial_metric), -1. / 3.);
+    const auto& inverse_spatial_metric = get<gr::Tags::InverseSpatialMetric<
+        DataVector,
+        Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>>(
+        intermediate_vars);
+    tnsr::i<DataVector,
+        Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>
+        d_conformal_factor;
+    ::tenex::evaluate<ti::i>(
+        make_not_null(&d_conformal_factor),
+        -1. / 6. * conformal_factor() * inverse_spatial_metric(ti::M, ti::L)
+            * d_spatial_metric(ti::i, ti::m, ti::l));
+
+    const auto& spatial_metric = get<gr::Tags::SpatialMetric<
+        DataVector, Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>>(
+        intermediate_vars);
+    tnsr::ijj<DataVector,
+              Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>
+        d_conformal_spatial_metric;
+    ::tenex::evaluate<ti::i, ti::j, ti::k>(
+        make_not_null(&d_conformal_spatial_metric),
+        conformal_factor() * conformal_factor()
+            * d_spatial_metric(ti::i, ti::j, ti::k) +
+        2. * conformal_factor() * d_conformal_factor(ti::i)
+            * spatial_metric(ti::j, ti::k));
+    return {std::move(d_conformal_spatial_metric)};
+}
+
+template <typename SolutionType>
+tuples::TaggedTuple<::Tags::deriv<Ccz4::Tags::ConformalFactor<DataVector>,
+    tmpl::size_t<Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>,
+    Frame::Inertial>>
+Ccz4WrappedGr<SolutionType>::variables(
+    const tnsr::I<DataVector, Ccz4::Solutions::Ccz4WrappedGr<
+                                  SolutionType>::volume_dim>& /*x*/,
+    tmpl::list<::Tags::deriv<Ccz4::Tags::ConformalFactor<DataVector>,
+        tmpl::size_t<Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>,
+        Frame::Inertial>> /*meta*/,
+    const IntermediateVars& intermediate_vars) const {
+    const auto& sqrt_det_spatial_metric =
+        get<gr::Tags::SqrtDetSpatialMetric<DataVector>>(intermediate_vars);
+    const auto& d_spatial_metric = get<DerivSpatialMetric>(intermediate_vars);
+    Scalar<DataVector> conformal_factor;
+    get(conformal_factor) = pow(get(sqrt_det_spatial_metric), -1. / 3.);
+    const auto& inverse_spatial_metric = get<gr::Tags::InverseSpatialMetric<
+        DataVector, Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>>(
+        intermediate_vars);
+    tnsr::i<DataVector,
+        Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>
+        d_conformal_factor;
+    ::tenex::evaluate<ti::i>(
+        make_not_null(&d_conformal_factor),
+        -1. / 6. * conformal_factor() * inverse_spatial_metric(ti::M, ti::L)
+            * d_spatial_metric(ti::i, ti::m, ti::l));
+    return {std::move(d_conformal_factor)};
+}
+
+template <typename SolutionType>
+tuples::TaggedTuple<Ccz4::Tags::FieldA<
+    DataVector, Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>>
+Ccz4WrappedGr<SolutionType>::variables(
+    const tnsr::I<DataVector, Ccz4::Solutions::Ccz4WrappedGr<
+                                  SolutionType>::volume_dim>& /*x*/,
+    tmpl::list<Ccz4::Tags::FieldA<
+        DataVector,
+        Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>> /*meta*/,
+    const IntermediateVars& intermediate_vars) const {
+  // FieldA_i = d_i(ln alpha) = d_i(alpha) / alpha
+  const auto& lapse =
+      get<gr::Tags::Lapse<DataVector>>(intermediate_vars);
+  const auto& d_lapse = get<DerivLapse>(intermediate_vars);
+  tnsr::i<DataVector, Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>
+      field_a;
+  for (size_t i = 0;
+       i < Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim; i++) {
+    field_a.get(i) = d_lapse.get(i) / get(lapse);
+  }
+  return {std::move(field_a)};
+}
+
+template <typename SolutionType>
+tuples::TaggedTuple<Ccz4::Tags::FieldB<
+    DataVector, Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>>
+Ccz4WrappedGr<SolutionType>::variables(
+    const tnsr::I<DataVector, Ccz4::Solutions::Ccz4WrappedGr<
+                                  SolutionType>::volume_dim>& /*x*/,
+    tmpl::list<Ccz4::Tags::FieldB<
+        DataVector,
+        Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>> /*meta*/,
+    const IntermediateVars& intermediate_vars) const {
+  // FieldB_{iJ} = d_i(beta^J)
+  const auto& d_shift = get<DerivShift>(intermediate_vars);
+  tnsr::iJ<DataVector,
+            Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>
+      field_b;
+  for (size_t i = 0;
+       i < Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim; i++) {
+    for (size_t j = 0;
+         j < Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim; j++) {
+      field_b.get(i, j) = d_shift.get(i, j);
+    }
+  }
+  return {std::move(field_b)};
+}
+
+template <typename SolutionType>
+tuples::TaggedTuple<Ccz4::Tags::FieldD<
+    DataVector, Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>>
+Ccz4WrappedGr<SolutionType>::variables(
+    const tnsr::I<DataVector, Ccz4::Solutions::Ccz4WrappedGr<
+                                  SolutionType>::volume_dim>& /*x*/,
+    tmpl::list<Ccz4::Tags::FieldD<
+        DataVector,
+        Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>> /*meta*/,
+    const IntermediateVars& intermediate_vars) const {
+  // FieldD_{ijk} = 0.5 * d_i(conformal_metric_{jk})
+  // Reuse the same computation as the GammaHat overload
+  const auto& sqrt_det_spatial_metric =
+      get<gr::Tags::SqrtDetSpatialMetric<DataVector>>(intermediate_vars);
+  Scalar<DataVector> inverse_conformal_factor_squared;
+  get(inverse_conformal_factor_squared) =
+      pow(get(sqrt_det_spatial_metric), 2. / 3.);
+  const auto& inverse_spatial_metric = get<gr::Tags::InverseSpatialMetric<
+      DataVector,
+      Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>>(
+      intermediate_vars);
+  const auto& d_spatial_metric = get<DerivSpatialMetric>(intermediate_vars);
+  tnsr::i<DataVector, Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>
+      d_det_spatial_metric;
+  ::tenex::evaluate<ti::i>(make_not_null(&d_det_spatial_metric),
+                           sqrt_det_spatial_metric() *
+                               sqrt_det_spatial_metric() *
+                               inverse_spatial_metric(ti::J, ti::K) *
+                               d_spatial_metric(ti::i, ti::j, ti::k));
+  const auto& spatial_metric = get<gr::Tags::SpatialMetric<
+      DataVector, Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>>(
+      intermediate_vars);
+  tnsr::ijj<DataVector,
+            Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>
+      field_d(get(inverse_conformal_factor_squared));
+  for (size_t k = 0;
+       k < Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim; k++) {
+    for (size_t i = 0;
+         i < Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim; i++) {
+      for (size_t j = i;
+           j < Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim; j++) {
+        field_d.get(k, i, j) = d_spatial_metric.get(k, i, j) /
+                                   get(inverse_conformal_factor_squared) -
+                               pow(get(inverse_conformal_factor_squared), -4) *
+                                   d_det_spatial_metric.get(k) *
+                                   spatial_metric.get(i, j) / 3.;
+        field_d.get(k, i, j) *= 0.5;
+      }
+    }
+  }
+  return {std::move(field_d)};
+}
+
+template <typename SolutionType>
+tuples::TaggedTuple<Ccz4::Tags::FieldP<
+    DataVector, Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>>
+Ccz4WrappedGr<SolutionType>::variables(
+    const tnsr::I<DataVector, Ccz4::Solutions::Ccz4WrappedGr<
+                                  SolutionType>::volume_dim>& /*x*/,
+    tmpl::list<Ccz4::Tags::FieldP<
+        DataVector,
+        Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>> /*meta*/,
+    const IntermediateVars& intermediate_vars) const {
+  // FieldP_i = d_i(ln phi) = d_i(phi) / phi
+  const auto& d_spatial_metric = get<DerivSpatialMetric>(intermediate_vars);
+  const auto& inverse_spatial_metric = get<gr::Tags::InverseSpatialMetric<
+      DataVector,
+      Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>>(
+      intermediate_vars);
+  // d_i(ln phi) = d_i(phi)/phi = -1/6 * gamma^{ml} * d_i(gamma_{ml})
+  tnsr::i<DataVector, Ccz4::Solutions::Ccz4WrappedGr<SolutionType>::volume_dim>
+      field_p;
+  ::tenex::evaluate<ti::i>(
+      make_not_null(&field_p),
+      -1. / 6. * inverse_spatial_metric(ti::M, ti::L) *
+          d_spatial_metric(ti::i, ti::m, ti::l));
+  return {std::move(field_p)};
+}
+
+template <typename SolutionType>
 void Ccz4WrappedGr<SolutionType>::pup(PUP::er& p) {
   InitialData::pup(p);
   SolutionType::pup(p);

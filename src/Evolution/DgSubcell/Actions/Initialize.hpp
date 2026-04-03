@@ -116,26 +116,32 @@ struct SetSubcellGrid {
       evolution::dg::subcell::Tags::InterpolatorsFromNeighborDgToFd<Dim>,
       typename System::variables_tag,
       evolution::dg::subcell::Tags::ExtensionDirections<Dim>>;
-  using compute_tags =
-      tmpl::list<Tags::MeshCompute<Dim>, Tags::LogicalCoordinatesCompute<Dim>,
-                 ::domain::Tags::MappedCoordinates<
-                     ::domain::Tags::ElementMap<Dim, Frame::Grid>,
-                     subcell::Tags::Coordinates<Dim, Frame::ElementLogical>,
-                     subcell::Tags::Coordinates>,
-                 Tags::InertialCoordinatesCompute<
-                     ::domain::CoordinateMaps::Tags::CoordinateMap<
-                         Dim, Frame::Grid, Frame::Inertial>>,
-                 fd::Tags::InverseJacobianLogicalToGridCompute<
-                     ::domain::Tags::ElementMap<Dim, Frame::Grid>, Dim>,
-                 fd::Tags::DetInverseJacobianLogicalToGridCompute<Dim>,
-                 fd::Tags::InverseJacobianLogicalToInertialCompute<
-                     ::domain::CoordinateMaps::Tags::CoordinateMap<
-                         Dim, Frame::Grid, Frame::Inertial>,
-                     Dim>,
-                 fd::Tags::DetInverseJacobianLogicalToInertialCompute<
-                     ::domain::CoordinateMaps::Tags::CoordinateMap<
-                         Dim, Frame::Grid, Frame::Inertial>,
-                     Dim>>;
+  using compute_tags = tmpl::list<
+      Tags::MeshCompute<Dim>, Tags::LogicalCoordinatesCompute<Dim>,
+      ::domain::Tags::MappedCoordinates<
+          ::domain::Tags::ElementMap<Dim, Frame::Grid>,
+          subcell::Tags::Coordinates<Dim, Frame::ElementLogical>,
+          subcell::Tags::Coordinates>,
+      Tags::InertialCoordinatesCompute<
+          ::domain::CoordinateMaps::Tags::CoordinateMap<Dim, Frame::Grid,
+                                                        Frame::Inertial>>,
+      fd::Tags::InverseJacobianLogicalToGridCompute<
+          ::domain::Tags::ElementMap<Dim, Frame::Grid>, Dim>,
+      fd::Tags::DetInverseJacobianLogicalToGridCompute<Dim>,
+      fd::Tags::InverseJacobianLogicalToInertialCompute<
+          ::domain::CoordinateMaps::Tags::CoordinateMap<Dim, Frame::Grid,
+                                                        Frame::Inertial>,
+          Dim>,
+      fd::Tags::DetInverseJacobianLogicalToInertialCompute<
+          ::domain::CoordinateMaps::Tags::CoordinateMap<Dim, Frame::Grid,
+                                                        Frame::Inertial>,
+          Dim>,
+      fd::Tags::InverseHessianLogicalToGridCompute<
+          ::domain::Tags::ElementMap<Dim, Frame::Grid>, Dim>,
+      fd::Tags::InverseHessianLogicalToInertialCompute<
+          ::domain::CoordinateMaps::Tags::CoordinateMap<Dim, Frame::Grid,
+                                                        Frame::Inertial>,
+          Dim>>;
 
   template <typename DbTagsList, typename... InboxTags, typename ArrayIndex,
             typename ActionList, typename ParallelComponent,

@@ -497,5 +497,15 @@ template <typename DataType>
 struct Eta : db::SimpleTag {
   using type = Scalar<DataType>;
 };
+
+template <typename DataType>
+struct InverseGridSpacing : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType, size_t Dim, typename Frame = Frame::Inertial>
+struct NormalCovector : db::SimpleTag {
+  using type = tnsr::i<DataType, Dim, Frame>;
+};
 }  // namespace Tags
 }  // namespace Ccz4

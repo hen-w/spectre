@@ -58,5 +58,6 @@ target_link_libraries(
   INTERFACE
   )
 
+add_subdirectory(BoundaryConditions)
 add_subdirectory(FiniteDifference)
 add_subdirectory(Instantiations)

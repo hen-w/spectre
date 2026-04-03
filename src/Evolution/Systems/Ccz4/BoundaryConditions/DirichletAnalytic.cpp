@@ -11,6 +11,7 @@
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "Evolution/Systems/Ccz4/Solutions/Factory.hpp"
 #include "Utilities/CallWithDynamicType.hpp"
+#include "Utilities/MakeWithValue.hpp"
 
 namespace Ccz4::BoundaryConditions {
 
@@ -44,6 +45,96 @@ void DirichletAnalytic::pup(PUP::er& p) {
 }
 // NOLINTNEXTLINE
 PUP::able::PUP_ID DirichletAnalytic::my_PUP_ID = 0;
+
+std::optional<std::string> DirichletAnalytic::dg_ghost(
+    const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+        conformal_metric,
+    const gsl::not_null<Scalar<DataVector>*> conformal_factor,
+    const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> a_tilde,
+    const gsl::not_null<Scalar<DataVector>*> trace_extrinsic_curvature,
+    const gsl::not_null<Scalar<DataVector>*> theta,
+    const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> gamma_hat,
+    const gsl::not_null<Scalar<DataVector>*> lapse,
+    const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> shift,
+    const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
+        auxiliary_shift_b,
+    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> field_a,
+    const gsl::not_null<tnsr::iJ<DataVector, 3, Frame::Inertial>*> field_b,
+    const gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*> field_d,
+    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> field_p,
+    const gsl::not_null<Scalar<DataVector>*> u_scalar3_minus,
+    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
+        u_vector2_minus,
+    const gsl::not_null<Scalar<DataVector>*> u_scalar2_minus,
+    const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+        u_tensor_minus,
+    const std::optional<
+        tnsr::I<DataVector, 3, Frame::Inertial>>& /*face_mesh_velocity*/,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& /*normal_covector*/,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
+    [[maybe_unused]] const double time) const {
+  using all_tags =
+      tmpl::list<Tags::ConformalMetric<DataVector, 3>,
+                 Tags::ConformalFactor<DataVector>, Tags::ATilde<DataVector, 3>,
+                 gr::Tags::TraceExtrinsicCurvature<DataVector>,
+                 Tags::Theta<DataVector>, Tags::GammaHat<DataVector, 3>,
+                 gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
+                 Tags::AuxiliaryShiftB<DataVector, 3>,
+                 Tags::FieldA<DataVector, 3>, Tags::FieldB<DataVector, 3>,
+                 Tags::FieldD<DataVector, 3>, Tags::FieldP<DataVector, 3>>;
+  auto boundary_values = call_with_dynamic_type<
+      tuples::TaggedTuple<
+          Tags::ConformalMetric<DataVector, 3>,
+          Tags::ConformalFactor<DataVector>, Tags::ATilde<DataVector, 3>,
+          gr::Tags::TraceExtrinsicCurvature<DataVector>,
+          Tags::Theta<DataVector>, Tags::GammaHat<DataVector, 3>,
+          gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
+          Tags::AuxiliaryShiftB<DataVector, 3>, Tags::FieldA<DataVector, 3>,
+          Tags::FieldB<DataVector, 3>, Tags::FieldD<DataVector, 3>,
+          Tags::FieldP<DataVector, 3>>,
+      Ccz4::Solutions::all_solutions>(
+      analytic_prescription_.get(),
+      [&coords, &time](const auto* const initial_data) {
+        if constexpr (is_analytic_solution_v<
+                          std::decay_t<decltype(*initial_data)>>) {
+          return initial_data->variables(coords, time, all_tags{});
+        } else if constexpr (evolution::is_numeric_initial_data_v<
+                                 std::decay_t<decltype(*initial_data)>>) {
+          ERROR(
+              "Cannot currently use numeric initial data as an analytic "
+              "prescription for boundary conditions.");
+        } else {
+          (void)time;
+          return initial_data->variables(coords, all_tags{});
+        }
+      });
+  *conformal_metric =
+      get<Tags::ConformalMetric<DataVector, 3>>(boundary_values);
+  *conformal_factor = get<Tags::ConformalFactor<DataVector>>(boundary_values);
+  *a_tilde = get<Tags::ATilde<DataVector, 3>>(boundary_values);
+  *trace_extrinsic_curvature =
+      get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(boundary_values);
+  *theta = get<Tags::Theta<DataVector>>(boundary_values);
+  *gamma_hat = get<Tags::GammaHat<DataVector, 3>>(boundary_values);
+  *lapse = get<gr::Tags::Lapse<DataVector>>(boundary_values);
+  *shift = get<gr::Tags::Shift<DataVector, 3>>(boundary_values);
+  *auxiliary_shift_b =
+      get<Tags::AuxiliaryShiftB<DataVector, 3>>(boundary_values);
+  *field_a = get<Tags::FieldA<DataVector, 3>>(boundary_values);
+  *field_b = get<Tags::FieldB<DataVector, 3>>(boundary_values);
+  *field_d = get<Tags::FieldD<DataVector, 3>>(boundary_values);
+  *field_p = get<Tags::FieldP<DataVector, 3>>(boundary_values);
+  // Boundary mode exterior values: zero (corrections are zero for these tags)
+  *u_scalar3_minus = make_with_value<Scalar<DataVector>>(coords, 0.0);
+  for (auto& component : *u_vector2_minus) {
+    component = 0.0;
+  }
+  *u_scalar2_minus = make_with_value<Scalar<DataVector>>(coords, 0.0);
+  for (auto& component : *u_tensor_minus) {
+    component = 0.0;
+  }
+  return std::nullopt;
+}
 
 void DirichletAnalytic::fd_ghost(
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>

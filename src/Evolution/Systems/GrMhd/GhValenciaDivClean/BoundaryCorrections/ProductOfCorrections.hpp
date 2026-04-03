@@ -19,6 +19,11 @@
 #include "Utilities/StdHelpers/RetrieveUniquePtr.hpp"
 #include "Utilities/TMPL.hpp"
 
+/// \cond
+template <size_t Dim>
+class Direction;
+/// \endcond
+
 namespace grmhd::GhValenciaDivClean::BoundaryCorrections {
 namespace detail {
 template <typename DerivedGhCorrection, typename DerivedValenciaCorrection,
@@ -70,6 +75,7 @@ struct ProductOfCorrectionsImpl<
       const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&
           mesh_velocity,
       const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const ::Direction<3>& face_direction,
 
       const typename GhVolumeTags::type&... gh_volume_quantities,
       decltype(StdHelpers::retrieve(
@@ -87,14 +93,14 @@ struct ProductOfCorrectionsImpl<
             tuples::get<Tags::detail::TemporaryReference<GhTempTags>>(
                 shuffle_refs)...,
             gh_primitives..., normal_covector, normal_vector, mesh_velocity,
-            normal_dot_mesh_velocity, gh_volume_quantities...),
+            normal_dot_mesh_velocity, face_direction, gh_volume_quantities...),
         valencia_correction.dg_package_data(
             valencia_packaged_fields..., valencia_variables...,
             valencia_fluxes...,
             tuples::get<Tags::detail::TemporaryReference<ValenciaTempTags>>(
                 shuffle_refs)...,
             valencia_primitives..., normal_covector, normal_vector,
-            mesh_velocity, normal_dot_mesh_velocity,
+            mesh_velocity, normal_dot_mesh_velocity, face_direction,
             StdHelpers::retrieve(valencia_volume_quantities)...));
   }
 

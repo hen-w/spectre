@@ -12,7 +12,6 @@
 #include "Evolution/DgSubcell/Tags/SubcellOptions.hpp"
 #include "Evolution/DgSubcell/Tags/SubcellSolver.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Reconstructor.hpp"
-#include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Evolution/Systems/Ccz4/TagsDeclarations.hpp"
 #include "Evolution/Tags.hpp"
@@ -59,6 +58,25 @@ struct KreissOligerEpsilon {
 
   static constexpr Options::String help = {
       "The epsilon parameter for Kreiss-Oliger dissipation."};
+  using group = ::Ccz4::OptionTags::Ccz4Group;
+};
+
+/// \brief Option tag for the constant eta parameter in the Gamma-driver
+/// shift condition.
+///
+/// \details The parameter \f$\eta\f$ appears in eq. 12i of
+/// \cite Dumbser2017okk as a damping term in the evolution of the
+/// auxiliary shift variable \f$b^i\f$:
+/// \f$\partial_t b^i = \partial_t \hat{\Gamma}^i - \eta \, b^i\f$.
+/// Typical values are 0 for Minkowski and \f$\sim 1/M\f$ to \f$2/M\f$ for
+/// black hole spacetimes, where \f$M\f$ is the mass.
+struct EtaConstant {
+  using type = double;
+
+  static constexpr Options::String help = {
+      "The constant eta damping parameter in the Gamma-driver shift "
+      "condition. Typical values: 0 for Minkowski, ~1/M to 2/M for "
+      "black hole spacetimes."};
   using group = ::Ccz4::OptionTags::Ccz4Group;
 };
 }  // namespace OptionTags
@@ -115,7 +133,225 @@ struct KreissOligerEpsilon : db::SimpleTag {
   }
 };
 
-/// \brief Tags sent for second-order Ccz4 evolution.
-using spacetime_reconstruction_tags = System::variables_tag_list;
+/*!
+ * \brief Tag for the constant eta damping parameter in the Gamma-driver
+ * shift condition.
+ */
+struct EtaConstant : db::SimpleTag {
+  using type = double;
+  using option_tags = tmpl::list<OptionTags::EtaConstant>;
+
+  static constexpr bool pass_metavariables = false;
+  static type create_from_options(const double eta_constant) {
+    return eta_constant;
+  }
+};
+
+template <typename DataType>
+struct ConstraintCharacteristicSpeeds : db::SimpleTag {
+  using type = std::array<DataType, 3>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct CVectorZero : db::SimpleTag {
+  using type = tnsr::i<DataType, Dim, Frame>;
+};
+
+template <typename DataType>
+struct CScalarPlus : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct CScalarMinus : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct ConstraintCharacteristicFields : db::SimpleTag {
+  using type =
+      Variables<tmpl::list<CVectorZero<DataType, Dim, Frame>,
+                           CScalarPlus<DataType>, CScalarMinus<DataType>>>;
+};
+
+template <typename DataType>
+struct RadiationCharacteristicSpeeds : db::SimpleTag {
+  using type = std::array<DataType, 2>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct CTensorPlus : db::SimpleTag {
+  using type = tnsr::ii<DataType, Dim, Frame>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct CTensorMinus : db::SimpleTag {
+  using type = tnsr::ii<DataType, Dim, Frame>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct RadiationCharacteristicFields : db::SimpleTag {
+  using type = Variables<tmpl::list<CTensorPlus<DataType, Dim, Frame>,
+                                    CTensorMinus<DataType, Dim, Frame>>>;
+};
+
+template <typename DataType>
+struct CPhi : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct CGamma : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct CAlpha : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct CK : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct CTheta : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct CBeta : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct CharacteristicSpeeds : db::SimpleTag {
+  using type = std::array<DataType, 16>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct UTensorPlus : db::SimpleTag {
+  using type = tnsr::ii<DataType, Dim, Frame>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct UTensorMinus : db::SimpleTag {
+  using type = tnsr::ii<DataType, Dim, Frame>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct UVector1Zero : db::SimpleTag {
+  using type = tnsr::i<DataType, Dim, Frame>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct UVector2Plus : db::SimpleTag {
+  using type = tnsr::i<DataType, Dim, Frame>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct UVector2Minus : db::SimpleTag {
+  using type = tnsr::i<DataType, Dim, Frame>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct UVector3Plus : db::SimpleTag {
+  using type = tnsr::i<DataType, Dim, Frame>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct UVector3Minus : db::SimpleTag {
+  using type = tnsr::i<DataType, Dim, Frame>;
+};
+
+template <typename DataType>
+struct UScalar1Zero : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct UScalar2Plus : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct UScalar2Minus : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct UScalar3Plus : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct UScalar3Minus : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct UScalar4Plus : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct UScalar4Minus : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct UScalar5Plus : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType>
+struct UScalar5Minus : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct CharacteristicFields : db::SimpleTag {
+  using type = Variables<tmpl::list<
+      UTensorPlus<DataType, Dim, Frame>, UTensorMinus<DataType, Dim, Frame>,
+      UVector1Zero<DataType, Dim, Frame>, UVector2Plus<DataType, Dim, Frame>,
+      UVector2Minus<DataType, Dim, Frame>, UVector3Plus<DataType, Dim, Frame>,
+      UVector3Minus<DataType, Dim, Frame>, UScalar1Zero<DataType>,
+      UScalar2Plus<DataType>, UScalar2Minus<DataType>, UScalar3Plus<DataType>,
+      UScalar3Minus<DataType>, UScalar4Plus<DataType>, UScalar4Minus<DataType>,
+      UScalar5Plus<DataType>, UScalar5Minus<DataType>>>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct DnConformalMetric : db::SimpleTag {
+  using type = tnsr::ii<DataType, Dim, Frame>;
+};
+
+template <typename DataType>
+struct DnLapse : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct DnShift : db::SimpleTag {
+  using type = tnsr::I<DataType, Dim, Frame>;
+};
+
+template <typename DataType>
+struct DnConformalFactor : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+template <typename DataType, size_t Dim, typename Frame>
+struct EvolvedSpaceFromCharacteristicFields : db::SimpleTag {
+  using type = Variables<
+      tmpl::list<DnConformalMetric<DataType, Dim, Frame>, DnLapse<DataType>,
+                 DnShift<DataType, Dim, Frame>, DnConformalFactor<DataType>,
+                 ::Ccz4::Tags::ATilde<DataType, Dim, Frame>,
+                 gr::Tags::TraceExtrinsicCurvature<DataType>,
+                 ::Ccz4::Tags::Theta<DataType>,
+                 ::Ccz4::Tags::GammaHat<DataType, Dim, Frame>,
+                 ::Ccz4::Tags::AuxiliaryShiftB<DataType, Dim, Frame>>>;
+};
 }  // namespace Tags
 }  // namespace Ccz4::fd

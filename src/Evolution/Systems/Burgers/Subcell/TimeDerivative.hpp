@@ -16,6 +16,7 @@
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "Domain/Structure/Element.hpp"
 #include "Domain/Tags.hpp"
 #include "Evolution/BoundaryCorrection.hpp"
@@ -168,13 +169,15 @@ struct TimeDerivative {
             evolution::dg::Actions::detail::dg_package_data<System>(
                 make_not_null(&upper_packaged_data),
                 dynamic_cast<const derived_correction&>(boundary_correction),
-                vars_upper_face, upper_outward_conormal, {std::nullopt}, *box,
+                vars_upper_face, upper_outward_conormal, {std::nullopt},
+                Direction<1>::upper_xi(), *box,
                 typename derived_correction::dg_package_data_volume_tags{},
                 dg_package_data_argument_tags{});
             evolution::dg::Actions::detail::dg_package_data<System>(
                 make_not_null(&lower_packaged_data),
                 dynamic_cast<const derived_correction&>(boundary_correction),
-                vars_lower_face, lower_outward_conormal, {std::nullopt}, *box,
+                vars_lower_face, lower_outward_conormal, {std::nullopt},
+                Direction<1>::lower_xi(), *box,
                 typename derived_correction::dg_package_data_volume_tags{},
                 dg_package_data_argument_tags{});
 

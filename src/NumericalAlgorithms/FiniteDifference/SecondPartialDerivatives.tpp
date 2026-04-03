@@ -256,9 +256,6 @@ void second_partial_derivatives(
                      second_logical_derivs_internal_buffer_size);
 
   // Compute first logical derivatives (used in the inverse-hessian terms)
-  // Potential optimization: since we compute first logical derivatives here,
-  // it may be a good idea to have an option to compute the first inertial
-  // derivatives as well together with the second inertial derivatives.
   fd::logical_partial_derivatives(make_not_null(&first_logical_partial_derivs),
                                   volume_vars, ghost_cell_vars, volume_mesh,
                                   number_of_variables, fd_order);

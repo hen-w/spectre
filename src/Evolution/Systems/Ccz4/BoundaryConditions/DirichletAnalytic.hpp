@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <optional>
 #include <pup.h>
 #include <string>
 
@@ -34,6 +35,10 @@
 namespace Tags {
 struct Time;
 }  // namespace Tags
+namespace domain::Tags {
+template <size_t Dim, typename Frame>
+struct Coordinates;
+}  // namespace domain::Tags
 /// \endcond
 
 namespace Ccz4::BoundaryConditions {
@@ -79,6 +84,37 @@ class DirichletAnalytic final : public BoundaryCondition {
 
   void pup(PUP::er& p) override;
 
+  // DG interface
+  using dg_interior_evolved_variables_tags = tmpl::list<>;
+  using dg_interior_dt_vars_tags = tmpl::list<>;
+  using dg_interior_temporary_tags =
+      tmpl::list<domain::Tags::Coordinates<3, Frame::Inertial>>;
+  using dg_gridless_tags = tmpl::list<::Tags::Time>;
+
+  std::optional<std::string> dg_ghost(
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> conformal_metric,
+      gsl::not_null<Scalar<DataVector>*> conformal_factor,
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> a_tilde,
+      gsl::not_null<Scalar<DataVector>*> trace_extrinsic_curvature,
+      gsl::not_null<Scalar<DataVector>*> theta,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> gamma_hat,
+      gsl::not_null<Scalar<DataVector>*> lapse,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> shift,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> auxiliary_shift_b,
+      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> field_a,
+      gsl::not_null<tnsr::iJ<DataVector, 3, Frame::Inertial>*> field_b,
+      gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*> field_d,
+      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> field_p,
+      gsl::not_null<Scalar<DataVector>*> u_scalar3_minus,
+      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> u_vector2_minus,
+      gsl::not_null<Scalar<DataVector>*> u_scalar2_minus,
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> u_tensor_minus,
+      const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&
+          face_mesh_velocity,
+      const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
+      const tnsr::I<DataVector, 3, Frame::Inertial>& coords, double time) const;
+
+  // FD interface
   using fd_interior_evolved_variables_tags = tmpl::list<>;
   using fd_interior_temporary_tags =
       tmpl::list<evolution::dg::subcell::Tags::Mesh<3>>;

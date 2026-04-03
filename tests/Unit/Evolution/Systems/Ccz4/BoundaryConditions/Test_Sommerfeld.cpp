@@ -162,7 +162,10 @@ void test_fd(const U& boundary_condition, const size_t max_degree) {
              expected_component != get<Tag>(expected_vars).cend() and
              component != get<Tag>(vars).cend();
              ++expected_component, ++component) {
-          CHECK_ITERABLE_APPROX(*component, *expected_component);
+          const Approx custom_approx = Approx::custom().epsilon(1.0e-13).scale(
+              max(abs(*expected_component)));
+          CHECK_ITERABLE_CUSTOM_APPROX(*component, *expected_component,
+                                       custom_approx);
         }
       });
 }
@@ -175,7 +178,9 @@ SPECTRE_TEST_CASE("Unit.Ccz4.BoundaryConditions.Sommerfeld",
     const auto product_boundary_condition =
         TestHelpers::test_creation<
             std::unique_ptr<Ccz4::BoundaryConditions::BoundaryCondition>,
-            Metavariables>("Sommerfeld:\n")
+            Metavariables>(
+            "Sommerfeld:\n"
+            "  ExtrapolationOrder: 1\n")
             ->get_clone();
 
     const auto serialized_and_deserialized_condition =
@@ -185,6 +190,60 @@ SPECTRE_TEST_CASE("Unit.Ccz4.BoundaryConditions.Sommerfeld",
 
     test_fd<Ccz4::BoundaryConditions::Sommerfeld>(
         serialized_and_deserialized_condition, 1);
+  }
+  {
+    INFO("Test Sommerfeld BC");
+    const auto product_boundary_condition =
+        TestHelpers::test_creation<
+            std::unique_ptr<Ccz4::BoundaryConditions::BoundaryCondition>,
+            Metavariables>(
+            "Sommerfeld:\n"
+            "  ExtrapolationOrder: 2\n")
+            ->get_clone();
+
+    const auto serialized_and_deserialized_condition =
+        serialize_and_deserialize(
+            *dynamic_cast<Ccz4::BoundaryConditions::Sommerfeld*>(
+                product_boundary_condition.get()));
+
+    test_fd<Ccz4::BoundaryConditions::Sommerfeld>(
+        serialized_and_deserialized_condition, 2);
+  }
+  {
+    INFO("Test Sommerfeld BC");
+    const auto product_boundary_condition =
+        TestHelpers::test_creation<
+            std::unique_ptr<Ccz4::BoundaryConditions::BoundaryCondition>,
+            Metavariables>(
+            "Sommerfeld:\n"
+            "  ExtrapolationOrder: 3\n")
+            ->get_clone();
+
+    const auto serialized_and_deserialized_condition =
+        serialize_and_deserialize(
+            *dynamic_cast<Ccz4::BoundaryConditions::Sommerfeld*>(
+                product_boundary_condition.get()));
+
+    test_fd<Ccz4::BoundaryConditions::Sommerfeld>(
+        serialized_and_deserialized_condition, 3);
+  }
+  {
+    INFO("Test Sommerfeld BC");
+    const auto product_boundary_condition =
+        TestHelpers::test_creation<
+            std::unique_ptr<Ccz4::BoundaryConditions::BoundaryCondition>,
+            Metavariables>(
+            "Sommerfeld:\n"
+            "  ExtrapolationOrder: 4\n")
+            ->get_clone();
+
+    const auto serialized_and_deserialized_condition =
+        serialize_and_deserialize(
+            *dynamic_cast<Ccz4::BoundaryConditions::Sommerfeld*>(
+                product_boundary_condition.get()));
+
+    test_fd<Ccz4::BoundaryConditions::Sommerfeld>(
+        serialized_and_deserialized_condition, 4);
   }
 }
 }  // namespace

@@ -222,7 +222,7 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Burgers.Subcell.NeighborPackagedData",
     evolution::dg::Actions::detail::dg_package_data<System>(
         make_not_null(&expected_fd_packaged_data_on_mortar),
         boundary_corr_for_test, vars_on_mortar_face, normal_covector,
-        {std::nullopt}, box,
+        {std::nullopt}, mortar_id.direction(), box,
         typename BoundaryCorrectionUsedForTest::dg_package_data_volume_tags{},
         dg_package_data_argument_tags{});
 

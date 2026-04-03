@@ -20,6 +20,8 @@
 
 /// \cond
 class DataVector;
+template <size_t Dim>
+class Direction;
 namespace gsl {
 template <typename T>
 class not_null;
@@ -160,7 +162,8 @@ class Rusanov<tmpl::list<NeutrinoSpecies...>> final
       const tnsr::I<DataVector, 3, Frame::Inertial>& normal_vector,
       const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&
           mesh_velocity,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<3>& /*face_direction*/) const {
     EXPAND_PACK_LEFT_TO_RIGHT(Rusanov_detail::dg_package_data_impl(
         packaged_tilde_e, packaged_tilde_s, packaged_normal_dot_flux_tilde_e,
         packaged_normal_dot_flux_tilde_s, tilde_e, tilde_s, flux_tilde_e,

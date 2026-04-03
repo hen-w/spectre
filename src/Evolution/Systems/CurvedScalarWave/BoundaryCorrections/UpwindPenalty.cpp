@@ -10,6 +10,7 @@
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "Evolution/Systems/CurvedScalarWave/Characteristics.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
 #include "Utilities/GenerateInstantiations.hpp"
@@ -58,7 +59,8 @@ double UpwindPenalty<Dim>::dg_package_data(
         interface_unit_normal_vector,
     const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
     /*mesh_velocity*/,
-    const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+    const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+    const Direction<Dim>& /*face_direction*/) const {
   *packaged_gamma2 = constraint_gamma2;
   *packaged_interface_unit_normal = interface_unit_normal;
   characteristic_fields(packaged_v_psi, packaged_v_zero, packaged_v_plus,

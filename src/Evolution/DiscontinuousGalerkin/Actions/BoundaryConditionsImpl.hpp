@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -70,9 +71,10 @@ std::optional<std::string> apply_boundary_condition_impl(
       get<TagsFromFace>(fields_on_interior_face)..., volume_args...);
 }
 
-template <typename System, size_t Dim, typename DbTagsList,
-          typename BoundaryCorrection, typename BoundaryCondition,
-          typename... EvolvedVariablesTags, typename... PackageDataVolumeTags,
+template <typename System, size_t Dim, bool ComputeAuxiliary = false,
+          typename DbTagsList, typename BoundaryCorrection,
+          typename BoundaryCondition, typename... EvolvedVariablesTags,
+          typename... PackageDataVolumeTags,
           typename... BoundaryConditionVolumeTags, typename... PackageFieldTags,
           typename... BoundaryTermsVolumeTags,
           typename... BoundaryCorrectionPackagedDataInputTags>
@@ -118,6 +120,10 @@ void apply_boundary_condition_on_face(
   using flux_variables = typename System::flux_variables;
   using dt_variables_tags = db::wrap_tags_in<::Tags::dt, variables_tags>;
   using dt_variables_tag = db::add_tag_prefix<::Tags::dt, variables_tag>;
+  // When computing auxiliary corrections we add the lifted boundary correction
+  // to the evolved variables, not to their time derivatives.
+  using tag_to_update =
+      tmpl::conditional_t<ComputeAuxiliary, variables_tag, dt_variables_tag>;
 
   const Mesh<Dim - 1> face_mesh = volume_mesh.slice_away(direction.dimension());
   const size_t number_of_points_on_face = face_mesh.number_of_grid_points();
@@ -390,7 +396,7 @@ void apply_boundary_condition_on_face(
   // time derivatives in the volume projected on to the face.
 
   Variables<dt_variables_tags> dt_time_derivative_correction{};
-  if constexpr (uses_time_derivative_condition) {
+  if constexpr (uses_time_derivative_condition and not ComputeAuxiliary) {
     dt_time_derivative_correction.initialize(number_of_points_on_face);
     auto apply_bc = [&boundary_condition, &dt_time_derivative_correction,
                      &face_mesh_velocity, &interior_normal_covector](
@@ -439,11 +445,20 @@ void apply_boundary_condition_on_face(
 
     Variables<mortar_tags_list> internal_packaged_data{
         number_of_points_on_face};
-    const double max_abs_char_speed_on_face = detail::dg_package_data<System>(
-        make_not_null(&internal_packaged_data), boundary_correction,
-        interior_face_fields, interior_normal_covector, face_mesh_velocity,
-        dg_package_data_projected_tags{},
-        db::get<PackageDataVolumeTags>(*box)...);
+    double max_abs_char_speed_on_face = 0.0;
+    if constexpr (ComputeAuxiliary) {
+      max_abs_char_speed_on_face = detail::dg_auxiliary_package_data<System>(
+          make_not_null(&internal_packaged_data), boundary_correction,
+          interior_face_fields, interior_normal_covector, face_mesh_velocity,
+          direction, dg_package_data_projected_tags{},
+          db::get<PackageDataVolumeTags>(*box)...);
+    } else {
+      max_abs_char_speed_on_face = detail::dg_package_data<System>(
+          make_not_null(&internal_packaged_data), boundary_correction,
+          interior_face_fields, interior_normal_covector, face_mesh_velocity,
+          direction, dg_package_data_projected_tags{},
+          db::get<PackageDataVolumeTags>(*box)...);
+    }
     (void)max_abs_char_speed_on_face;
 
     // Notes:
@@ -568,23 +583,41 @@ void apply_boundary_condition_on_face(
     // Package the external-side data for the boundary correction
     Variables<mortar_tags_list> external_packaged_data{
         number_of_points_on_face};
-    detail::dg_package_data<System>(
-        make_not_null(&external_packaged_data), boundary_correction,
-        exterior_face_fields,
-        get<evolution::dg::Tags::NormalCovector<Dim>>(exterior_face_fields),
-        face_mesh_velocity, dg_package_data_projected_tags{},
-        db::get<PackageDataVolumeTags>(*box)...);
+    if constexpr (ComputeAuxiliary) {
+      detail::dg_auxiliary_package_data<System>(
+          make_not_null(&external_packaged_data), boundary_correction,
+          exterior_face_fields,
+          get<evolution::dg::Tags::NormalCovector<Dim>>(exterior_face_fields),
+          face_mesh_velocity, direction, dg_package_data_projected_tags{},
+          db::get<PackageDataVolumeTags>(*box)...);
+    } else {
+      detail::dg_package_data<System>(
+          make_not_null(&external_packaged_data), boundary_correction,
+          exterior_face_fields,
+          get<evolution::dg::Tags::NormalCovector<Dim>>(exterior_face_fields),
+          face_mesh_velocity, direction, dg_package_data_projected_tags{},
+          db::get<PackageDataVolumeTags>(*box)...);
+    }
 
     Variables<dt_variables_tags> boundary_corrections_on_face{
         number_of_points_on_face};
 
     // Compute boundary correction
-    boundary_correction.dg_boundary_terms(
-        make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
-            boundary_corrections_on_face))...,
-        get<PackageFieldTags>(internal_packaged_data)...,
-        get<PackageFieldTags>(external_packaged_data)..., dg_formulation,
-        get<BoundaryTermsVolumeTags>(*box)...);
+    if constexpr (ComputeAuxiliary) {
+      boundary_correction.dg_auxiliary_boundary_terms(
+          make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
+              boundary_corrections_on_face))...,
+          get<PackageFieldTags>(internal_packaged_data)...,
+          get<PackageFieldTags>(external_packaged_data)..., dg_formulation,
+          get<BoundaryTermsVolumeTags>(*box)...);
+    } else {
+      boundary_correction.dg_boundary_terms(
+          make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
+              boundary_corrections_on_face))...,
+          get<PackageFieldTags>(internal_packaged_data)...,
+          get<PackageFieldTags>(external_packaged_data)..., dg_formulation,
+          get<BoundaryTermsVolumeTags>(*box)...);
+    }
 
     // Lift the boundary correction
     const auto& magnitude_of_interior_face_normal =
@@ -600,12 +633,12 @@ void apply_boundary_condition_on_face(
                       volume_mesh.basis(direction.dimension()));
 
       // Add the flux contribution to the volume data
-      db::mutate<dt_variables_tag>(
+      db::mutate<tag_to_update>(
           [&direction, &boundary_corrections_on_face,
-           &volume_mesh](const auto dt_variables_ptr) {
+           &volume_mesh](const auto vars_ptr) {
             add_slice_to_data(
-                dt_variables_ptr, boundary_corrections_on_face,
-                volume_mesh.extents(), direction.dimension(),
+                vars_ptr, boundary_corrections_on_face, volume_mesh.extents(),
+                direction.dimension(),
                 index_to_slice_at(volume_mesh.extents(), direction));
           },
           box);
@@ -631,20 +664,20 @@ void apply_boundary_condition_on_face(
                      interpolation_matrices, volume_det_jacobian,
                      volume_mesh.extents());
 
-      db::mutate<dt_variables_tag>(
+      db::mutate<tag_to_update>(
           [&direction, &boundary_corrections_on_face, &face_det_jacobian,
            &magnitude_of_interior_face_normal, &volume_det_inv_jacobian,
-           &volume_mesh](const auto dt_variables_ptr) {
+           &volume_mesh](const auto vars_ptr) {
             ::dg::lift_boundary_terms_gauss_points(
-                dt_variables_ptr, volume_det_inv_jacobian, volume_mesh,
-                direction, boundary_corrections_on_face,
-                magnitude_of_interior_face_normal, face_det_jacobian);
+                vars_ptr, volume_det_inv_jacobian, volume_mesh, direction,
+                boundary_corrections_on_face, magnitude_of_interior_face_normal,
+                face_det_jacobian);
           },
           box);
     }
   }
   // Add TimeDerivative correction to volume time derivatives.
-  if constexpr (uses_time_derivative_condition) {
+  if constexpr (uses_time_derivative_condition and not ComputeAuxiliary) {
     if (has_collocation_points_on_side) {
       db::mutate<dt_variables_tag>(
           [&direction, &dt_time_derivative_correction,
@@ -677,8 +710,8 @@ void apply_boundary_condition_on_face(
  * different boundary condition, we must check each boundary condition in
  * each external direction.
  */
-template <typename System, size_t Dim, typename DbTagsList,
-          typename BoundaryCorrection>
+template <typename System, size_t Dim, bool ComputeAuxiliary = false,
+          typename DbTagsList, typename BoundaryCorrection>
 void apply_boundary_conditions_on_all_external_faces(
     const gsl::not_null<db::DataBox<DbTagsList>*> box,
     const BoundaryCorrection& boundary_correction,
@@ -732,7 +765,28 @@ void apply_boundary_conditions_on_all_external_faces(
           const auto& boundary_condition =
               *external_boundary_conditions.at(direction);
           if (typeid(boundary_condition) == typeid(DerivedBoundaryCondition)) {
-            detail::apply_boundary_condition_on_face<System>(
+            // Select auxiliary or physical tags based on ComputeAuxiliary
+            using package_data_volume_tags = tmpl::conditional_t<
+                ComputeAuxiliary,
+                typename BoundaryCorrection::
+                    dg_auxiliary_package_data_volume_tags,
+                typename BoundaryCorrection::dg_package_data_volume_tags>;
+            using package_field_tags = tmpl::conditional_t<
+                ComputeAuxiliary,
+                typename BoundaryCorrection::dg_auxiliary_package_field_tags,
+                typename BoundaryCorrection::dg_package_field_tags>;
+            using boundary_terms_volume_tags = tmpl::conditional_t<
+                ComputeAuxiliary,
+                typename BoundaryCorrection::
+                    dg_auxiliary_boundary_terms_volume_tags,
+                typename BoundaryCorrection::dg_boundary_terms_volume_tags>;
+            using package_data_temp_tags = tmpl::conditional_t<
+                ComputeAuxiliary,
+                typename BoundaryCorrection::
+                    dg_auxiliary_package_data_temporary_tags,
+                typename BoundaryCorrection::dg_package_data_temporary_tags>;
+            detail::apply_boundary_condition_on_face<System, Dim,
+                                                     ComputeAuxiliary>(
                 box, boundary_correction,
                 dynamic_cast<const DerivedBoundaryCondition&>(
                     boundary_condition),
@@ -751,12 +805,11 @@ void apply_boundary_conditions_on_all_external_faces(
                     Dim, Frame::ElementLogical, Frame::Inertial>>(*box),
                 db::get<::domain::Tags::DetInvJacobian<Frame::ElementLogical,
                                                        Frame::Inertial>>(*box),
-                typename BoundaryCorrection::dg_package_data_volume_tags{},
-                typename BoundaryCorrection::dg_package_field_tags{},
-                typename BoundaryCorrection::dg_boundary_terms_volume_tags{},
+                package_data_volume_tags{}, package_field_tags{},
+                boundary_terms_volume_tags{},
                 tmpl::remove_duplicates<tmpl::append<
                     typename variables_tag::tags_list, fluxes_tags,
-                    typename BoundaryCorrection::dg_package_data_temporary_tags,
+                    package_data_temp_tags,
                     typename detail::get_primitive_vars<
                         System::has_primitive_and_conservative_vars>::
                         template f<BoundaryCorrection>>>{},

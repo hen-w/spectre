@@ -201,7 +201,7 @@ std::vector<double> fd_stencil<2>(const DataVector& xi_source,
   size_t i2{0};
 
   if (xi_u == std::begin(xi_source)) {
-    // Target at/below first point
+    // Target below first point
     i0 = 0;
     i1 = 1;
     i2 = 2;
@@ -335,6 +335,119 @@ std::vector<double> fd_stencil<3>(const DataVector& xi_source,
   return w;
 }
 
+// Quartic (five-point) finite-difference interpolation stencil.
+// Uses five consecutive grid points to build a degree-4 Lagrange interpolant.
+// Boundary/out-of-domain targets use the first/last 5 points (one-sided quartic
+// extrapolation). For interior targets we pick
+// the more centered of the two possible 5-point windows bracketing the target.
+template <>
+std::vector<double> fd_stencil<4>(const DataVector& xi_source,
+                                  const double xi_target) {
+  ASSERT(std::is_sorted(std::begin(xi_source), std::end(xi_source)),
+         "xi_source = " << xi_source);
+  const size_t num_of_pts = xi_source.size();
+  ASSERT(num_of_pts >= 5,
+         "Need at least 5 points for quartic interpolation (got " << num_of_pts
+                                                                  << ")");
+
+  auto xi_u =
+      std::upper_bound(std::begin(xi_source), std::end(xi_source), xi_target);
+
+  // Determine the five indices to use.
+  size_t i0{0};
+  size_t i1{0};
+  size_t i2{0};
+  size_t i3{0};
+  size_t i4{0};
+
+  if (xi_u == std::begin(xi_source)) {
+    // Target below first point
+    i0 = 0;
+    i1 = 1;
+    i2 = 2;
+    i3 = 3;
+    i4 = 4;
+  } else if (xi_u == std::end(xi_source)) {
+    // Target above last point
+    i0 = num_of_pts - 5;
+    i1 = num_of_pts - 4;
+    i2 = num_of_pts - 3;
+    i3 = num_of_pts - 2;
+    i4 = num_of_pts - 1;
+  } else {
+    const auto iu =
+        static_cast<size_t>(std::distance(std::begin(xi_source), xi_u));
+    const size_t il = iu - 1;  // lower bracket index
+
+    if (il < 2) {
+      // Near lower boundary
+      i0 = 0;
+      i1 = 1;
+      i2 = 2;
+      i3 = 3;
+      i4 = 4;
+    } else if (iu > num_of_pts - 3) {
+      // Near upper boundary (need room for two points to the right)
+      i0 = num_of_pts - 5;
+      i1 = num_of_pts - 4;
+      i2 = num_of_pts - 3;
+      i3 = num_of_pts - 2;
+      i4 = num_of_pts - 1;
+    } else {
+      // Interior: choose between two nearly-centered 5-point windows
+      // Option A: (il-2, il-1, il, iu, iu+1)
+      // Option B: (il-1, il, iu, iu+1, iu+2)
+      const size_t a0 = il - 2;
+      const size_t b0 = il - 1;
+
+      const double a_left = xi_source[a0];
+      const double a_right = xi_source[a0 + 4];
+      const double b_left = xi_source[b0];
+      const double b_right = xi_source[b0 + 4];
+
+      const double imbalance_a =
+          std::abs((xi_target - a_left) - (a_right - xi_target));
+      const double imbalance_b =
+          std::abs((xi_target - b_left) - (b_right - xi_target));
+
+      const size_t s0 = (imbalance_b < imbalance_a) ? b0 : a0;
+
+      i0 = s0;
+      i1 = s0 + 1;
+      i2 = s0 + 2;
+      i3 = s0 + 3;
+      i4 = s0 + 4;
+    }
+  }
+
+  // Compute Lagrange weights for the selected five nodes.
+  const double x0 = xi_source[i0];
+  const double x1 = xi_source[i1];
+  const double x2 = xi_source[i2];
+  const double x3 = xi_source[i3];
+  const double x4 = xi_source[i4];
+
+  const double denom0 = (x0 - x1) * (x0 - x2) * (x0 - x3) * (x0 - x4);
+  const double denom1 = (x1 - x0) * (x1 - x2) * (x1 - x3) * (x1 - x4);
+  const double denom2 = (x2 - x0) * (x2 - x1) * (x2 - x3) * (x2 - x4);
+  const double denom3 = (x3 - x0) * (x3 - x1) * (x3 - x2) * (x3 - x4);
+  const double denom4 = (x4 - x0) * (x4 - x1) * (x4 - x2) * (x4 - x3);
+
+  std::vector<double> w(num_of_pts, 0.0);
+  w[i0] = (xi_target - x1) * (xi_target - x2) * (xi_target - x3) *
+          (xi_target - x4) / denom0;
+  w[i1] = (xi_target - x0) * (xi_target - x2) * (xi_target - x3) *
+          (xi_target - x4) / denom1;
+  w[i2] = (xi_target - x0) * (xi_target - x1) * (xi_target - x3) *
+          (xi_target - x4) / denom2;
+  w[i3] = (xi_target - x0) * (xi_target - x1) * (xi_target - x2) *
+          (xi_target - x4) / denom3;
+  w[i4] = (xi_target - x0) * (xi_target - x1) * (xi_target - x2) *
+          (xi_target - x3) / denom4;
+
+  return w;
+}
+
 template <size_t Dim, typename DataType>
 Matrix interpolation_matrix(
     const Mesh<Dim>& mesh,
@@ -367,6 +480,10 @@ Matrix interpolation_matrix(
         }
         case 3: {
           stencil = fd_stencil<3>(xi_source, xi_target);
+          break;
+        }
+        case 4: {
+          stencil = fd_stencil<4>(xi_source, xi_target);
           break;
         }
         default:
@@ -435,6 +552,11 @@ Matrix interpolation_matrix(
         case 3: {
           xi_stencil = fd_stencil<3>(xi_source, xi_target);
           eta_stencil = fd_stencil<3>(eta_source, eta_target);
+          break;
+        }
+        case 4: {
+          xi_stencil = fd_stencil<4>(xi_source, xi_target);
+          eta_stencil = fd_stencil<4>(eta_source, eta_target);
           break;
         }
         default:
@@ -560,6 +682,12 @@ Matrix interpolation_matrix(
           xi_stencil = fd_stencil<3>(xi_source, xi_target);
           eta_stencil = fd_stencil<3>(eta_source, eta_target);
           zeta_stencil = fd_stencil<3>(zeta_source, zeta_target);
+          break;
+        }
+        case 4: {
+          xi_stencil = fd_stencil<4>(xi_source, xi_target);
+          eta_stencil = fd_stencil<4>(eta_source, eta_target);
+          zeta_stencil = fd_stencil<4>(zeta_source, zeta_target);
           break;
         }
         default:

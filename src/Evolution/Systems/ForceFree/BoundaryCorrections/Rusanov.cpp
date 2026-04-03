@@ -11,6 +11,7 @@
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/EagerMath/DotProduct.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/NormalDotFlux.hpp"
 #include "Utilities/Gsl.hpp"
@@ -63,7 +64,8 @@ double Rusanov::dg_package_data(
     const tnsr::I<DataVector, 3, Frame::Inertial>& /*normal_vector*/,
     const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&
     /*mesh_velocity*/,
-    const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) {
+    const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+    const Direction<3>& /*face_direction*/) {
   // Compute max abs char speed
   Scalar<DataVector>& shift_dot_normal = *packaged_tilde_q;
   dot_product(make_not_null(&shift_dot_normal), shift, normal_covector);

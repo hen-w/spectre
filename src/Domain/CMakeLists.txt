@@ -82,6 +82,10 @@ target_link_libraries(
   SphericalHarmonics
 )
 
+if (SPECTRE_AUTODIFF)
+  target_link_libraries(${LIBRARY} PUBLIC Autodiff)
+endif()
+
 add_subdirectory(Amr)
 add_subdirectory(BoundaryConditions)
 add_subdirectory(CoordinateMaps)

@@ -27,6 +27,8 @@ class not_null;
 namespace PUP {
 class er;
 }  // namespace PUP
+template <size_t Dim>
+class Direction;
 /// \endcond
 
 namespace grmhd::ValenciaDivClean::BoundaryCorrections {
@@ -161,6 +163,7 @@ class Rusanov final : public evolution::BoundaryCorrection {
       const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&
       /*mesh_velocity*/,
       const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<3>& /*face_direction*/,
       const EquationsOfState::EquationOfState<true, 3>&
       /*equation_of_state*/);
 

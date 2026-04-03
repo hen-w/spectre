@@ -11,6 +11,7 @@
 #include "DataStructures/Tags/TempTensor.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/NormalDotFlux.hpp"
 #include "Utilities/Gsl.hpp"
@@ -33,7 +34,8 @@ double Hll::dg_package_data(
     const tnsr::i<DataVector, 1, Frame::Inertial>& normal_covector,
     const std::optional<tnsr::I<DataVector, 1, Frame::Inertial>>&
     /*mesh_velocity*/,
-    const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) {
+    const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+    const Direction<1>& /*face_direction*/) {
   get(*packaged_char_speed) = sign(get<0>(normal_covector)) * get(u);
   if (normal_dot_mesh_velocity.has_value()) {
     get(*packaged_char_speed) -= get(*normal_dot_mesh_velocity);

@@ -5,8 +5,10 @@
 
 #include <cmath>
 
+#include "DataStructures/DataVector.hpp"
 #include "DataStructures/Matrix.hpp"
 #include "NumericalAlgorithms/Spectral/Basis.hpp"
+#include "NumericalAlgorithms/Spectral/CollocationPoints.hpp"
 #include "NumericalAlgorithms/Spectral/MaximumNumberOfPoints.hpp"
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
 #include "NumericalAlgorithms/Spectral/MinimumNumberOfPoints.hpp"
@@ -32,6 +34,101 @@ Matrix exponential_filter(const Mesh<1>& mesh, const double alpha,
     filter_matrix(i, i) = exp(-alpha * pow(i / order, 2 * half_power));
   }
   return modal_to_nodal * filter_matrix * nodal_to_modal;
+}
+
+Matrix cg_filter(const Mesh<1>& mesh, const double alpha,
+                 const unsigned half_power) {
+  ASSERT(mesh.quadrature(0) == Spectral::Quadrature::GaussLobatto,
+         "CG filtering only works with Gauss-Lobatto points, but got "
+             << mesh.quadrature(0));
+
+  const size_t npts = mesh.number_of_grid_points();
+  const double order = static_cast<double>(npts - 1);
+
+  const Matrix& nodal_to_modal = Spectral::nodal_to_modal_matrix(mesh);
+  const Matrix& modal_to_nodal = Spectral::modal_to_nodal_matrix(mesh);
+  const auto& xi = Spectral::collocation_points(mesh);
+
+  auto sigma = [alpha, half_power, order](const size_t j) -> double {
+    return exp(-alpha * pow(static_cast<double>(j) / order,
+                            2.0 * static_cast<double>(half_power)));
+  };
+
+  // Matrix that builds the endpoint-preserving linear polynomial
+  // p_i = ((1 - xi_i)/2) * u_L + ((1 + xi_i)/2) * u_R
+  auto lift_matrix = [&xi, npts]() -> Matrix {
+    Matrix lift(npts, npts, 0.0);
+    for (size_t i = 0; i < npts; ++i) {
+      lift(i, 0) = 0.5 * (1.0 - xi[i]);
+      lift(i, npts - 1) = 0.5 * (1.0 + xi[i]);
+    }
+    return lift;
+  };
+
+  auto identity_matrix = [npts]() -> Matrix {
+    Matrix id(npts, npts, 0.0);
+    for (size_t i = 0; i < npts; ++i) {
+      id(i, i) = 1.0;
+    }
+    return id;
+  };
+
+  // Boyd recursion: unfiltered modal coefficients a_j -> filtered coefficients
+  // \bar{a}_j
+  auto boyd_modal_coefficients =
+      [npts, &sigma](const std::vector<double>& a) -> std::vector<double> {
+    std::vector<double> a_bar = a;  // leaves a_0 and a_1 unchanged
+
+    for (size_t parity = 0; parity < 2; ++parity) {
+      int N = static_cast<int>(npts) - 1;
+      if (N % 2 != static_cast<int>(parity)) {
+        --N;
+      }
+
+      if (N <= 1) {
+        continue;
+      }
+
+      // Eq. (8): lambda = sigma_{N-2} a_N, b_{N-2} = a_N, ā_N = lambda, rho =
+      // lambda
+      double b_j = a[static_cast<size_t>(N)];
+      double rho = sigma(static_cast<size_t>(N - 2)) * b_j;
+      a_bar[static_cast<size_t>(N)] = rho;
+
+      // Eq. (9): j = N-2, N-4, ...
+      for (int j = N - 2; j > 1; j -= 2) {
+        b_j += a[static_cast<size_t>(j)];
+        const double lambda = sigma(static_cast<size_t>(j - 2)) * b_j;
+        a_bar[static_cast<size_t>(j)] = lambda - rho;
+        rho = lambda;
+      }
+    }
+
+    return a_bar;
+  };
+
+  // Build the modal-space operator that maps a -> a_bar
+  auto boyd_modal_filter_matrix = [&boyd_modal_coefficients, npts]() -> Matrix {
+    Matrix modal_filter(npts, npts, 0.0);
+    for (size_t col = 0; col < npts; ++col) {
+      std::vector<double> a(npts, 0.0);
+      a[col] = 1.0;
+      const auto a_bar = boyd_modal_coefficients(a);
+      for (size_t row = 0; row < npts; ++row) {
+        modal_filter(row, col) = a_bar[row];
+      }
+    }
+    return modal_filter;
+  };
+
+  const Matrix lift = lift_matrix();
+  const Matrix identity = identity_matrix();
+  const Matrix residual_projector = identity - lift;
+  const Matrix modal_filter = boyd_modal_filter_matrix();
+
+  // u -> p + F(u - p)
+  return lift +
+         modal_to_nodal * modal_filter * nodal_to_modal * residual_projector;
 }
 
 namespace {

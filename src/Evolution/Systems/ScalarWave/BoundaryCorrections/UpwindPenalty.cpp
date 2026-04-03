@@ -5,7 +5,9 @@
 
 #include <memory>
 #include <optional>
+
 #include <pup.h>
+#include "Domain/Structure/Direction.hpp"
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tags/TempTensor.hpp"
@@ -56,7 +58,8 @@ double UpwindPenalty<Dim>::dg_package_data(
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
     const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
     /*mesh_velocity*/,
-    const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+    const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+    const Direction<Dim>& /*face_direction*/) const {
   if (normal_dot_mesh_velocity.has_value()) {
     get<0>(*packaged_char_speeds) = -get(*normal_dot_mesh_velocity);
     get<1>(*packaged_char_speeds) = 1.0 - get(*normal_dot_mesh_velocity);

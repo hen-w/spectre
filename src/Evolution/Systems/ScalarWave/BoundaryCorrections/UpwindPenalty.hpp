@@ -17,6 +17,8 @@
 
 /// \cond
 class DataVector;
+template <size_t Dim>
+class Direction;
 namespace gsl {
 template <typename T>
 class not_null;
@@ -238,7 +240,8 @@ class UpwindPenalty final : public evolution::BoundaryCorrection {
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
       /*mesh_velocity*/,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const;
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& /*face_direction*/) const;
 
   void dg_boundary_terms(
       gsl::not_null<Scalar<DataVector>*> psi_boundary_correction,

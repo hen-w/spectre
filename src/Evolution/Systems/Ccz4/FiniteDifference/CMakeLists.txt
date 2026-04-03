@@ -9,29 +9,53 @@ spectre_target_sources(
   ${LIBRARY}
   PRIVATE
   ApplyFilter.cpp
+  Characteristics.cpp
+  ConstraintCharacteristics.cpp
   Derivatives.cpp
   DummyReconstructor.cpp
   EnforceConstrainedEvolution.cpp
+  EnforceTracelessDerivConformalMetric.cpp
+  EnforceTracelessDtConformalMetric.cpp
+  EventInstantiation.cpp
   Filter.cpp
   GhostData.cpp
+  RadiationCharacteristics.cpp
   Reconstructor.cpp
+  RegisterDerivedWithCharm.cpp
+  VolumeTerms.cpp
   )
 
 spectre_target_headers(
   ${LIBRARY}
   INCLUDE_DIRECTORY ${CMAKE_SOURCE_DIR}/src
   HEADERS
+  AddUpperSpatialZ4Constraint.hpp
   ApplyFilter.hpp
   BoundaryConditionGhostData.hpp
+  Characteristics.hpp
+  ComputeCrpbcBoundaryModeDt.hpp
+  ConstraintCharacteristics.hpp
   Derivatives.hpp
   DummyReconstructor.hpp
   EnforceConstrainedEvolution.hpp
+  EnforceTracelessDerivConformalMetric.hpp
+  EnforceTracelessDtConformalMetric.hpp
   Filter.hpp
   GhostData.hpp
+  LdgTimeDerivative.hpp
+  OverwriteExternalBoundaryDt.hpp
+  OverwriteExternalBoundaryDtDirichlet.hpp
+  RadiationCharacteristics.hpp
   Reconstructor.hpp
+  RegisterDerivedWithCharm.hpp
+  ResizeTimeDerivatives.hpp
+  SetInitialEta.hpp
+  SetInitialBoundaryModes.hpp
+  SetK0.hpp
   SoTimeDerivative.hpp
   System.hpp
   Tags.hpp
+  UpdateAuxiliaryVariables.hpp
   )
 
 target_link_libraries(
@@ -51,3 +75,4 @@ target_link_libraries(
   )
 
 add_subdirectory(../BoundaryConditions ${CMAKE_CURRENT_BINARY_DIR}/BoundaryConditions)
+add_subdirectory(../BoundaryCorrections ${CMAKE_CURRENT_BINARY_DIR}/BoundaryCorrections)

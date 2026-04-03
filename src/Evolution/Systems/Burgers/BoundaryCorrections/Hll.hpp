@@ -24,6 +24,8 @@ class not_null;
 namespace PUP {
 class er;
 }  // namespace PUP
+template <size_t Dim>
+class Direction;
 /// \endcond
 
 namespace Burgers::BoundaryCorrections {
@@ -105,7 +107,8 @@ class Hll final : public evolution::BoundaryCorrection {
       const tnsr::i<DataVector, 1, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, 1, Frame::Inertial>>&
           mesh_velocity,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity);
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<1>& /*face_direction*/);
 
   static void dg_boundary_terms(
       gsl::not_null<Scalar<DataVector>*> boundary_correction_u,

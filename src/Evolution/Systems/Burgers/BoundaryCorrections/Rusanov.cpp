@@ -9,6 +9,7 @@
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/NormalDotFlux.hpp"
 #include "Utilities/Gsl.hpp"
@@ -31,7 +32,8 @@ double Rusanov::dg_package_data(
     const tnsr::i<DataVector, 1, Frame::Inertial>& normal_covector,
     const std::optional<tnsr::I<DataVector, 1, Frame::Inertial>>&
     /*mesh_velocity*/,
-    const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) {
+    const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+    const Direction<1>& /*face_direction*/) {
   if (normal_dot_mesh_velocity.has_value()) {
     get(*packaged_abs_char_speed) =
         abs(get(u) - get(*normal_dot_mesh_velocity));

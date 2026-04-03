@@ -10,6 +10,7 @@
 #include "DataStructures/DataBox/Prefixes.hpp"
 #include "DataStructures/TaggedTuple.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Options/String.hpp"
 #include "PointwiseFunctions/GeneralRelativity/Tags.hpp"
@@ -72,6 +73,12 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
   using DerivSpatialMetric =
       ::Tags::deriv<gr::Tags::SpatialMetric<DataVector, volume_dim>,
                     tmpl::size_t<volume_dim>, Frame::Inertial>;
+  using DerivConformalMetric =
+      ::Tags::deriv<Ccz4::Tags::ConformalMetric<DataVector, volume_dim>,
+                    tmpl::size_t<volume_dim>, Frame::Inertial>;
+  using DerivConformalFactor =
+      ::Tags::deriv<Ccz4::Tags::ConformalFactor<DataVector>,
+                    tmpl::size_t<volume_dim>, Frame::Inertial>;
   using TimeDerivLapse = ::Tags::dt<gr::Tags::Lapse<DataVector>>;
   using TimeDerivShift = ::Tags::dt<gr::Tags::Shift<DataVector, volume_dim>>;
   using TimeDerivSpatialMetric =
@@ -81,15 +88,26 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
       typename SolutionType::template tags<DataVector>>;
 
   template <typename DataType>
-  using tags =
-      tmpl::push_back<typename SolutionType::template tags<DataType>,
-                      Ccz4::Tags::ConformalMetric<DataType, volume_dim>,
-                      Ccz4::Tags::ConformalFactor<DataType>,
-                      Ccz4::Tags::ATilde<DataType, volume_dim>,
-                      gr::Tags::TraceExtrinsicCurvature<DataType>,
-                      Ccz4::Tags::Theta<DataType>,
-                      Ccz4::Tags::GammaHat<DataType, volume_dim>,
-                      Ccz4::Tags::AuxiliaryShiftB<DataType, volume_dim>>;
+  using tags = tmpl::push_back<
+      typename SolutionType::template tags<DataType>,
+      Ccz4::Tags::ConformalMetric<DataType, volume_dim>,
+      Ccz4::Tags::ConformalFactor<DataType>,
+      Ccz4::Tags::ATilde<DataType, volume_dim>,
+      gr::Tags::TraceExtrinsicCurvature<DataType>, Ccz4::Tags::Theta<DataType>,
+      Ccz4::Tags::GammaHat<DataType, volume_dim>,
+      Ccz4::Tags::AuxiliaryShiftB<DataType, volume_dim>,
+      ::Tags::deriv<Ccz4::Tags::ConformalMetric<DataType, volume_dim>,
+                    tmpl::size_t<volume_dim>, Frame::Inertial>,
+      ::Tags::deriv<Ccz4::Tags::ConformalFactor<DataType>,
+                    tmpl::size_t<volume_dim>, Frame::Inertial>,
+      Ccz4::Tags::FieldA<DataType, volume_dim>,
+      Ccz4::Tags::FieldB<DataType, volume_dim>,
+      Ccz4::Tags::FieldD<DataType, volume_dim>,
+      Ccz4::Tags::FieldP<DataType, volume_dim>,
+      Ccz4::fd::Tags::UScalar3Minus<DataType>,
+      Ccz4::fd::Tags::UVector2Minus<DataType, volume_dim, Frame::Inertial>,
+      Ccz4::fd::Tags::UScalar2Minus<DataType>,
+      Ccz4::fd::Tags::UTensorMinus<DataType, volume_dim, Frame::Inertial>>;
 
   template <typename... Tags>
   tuples::TaggedTuple<Tags...> variables(
@@ -140,10 +158,13 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
 
  private:
   // Preprocessor logic to avoid declaring variables() functions for
-  // tags other than the three the wrapper adds (i.e., other than
+  // tags other than the thirteen the wrapper adds (i.e., other than
   // Ccz4::Tags::ConformalMetric, Ccz4::Tags::ConformalFactor,
   // Ccz4:Tags::ATilde, gr::Tags::TraceExtrinsicCurvature,
-  // Ccz4::Tags::Theta, Ccz4::Tags::GammaHat)
+  // Ccz4::Tags::Theta, Ccz4::Tags::GammaHat, Ccz4::Tags::AuxiliaryShiftB,
+  // DerivConformalMetric, DerivConformalFactor,
+  // Ccz4::Tags::FieldA, Ccz4::Tags::FieldB, Ccz4::Tags::FieldD,
+  // and Ccz4::Tags::FieldP)
   using TagShift = gr::Tags::Shift<DataVector, volume_dim>;
   using TagSpatialMetric = gr::Tags::SpatialMetric<DataVector, volume_dim>;
   using TagInverseSpatialMetric =
@@ -201,6 +222,70 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
       const tnsr::I<DataVector, volume_dim>& /*x*/,
       tmpl::list<Ccz4::Tags::AuxiliaryShiftB<DataVector, volume_dim>> /*meta*/,
       const IntermediateVars& intermediate_vars) const;
+  tuples::TaggedTuple<
+      ::Tags::deriv<Ccz4::Tags::ConformalMetric<DataVector, volume_dim>,
+                    tmpl::size_t<volume_dim>, Frame::Inertial>>
+  variables(
+      const tnsr::I<DataVector, volume_dim>& /*x*/,
+      tmpl::list<
+          ::Tags::deriv<Ccz4::Tags::ConformalMetric<DataVector, volume_dim>,
+                        tmpl::size_t<volume_dim>, Frame::Inertial>> /*meta*/,
+      const IntermediateVars& intermediate_vars) const;
+  tuples::TaggedTuple<::Tags::deriv<Ccz4::Tags::ConformalFactor<DataVector>,
+                                    tmpl::size_t<volume_dim>, Frame::Inertial>>
+  variables(const tnsr::I<DataVector, volume_dim>& /*x*/,
+            tmpl::list<::Tags::deriv<Ccz4::Tags::ConformalFactor<DataVector>,
+                                     tmpl::size_t<volume_dim>,
+                                     Frame::Inertial>> /*meta*/,
+            const IntermediateVars& intermediate_vars) const;
+  tuples::TaggedTuple<Ccz4::Tags::FieldA<DataVector, volume_dim>> variables(
+      const tnsr::I<DataVector, volume_dim>& /*x*/,
+      tmpl::list<Ccz4::Tags::FieldA<DataVector, volume_dim>> /*meta*/,
+      const IntermediateVars& intermediate_vars) const;
+  tuples::TaggedTuple<Ccz4::Tags::FieldB<DataVector, volume_dim>> variables(
+      const tnsr::I<DataVector, volume_dim>& /*x*/,
+      tmpl::list<Ccz4::Tags::FieldB<DataVector, volume_dim>> /*meta*/,
+      const IntermediateVars& intermediate_vars) const;
+  tuples::TaggedTuple<Ccz4::Tags::FieldD<DataVector, volume_dim>> variables(
+      const tnsr::I<DataVector, volume_dim>& /*x*/,
+      tmpl::list<Ccz4::Tags::FieldD<DataVector, volume_dim>> /*meta*/,
+      const IntermediateVars& intermediate_vars) const;
+  tuples::TaggedTuple<Ccz4::Tags::FieldP<DataVector, volume_dim>> variables(
+      const tnsr::I<DataVector, volume_dim>& /*x*/,
+      tmpl::list<Ccz4::Tags::FieldP<DataVector, volume_dim>> /*meta*/,
+      const IntermediateVars& intermediate_vars) const;
+
+  // Boundary mode tags — always zero at initialization
+  tuples::TaggedTuple<Ccz4::fd::Tags::UScalar3Minus<DataVector>> variables(
+      const tnsr::I<DataVector, volume_dim>& x,
+      tmpl::list<Ccz4::fd::Tags::UScalar3Minus<DataVector>> /*meta*/,
+      const IntermediateVars& /*intermediate_vars*/) const {
+    return {make_with_value<Scalar<DataVector>>(x, 0.0)};
+  }
+  tuples::TaggedTuple<
+      Ccz4::fd::Tags::UVector2Minus<DataVector, volume_dim, Frame::Inertial>>
+  variables(const tnsr::I<DataVector, volume_dim>& x,
+            tmpl::list<Ccz4::fd::Tags::UVector2Minus<DataVector, volume_dim,
+                                                     Frame::Inertial>> /*meta*/,
+            const IntermediateVars& /*intermediate_vars*/) const {
+    return {make_with_value<tnsr::i<DataVector, volume_dim, Frame::Inertial>>(
+        x, 0.0)};
+  }
+  tuples::TaggedTuple<Ccz4::fd::Tags::UScalar2Minus<DataVector>> variables(
+      const tnsr::I<DataVector, volume_dim>& x,
+      tmpl::list<Ccz4::fd::Tags::UScalar2Minus<DataVector>> /*meta*/,
+      const IntermediateVars& /*intermediate_vars*/) const {
+    return {make_with_value<Scalar<DataVector>>(x, 0.0)};
+  }
+  tuples::TaggedTuple<
+      Ccz4::fd::Tags::UTensorMinus<DataVector, volume_dim, Frame::Inertial>>
+  variables(const tnsr::I<DataVector, volume_dim>& x,
+            tmpl::list<Ccz4::fd::Tags::UTensorMinus<DataVector, volume_dim,
+                                                    Frame::Inertial>> /*meta*/,
+            const IntermediateVars& /*intermediate_vars*/) const {
+    return {make_with_value<tnsr::ii<DataVector, volume_dim, Frame::Inertial>>(
+        x, 0.0)};
+  }
 
   tuples::TaggedTuple<Ccz4::Tags::ConformalMetric<DataVector, volume_dim>>
   variables(
@@ -244,6 +329,83 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
       const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
       tmpl::list<Ccz4::Tags::AuxiliaryShiftB<DataVector, volume_dim>> meta,
       const IntermediateVars& intermediate_vars) const {
+    return variables(x, meta, intermediate_vars);
+  }
+  tuples::TaggedTuple<
+      ::Tags::deriv<Ccz4::Tags::ConformalMetric<DataVector, volume_dim>,
+                    tmpl::size_t<volume_dim>, Frame::Inertial>>
+  variables(
+      const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+      tmpl::list<
+          ::Tags::deriv<Ccz4::Tags::ConformalMetric<DataVector, volume_dim>,
+                        tmpl::size_t<volume_dim>, Frame::Inertial>>
+          meta,
+      const IntermediateVars& intermediate_vars) const {
+    return variables(x, meta, intermediate_vars);
+  }
+  tuples::TaggedTuple<::Tags::deriv<Ccz4::Tags::ConformalFactor<DataVector>,
+                                    tmpl::size_t<volume_dim>, Frame::Inertial>>
+  variables(const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+            tmpl::list<::Tags::deriv<Ccz4::Tags::ConformalFactor<DataVector>,
+                                     tmpl::size_t<volume_dim>, Frame::Inertial>>
+                meta,
+            const IntermediateVars& intermediate_vars) const {
+    return variables(x, meta, intermediate_vars);
+  }
+  tuples::TaggedTuple<Ccz4::Tags::FieldA<DataVector, volume_dim>> variables(
+      const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+      tmpl::list<Ccz4::Tags::FieldA<DataVector, volume_dim>> meta,
+      const IntermediateVars& intermediate_vars) const {
+    return variables(x, meta, intermediate_vars);
+  }
+  tuples::TaggedTuple<Ccz4::Tags::FieldB<DataVector, volume_dim>> variables(
+      const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+      tmpl::list<Ccz4::Tags::FieldB<DataVector, volume_dim>> meta,
+      const IntermediateVars& intermediate_vars) const {
+    return variables(x, meta, intermediate_vars);
+  }
+  tuples::TaggedTuple<Ccz4::Tags::FieldD<DataVector, volume_dim>> variables(
+      const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+      tmpl::list<Ccz4::Tags::FieldD<DataVector, volume_dim>> meta,
+      const IntermediateVars& intermediate_vars) const {
+    return variables(x, meta, intermediate_vars);
+  }
+  tuples::TaggedTuple<Ccz4::Tags::FieldP<DataVector, volume_dim>> variables(
+      const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+      tmpl::list<Ccz4::Tags::FieldP<DataVector, volume_dim>> meta,
+      const IntermediateVars& intermediate_vars) const {
+    return variables(x, meta, intermediate_vars);
+  }
+
+  // Boundary mode tags — always zero (time-dependent overloads)
+  tuples::TaggedTuple<Ccz4::fd::Tags::UScalar3Minus<DataVector>> variables(
+      const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+      tmpl::list<Ccz4::fd::Tags::UScalar3Minus<DataVector>> meta,
+      const IntermediateVars& intermediate_vars) const {
+    return variables(x, meta, intermediate_vars);
+  }
+  tuples::TaggedTuple<
+      Ccz4::fd::Tags::UVector2Minus<DataVector, volume_dim, Frame::Inertial>>
+  variables(const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+            tmpl::list<Ccz4::fd::Tags::UVector2Minus<DataVector, volume_dim,
+                                                     Frame::Inertial>>
+                meta,
+            const IntermediateVars& intermediate_vars) const {
+    return variables(x, meta, intermediate_vars);
+  }
+  tuples::TaggedTuple<Ccz4::fd::Tags::UScalar2Minus<DataVector>> variables(
+      const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+      tmpl::list<Ccz4::fd::Tags::UScalar2Minus<DataVector>> meta,
+      const IntermediateVars& intermediate_vars) const {
+    return variables(x, meta, intermediate_vars);
+  }
+  tuples::TaggedTuple<
+      Ccz4::fd::Tags::UTensorMinus<DataVector, volume_dim, Frame::Inertial>>
+  variables(const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+            tmpl::list<Ccz4::fd::Tags::UTensorMinus<DataVector, volume_dim,
+                                                    Frame::Inertial>>
+                meta,
+            const IntermediateVars& intermediate_vars) const {
     return variables(x, meta, intermediate_vars);
   }
 };

@@ -28,6 +28,8 @@ class not_null;
 namespace PUP {
 class er;
 }  // namespace PUP
+template <size_t Dim>
+class Direction;
 /// \endcond
 
 namespace gh::BoundaryCorrections {
@@ -164,7 +166,8 @@ class AveragedUpwindPenalty final : public evolution::BoundaryCorrection {
       const tnsr::I<DataVector, Dim, Frame::Inertial>& normal_vector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const;
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& /*face_direction*/) const;
 
   void dg_boundary_terms(
       gsl::not_null<tnsr::aa<DataVector, Dim, Frame::Inertial>*>

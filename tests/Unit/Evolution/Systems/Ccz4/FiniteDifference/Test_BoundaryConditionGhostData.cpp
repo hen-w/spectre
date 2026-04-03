@@ -31,6 +31,7 @@
 #include "Evolution/DgSubcell/Tags/GhostDataForReconstruction.hpp"
 #include "Evolution/DgSubcell/Tags/Mesh.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
+#include "Evolution/Systems/Ccz4/BoundaryConditions/ConstraintsRadiationPreserving.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/DirichletAnalytic.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Sommerfeld.hpp"
@@ -38,6 +39,7 @@
 #include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
+#include "Evolution/Systems/Ccz4/Solutions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Framework/Pypp.hpp"
 #include "Framework/SetupLocalPythonEnvironment.hpp"
@@ -45,7 +47,6 @@
 #include "NumericalAlgorithms/Spectral/LogicalCoordinates.hpp"
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
 #include "Options/Protocols/FactoryCreation.hpp"
-#include "Evolution/Systems/Ccz4/Solutions/Factory.hpp"
 #include "PointwiseFunctions/AnalyticSolutions/GeneralRelativity/Minkowski.hpp"
 #include "PointwiseFunctions/AnalyticSolutions/Tags.hpp"
 #include "Time/Tags/Time.hpp"
@@ -194,7 +195,8 @@ void test(const BoundaryConditionType& boundary_condition,
       domain::Tags::FunctionsOfTimeInitialize,
       domain::Tags::ElementMap<3, Frame::Grid>,
       domain::CoordinateMaps::Tags::CoordinateMap<3, Frame::Grid,
-                                                  Frame::Inertial>>>(
+                                                  Frame::Inertial>,
+      Ccz4::fd::Tags::EvolveLapseAndShift>>(
       conformal_metric, lapse, shift, conformal_factor, a_tilde,
       trace_extrinsic_curvature, theta, gamma_hat, auxiliary_shift_b,
       EvolutionMetaVars{}, std::move(domain), std::move(boundary_conditions),
@@ -207,7 +209,8 @@ void test(const BoundaryConditionType& boundary_condition,
           domain::make_coordinate_map_base<Frame::BlockLogical, Frame::Grid>(
               domain::CoordinateMaps::Identity<3>{})},
       domain::make_coordinate_map_base<Frame::Grid, Frame::Inertial>(
-          domain::CoordinateMaps::Identity<3>{}));
+          domain::CoordinateMaps::Identity<3>{}),
+      true);
 
   // compute FD ghost data and retrieve the result
   fd::BoundaryConditionGhostData::apply(make_not_null(&box), element,
@@ -258,6 +261,21 @@ void test(const BoundaryConditionType& boundary_condition,
           }
         });
 
+  } else if (typeid(BoundaryConditionType) ==
+             typeid(Ccz4::BoundaryConditions::ConstraintsRadiationPreserving)) {
+    const auto expected_ghost_vars = set_polynomial(ghost_inertial_coords, 1);
+    tmpl::for_each<Ccz4::fd::System::variables_tag_list>(
+        [&]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
+          const std::string tag_name = db::tag_name<Tag>();
+          CAPTURE(tag_name);
+          for (auto expected_component = get<Tag>(expected_ghost_vars).cbegin(),
+                    component = get<Tag>(ghost_zone_vars).cbegin();
+               expected_component != get<Tag>(expected_ghost_vars).cend() and
+               component != get<Tag>(ghost_zone_vars).cend();
+               ++expected_component, ++component) {
+            CHECK_ITERABLE_APPROX(*component, *expected_component);
+          }
+        });
   } else {
     FAIL("Boundary condition type not handled in test");
   }

@@ -17,6 +17,7 @@
 #include "Domain/CoordinateMaps/CoordinateMap.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.tpp"
 #include "Domain/CoordinateMaps/Identity.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "Evolution/DiscontinuousGalerkin/Actions/ComputeTimeDerivative.hpp"
 #include "Evolution/DiscontinuousGalerkin/Actions/NormalCovectorAndMagnitude.hpp"
 #include "Framework/TestHelpers.hpp"
@@ -58,7 +59,8 @@ struct BoundaryTerms {
       const tnsr::I<DataVector, Dim, Frame::Inertial>& normal_vector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
       /*mesh_velocity*/,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& /*face_direction*/) const {
     *out_normal_dot_flux_var1 = dot_product(normal_covector, flux_var1);
     *out_var1 = var1;
 
@@ -127,7 +129,8 @@ void test(const bool use_moving_mesh) {
   const double max_speed =
       ::evolution::dg::Actions::detail::dg_package_data<System<Dim>>(
           make_not_null(&packaged_data), boundary_correction, projected_fields,
-          unit_normal_covector, mesh_velocity, box, tmpl::list<>{},
+          unit_normal_covector, mesh_velocity, Direction<Dim>::upper_xi(), box,
+          tmpl::list<>{},
           tmpl::list<Var1,
                      ::Tags::Flux<Var1, tmpl::size_t<Dim>, Frame::Inertial>>{});
 
@@ -142,7 +145,7 @@ void test(const bool use_moving_mesh) {
       unit_normal_covector,
       get<::evolution::dg::Actions::detail::NormalVector<Dim>>(
           projected_fields),
-      mesh_velocity, normal_dot_mesh_velocity);
+      mesh_velocity, normal_dot_mesh_velocity, Direction<Dim>::upper_xi());
 
   CHECK(max_speed == approx(expected_max_speed));
   CHECK_ITERABLE_APPROX(

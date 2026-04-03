@@ -17,7 +17,9 @@
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
 #include "Domain/CoordinateMaps/Tags.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "Domain/Structure/Element.hpp"
+#include "Domain/Structure/Side.hpp"
 #include "Domain/Tags.hpp"
 #include "Evolution/BoundaryCorrection.hpp"
 #include "Evolution/BoundaryCorrectionTags.hpp"
@@ -184,14 +186,16 @@ struct TimeDerivative {
           evolution::dg::Actions::detail::dg_package_data<system>(
               make_not_null(&upper_packaged_data),
               dynamic_cast<const DerivedCorrection&>(boundary_correction),
-              vars_upper_face, upper_outward_conormal, {std::nullopt}, *box,
+              vars_upper_face, upper_outward_conormal, {std::nullopt},
+              Direction<Dim>(i, Side::Upper), *box,
               typename DerivedCorrection::dg_package_data_volume_tags{},
               dg_package_data_projected_tags{});
 
           evolution::dg::Actions::detail::dg_package_data<system>(
               make_not_null(&lower_packaged_data),
               dynamic_cast<const DerivedCorrection&>(boundary_correction),
-              vars_lower_face, lower_outward_conormal, {std::nullopt}, *box,
+              vars_lower_face, lower_outward_conormal, {std::nullopt},
+              Direction<Dim>(i, Side::Lower), *box,
               typename DerivedCorrection::dg_package_data_volume_tags{},
               dg_package_data_projected_tags{});
 

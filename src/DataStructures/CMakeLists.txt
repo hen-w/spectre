@@ -89,6 +89,10 @@ target_link_libraries(
   Utilities
   )
 
+if (SPECTRE_AUTODIFF)
+  target_link_libraries(${LIBRARY} PUBLIC Autodiff)
+endif()
+
 add_subdirectory(Blaze)
 add_subdirectory(DataBox)
 add_subdirectory(Python)

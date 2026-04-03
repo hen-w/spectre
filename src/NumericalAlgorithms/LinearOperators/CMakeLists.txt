@@ -8,6 +8,7 @@ add_spectre_library(${LIBRARY})
 spectre_target_sources(
   ${LIBRARY}
   PRIVATE
+  CgFilter.cpp
   CoefficientTransforms.cpp
   DefiniteIntegral.cpp
   Divergence.cpp
@@ -24,6 +25,7 @@ spectre_target_headers(
   ${LIBRARY}
   INCLUDE_DIRECTORY ${CMAKE_SOURCE_DIR}/src
   HEADERS
+  CgFilter.hpp
   CoefficientTransforms.hpp
   DefiniteIntegral.hpp
   Divergence.hpp

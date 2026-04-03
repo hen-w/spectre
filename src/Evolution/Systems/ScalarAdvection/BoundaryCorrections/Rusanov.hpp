@@ -10,6 +10,7 @@
 #include "DataStructures/DataBox/Prefixes.hpp"
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "Evolution/BoundaryCorrection.hpp"
 #include "Evolution/Systems/ScalarAdvection/Tags.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
@@ -95,7 +96,8 @@ class Rusanov final : public evolution::BoundaryCorrection {
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity);
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& /*face_direction*/);
 
   static void dg_boundary_terms(
       gsl::not_null<Scalar<DataVector>*> boundary_correction_u,

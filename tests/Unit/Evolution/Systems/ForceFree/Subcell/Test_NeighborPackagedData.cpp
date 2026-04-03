@@ -391,7 +391,7 @@ void test_neighbor_packaged_data(const gsl::not_null<std::mt19937*> gen) {
     evolution::dg::Actions::detail::dg_package_data<System>(
         make_not_null(&expected_fd_packaged_data_on_mortar),
         boundary_corr_for_test, vars_on_mortar_face, normal_covector,
-        {std::nullopt}, box,
+        {std::nullopt}, mortar_id.direction(), box,
         typename BoundaryCorrectionForTest::dg_package_data_volume_tags{},
         dg_package_data_projected_tags{});
 

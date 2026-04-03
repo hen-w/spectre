@@ -15,6 +15,7 @@
 #include "DataStructures/Tensor/EagerMath/DeterminantAndInverse.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "Evolution/BoundaryCorrection.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
 #include "PointwiseFunctions/GeneralRelativity/Lapse.hpp"
@@ -69,8 +70,8 @@ double AveragedUpwindPenalty<Dim>::dg_package_data(
     const tnsr::I<DataVector, Dim, Frame::Inertial>& /*normal_vector*/,
     const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
         mesh_velocity,
-    const std::optional<Scalar<DataVector>>& /*normal_dot_mesh_velocity*/)
-    const {
+    const std::optional<Scalar<DataVector>>& /*normal_dot_mesh_velocity*/,
+    const Direction<Dim>& /*face_direction*/) const {
   *packaged_spacetime_metric = spacetime_metric;
   *packaged_pi = pi;
   *packaged_phi = phi;

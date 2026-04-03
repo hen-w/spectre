@@ -26,6 +26,8 @@ class not_null;
 namespace PUP {
 class er;
 }  // namespace PUP
+template <size_t Dim>
+class Direction;
 /// \endcond
 
 namespace CurvedScalarWave::BoundaryCorrections {
@@ -146,7 +148,8 @@ class UpwindPenalty final : public evolution::BoundaryCorrection {
           interface_unit_normal_vector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
       /*mesh_velocity*/,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const;
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& /*face_direction*/) const;
 
   void dg_boundary_terms(
       gsl::not_null<Scalar<DataVector>*> psi_boundary_correction,

@@ -5,10 +5,12 @@
 
 #include "Framework/TestingFramework.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "DataStructures/DataBox/PrefixHelpers.hpp"
 #include "DataStructures/DataBox/Prefixes.hpp"
@@ -216,6 +218,20 @@ inline Element<3> set_element(const bool skip_last = false) {
     }
     neighbors[gsl::at(Direction<3>::all_directions(), i)] = Neighbors<3>{
         {ElementId<3>{i + 1, {}}}, OrientationMap<3>::create_aligned()};
+  }
+  return Element<3>{ElementId<3>{0, {}}, neighbors};
+}
+
+inline Element<3> set_element_brick(
+    const std::vector<Direction<3>>& external_directions) {
+  DirectionMap<3, Neighbors<3>> neighbors{};
+  for (size_t i = 0; i < 6; ++i) {
+    const auto dir = gsl::at(Direction<3>::all_directions(), i);
+    if (std::find(external_directions.begin(), external_directions.end(),
+                  dir) == external_directions.end()) {
+      neighbors[dir] = Neighbors<3>{{ElementId<3>{i + 1, {}}},
+                                    OrientationMap<3>::create_aligned()};
+    }
   }
   return Element<3>{ElementId<3>{0, {}}, neighbors};
 }

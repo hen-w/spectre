@@ -171,7 +171,8 @@ DirectionalIdMap<Dim, DataVector> NeighborPackagedData::apply(
         evolution::dg::Actions::detail::dg_package_data<system>(
             make_not_null(&packaged_data),
             dynamic_cast<const DerivedCorrection&>(boundary_correction),
-            vars_on_face, normal_covector, {std::nullopt}, box,
+            vars_on_face, normal_covector, {std::nullopt},
+            mortar_id.direction(), box,
             typename DerivedCorrection::dg_package_data_volume_tags{},
             dg_package_data_projected_tags{});
 

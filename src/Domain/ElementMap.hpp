@@ -126,7 +126,6 @@ class ElementMap {
     return jac;
   }
 
-#ifdef SPECTRE_AUTODIFF
   /*!
    * \brief The inverse Hessian of the element map.
    *
@@ -168,7 +167,6 @@ class ElementMap {
     }
     return inv_hes;
   }
-#endif  // SPECTRE_AUTODIFF
 
   // NOLINTNEXTLINE(google-runtime-references)
   void pup(PUP::er& p);

@@ -408,7 +408,7 @@ void test_polynomial_interpolant(const std::array<size_t, Dim>& extents,
   const size_t n_random_target_points = 10;
   // use a small domain to avoid huge polynomial values for large max_degree
   // which results in large absolute errors
-  const auto domain = create_domain<Dim>(1.3, extents);
+  const auto domain = create_domain<Dim>(1.5, extents);
   const auto& block = domain.blocks()[0];
   const ElementMap<Dim, Frame::Inertial> element_map{
       ElementId<Dim>{0}, block.stationary_map().get_clone()};
@@ -480,10 +480,12 @@ void test_tov(const size_t max_degree, const bool specified_interp_order) {
   for (size_t i = 1; i < n_resolutions; ++i) {
     CAPTURE(max_degree);
     CAPTURE(i);
-    // since \rho is a symmetric function across the center, quadratic
-    // extrapolation has one order higher convergence rate at the center
+    // since \rho is a symmetric function across the center, quadratic and
+    // quartic extrapolation has one order higher convergence rate at the center
     CHECK((specified_interp_order
-               ? (max_degree == 2 ? 16.0 : two_to_the(max_degree + 1))
+               ? (max_degree == 2
+                      ? 16.0
+                      : (max_degree == 4 ? 64 : two_to_the(max_degree + 1)))
                : 4.0) == custom_approx(gsl::at(ratio_of_errors, i)));
   }
 }
@@ -1018,7 +1020,7 @@ SPECTRE_TEST_CASE("Unit.Numerical.Interpolation.IrregularInterpolant",
   test_irregular_interpolant<Spectral::Basis::Legendre,
                              Spectral::Quadrature::Gauss>();
   test_irregular_interpolant_mixed_quadrature();
-  for (size_t max_degree = 1; max_degree <= 3; ++max_degree) {
+  for (size_t max_degree = 1; max_degree <= 4; ++max_degree) {
     test_polynomial_interpolant<1>({{11}}, max_degree);
     test_polynomial_interpolant<2>({{11, 11}}, max_degree);
     test_polynomial_interpolant<2>({{11, 9}}, max_degree);

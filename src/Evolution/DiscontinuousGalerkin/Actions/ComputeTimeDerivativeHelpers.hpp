@@ -6,6 +6,7 @@
 #include <type_traits>
 
 #include "Utilities/TMPL.hpp"
+#include "Utilities/TypeTraits/CreateHasStaticMemberVariable.hpp"
 #include "Utilities/TypeTraits/CreateHasTypeAlias.hpp"
 
 namespace evolution::dg::Actions::detail {

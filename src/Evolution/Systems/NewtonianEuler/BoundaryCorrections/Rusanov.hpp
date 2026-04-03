@@ -20,6 +20,8 @@
 
 /// \cond
 class DataVector;
+template <size_t Dim>
+class Direction;
 namespace gsl {
 template <typename T>
 class not_null;
@@ -131,6 +133,7 @@ class Rusanov final : public evolution::BoundaryCorrection {
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
       /*mesh_velocity*/,
       const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& /*face_direction*/,
       const EquationsOfState::EquationOfState<false, 2>& equation_of_state)
       const;
 

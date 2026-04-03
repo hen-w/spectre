@@ -12,6 +12,7 @@
 #include "DataStructures/Variables.hpp"
 #include "NumericalAlgorithms/Interpolation/IrregularInterpolant.hpp"
 #include "Utilities/CallWithDynamicType.hpp"
+#include "Utilities/ErrorHandling/Error.hpp"
 
 namespace Ccz4::BoundaryConditions {
 
@@ -19,18 +20,54 @@ namespace Ccz4::BoundaryConditions {
 Sommerfeld::Sommerfeld(CkMigrateMessage* const msg) : BoundaryCondition(msg) {}
 // LCOV_EXCL_STOP
 Sommerfeld::Sommerfeld(const Sommerfeld& rhs)
-    : BoundaryCondition{dynamic_cast<const BoundaryCondition&>(rhs)} {}
+    : BoundaryCondition{dynamic_cast<const BoundaryCondition&>(rhs)},
+      extrapolation_order_(rhs.extrapolation_order_) {}
 
-Sommerfeld& Sommerfeld::operator=(const Sommerfeld& /*rhs*/) { return *this; }
+Sommerfeld& Sommerfeld::operator=(const Sommerfeld& rhs) {
+  if (&rhs == this) {
+    return *this;
+  }
+  extrapolation_order_ = rhs.extrapolation_order_;
+  return *this;
+}
+
+Sommerfeld::Sommerfeld(size_t extrapolation_order)
+    : extrapolation_order_(extrapolation_order) {}
 
 std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>
 Sommerfeld::get_clone() const {
   return std::make_unique<Sommerfeld>(*this);
 }
 
-void Sommerfeld::pup(PUP::er& p) { BoundaryCondition::pup(p); }
+void Sommerfeld::pup(PUP::er& p) {
+  BoundaryCondition::pup(p);
+  p | extrapolation_order_;
+}
 // NOLINTNEXTLINE
 PUP::able::PUP_ID Sommerfeld::my_PUP_ID = 0;
+
+std::optional<std::string> Sommerfeld::dg_ghost(
+    gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> /*unused*/,
+    gsl::not_null<Scalar<DataVector>*> /*unused*/,
+    gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> /*unused*/,
+    gsl::not_null<Scalar<DataVector>*> /*unused*/,
+    gsl::not_null<Scalar<DataVector>*> /*unused*/,
+    gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> /*unused*/,
+    gsl::not_null<Scalar<DataVector>*> /*unused*/,
+    gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> /*unused*/,
+    gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> /*unused*/,
+    gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> /*unused*/,
+    gsl::not_null<tnsr::iJ<DataVector, 3, Frame::Inertial>*> /*unused*/,
+    gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*> /*unused*/,
+    gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> /*unused*/,
+    gsl::not_null<Scalar<DataVector>*> /*unused*/,
+    gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> /*unused*/,
+    gsl::not_null<Scalar<DataVector>*> /*unused*/,
+    gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> /*unused*/,
+    const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>& /*unused*/,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& /*unused*/) const {
+  ERROR("Sommerfeld DG boundary condition is not yet implemented.");
+}
 
 void Sommerfeld::fd_ghost(
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
@@ -61,7 +98,7 @@ void Sommerfeld::fd_ghost(
     const Mesh<3>& subcell_mesh,
 
     // fd_gridless_tags
-    const fd::Reconstructor& reconstructor) {
+    const fd::Reconstructor& reconstructor) const {
   const size_t ghost_zone_size = reconstructor.ghost_zone_size();
 
   const auto ghost_logical_coords =
@@ -71,13 +108,12 @@ void Sommerfeld::fd_ghost(
   // Extrapolate the interior variables into the ghost zone of external bdry.
   // Modification to the time derivatives per Sommerfeld BC is handled in the
   // time derivative computation, not here.
-  // Should add option to use higher order interpolant once that PR (#6999) is
-  // merged.
-  const intrp::Irregular<3> irregular_interpolant(subcell_mesh,
-                                                  ghost_logical_coords);
+  const intrp::Irregular<3> irregular_interpolant(
+      subcell_mesh, ghost_logical_coords, extrapolation_order_);
 
-  Variables<typename ::Ccz4::fd::System::variables_tag_list> interior_var{
-      subcell_mesh.number_of_grid_points()};
+  Variables<tmpl::append<::Ccz4::fd::System::original_evolved_variables_tags,
+                         ::Ccz4::fd::System::auxiliary_variables_tags>>
+      interior_var{subcell_mesh.number_of_grid_points()};
   get<Tags::ConformalMetric<DataVector, 3>>(interior_var) =
       interior_conformal_metric;
   get<gr::Tags::Lapse<DataVector>>(interior_var) = interior_lapse;

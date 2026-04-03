@@ -609,6 +609,8 @@ class Variables<tmpl::list<>> {
   void assign_subset(const tuples::TaggedTuple<>& /*unused*/) {}
   // Initialization for empty variables should ignore any input.
   void initialize(size_t /*number_of_grid_points*/) {}
+  double* data() { return nullptr; }
+  const double* data() const { return nullptr; }
 };
 
 // gcc8 screams when the empty Variables has pup as a member function, so we

@@ -42,6 +42,9 @@ namespace filtering {
 Matrix exponential_filter(const Mesh<1>& mesh, double alpha,
                           unsigned half_power);
 
+Matrix cg_filter(const Mesh<1>& mesh, const double alpha,
+                 const unsigned half_power);
+
 /*!
  * \brief Zeros the lowest `number_of_modes_to_zero` modal coefficients. Note
  * that the matrix must be applied to a nodal representation.

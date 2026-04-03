@@ -5,7 +5,9 @@
 
 #include <memory>
 #include <optional>
+
 #include <pup.h>
+#include "Domain/Structure/Direction.hpp"
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/EagerMath/DotProduct.hpp"
@@ -40,7 +42,8 @@ double Rusanov<Dim>::dg_package_data(
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
     const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
     /*mesh_velocity*/,
-    const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) {
+    const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+    const Direction<Dim>& /*face_direction*/) {
   Scalar<DataVector>& normal_dot_velocity = *packaged_u;
   dot_product(make_not_null(&normal_dot_velocity), velocity_field,
               normal_covector);

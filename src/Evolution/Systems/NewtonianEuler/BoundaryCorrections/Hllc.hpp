@@ -27,6 +27,8 @@ class not_null;
 namespace PUP {
 class er;
 }  // namespace PUP
+template <size_t Dim>
+class Direction;
 /// \endcond
 
 namespace NewtonianEuler::BoundaryCorrections {
@@ -253,6 +255,7 @@ class Hllc final : public evolution::BoundaryCorrection {
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
       /*mesh_velocity*/,
       const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& /*face_direction*/,
       const EquationsOfState::EquationOfState<false, 2>& equation_of_state)
       const;
 

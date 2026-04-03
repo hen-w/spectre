@@ -14,6 +14,7 @@
 #include "DataStructures/Tensor/EagerMath/DotProduct.hpp"
 #include "DataStructures/Tensor/EagerMath/Magnitude.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/NormalDotFlux.hpp"
 #include "PointwiseFunctions/Hydro/SoundSpeedSquared.hpp"
@@ -89,6 +90,7 @@ double Hll::dg_package_data(
     const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&
     /*mesh_velocity*/,
     const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+    const Direction<3>& /*face_direction*/,
     const EquationsOfState::EquationOfState<true, 3>& equation_of_state) const {
   {
     Scalar<DataVector> shift_dot_normal = tilde_d;

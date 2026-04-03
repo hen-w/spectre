@@ -8,6 +8,8 @@
 #include <optional>
 #include <pup.h>
 
+#include "DataStructures/Tensor/TypeAliases.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "Evolution/BoundaryCorrection.hpp"
 #include "Evolution/Systems/CurvedScalarWave/System.hpp"
 #include "Evolution/Systems/CurvedScalarWave/Tags.hpp"
@@ -165,6 +167,7 @@ class ProductOfCorrections<DerivedGhCorrection, DerivedScalarCorrection,
       const std::optional<tnsr::I<DataVector, dim, Frame::Inertial>>&
           mesh_velocity,
       const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<dim>& face_direction,
       // Volume quantities
       const typename GhDgPackageDataVolumeTags::type&... gh_volume_quantities,
       const typename ScalarDgPackageDataVolumeTags::
@@ -172,13 +175,13 @@ class ProductOfCorrections<DerivedGhCorrection, DerivedScalarCorrection,
     const double gh_correction_result = derived_gh_correction_.dg_package_data(
         gh_packaged_fields..., spacetime_metric, pi, phi, gh_temporaries...,
         normal_covector, normal_vector, mesh_velocity, normal_dot_mesh_velocity,
-        gh_volume_quantities...);
+        face_direction, gh_volume_quantities...);
 
     const double scalar_correction_result =
         derived_scalar_correction_.dg_package_data(
             scalar_packaged_fields..., psi_scalar, pi_scalar, phi_scalar,
             scalar_temporaries..., normal_covector, normal_vector,
-            mesh_velocity, normal_dot_mesh_velocity,
+            mesh_velocity, normal_dot_mesh_velocity, face_direction,
             scalar_volume_quantities...);
     return std::max(gh_correction_result, scalar_correction_result);
   }

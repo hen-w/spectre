@@ -88,7 +88,6 @@ void test_element_impl(
       element_map_deserialized.inv_jacobian(logical_point_double),
       composed_map_inv_jacobian_double);
 
-#ifdef SPECTRE_AUTODIFF
   CHECK_ITERABLE_APPROX(
       element_map.inv_hessian(logical_point_dv),
       composed_map.inv_hessian(logical_point_dv, composed_map_inv_jacobian_dv));
@@ -103,7 +102,6 @@ void test_element_impl(
       element_map_deserialized.inv_hessian(logical_point_double),
       composed_map.inv_hessian(logical_point_double,
                                composed_map_inv_jacobian_double));
-#endif  // SPECTRE_AUTODIFF
 
   CHECK_ITERABLE_APPROX(element_map.jacobian(logical_point_dv),
                         composed_map.jacobian(logical_point_dv));
