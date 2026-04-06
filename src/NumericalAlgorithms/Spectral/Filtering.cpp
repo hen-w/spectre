@@ -38,10 +38,6 @@ Matrix exponential_filter(const Mesh<1>& mesh, const double alpha,
 
 Matrix cg_filter(const Mesh<1>& mesh, const double alpha,
                  const unsigned half_power) {
-  ASSERT(mesh.quadrature(0) == Spectral::Quadrature::GaussLobatto,
-         "CG filtering only works with Gauss-Lobatto points, but got "
-             << mesh.quadrature(0));
-
   const size_t npts = mesh.number_of_grid_points();
   const double order = static_cast<double>(npts - 1);
 

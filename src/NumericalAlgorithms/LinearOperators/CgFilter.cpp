@@ -64,10 +64,14 @@ const Matrix& CgFilter<Dim>::filter_matrix(const Mesh<1>& mesh) const {
 template <size_t Dim>
 std::array<std::reference_wrapper<const Matrix>, Dim>
 CgFilter<Dim>::filter_matrices(const Mesh<Dim>& mesh) const {
-  const Matrix empty{};
+  static const Matrix empty{};
   std::array<std::reference_wrapper<const Matrix>, Dim> filter =
       make_array<Dim>(std::cref(empty));
   for (size_t d = 0; d < Dim; d++) {
+    // Skip Ylm basis dimensions, but allow radial dimensions
+    if (mesh.basis(d) == Spectral::Basis::SphericalHarmonic) {
+      continue;
+    }
     gsl::at(filter, d) = std::cref(filter_matrix(mesh.slice_through(d)));
   }
   return filter;

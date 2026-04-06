@@ -14,6 +14,7 @@
 #include "DataStructures/Tensor/TypeAliases.hpp"
 #include "DataStructures/Variables.hpp"
 #include "Domain/Tags.hpp"
+#include "Domain/TagsTimeDependent.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "NumericalAlgorithms/LinearOperators/Filter.hpp"
 #include "NumericalAlgorithms/SphericalHarmonics/ApplyTensorYlmFilter.hpp"
@@ -174,15 +175,19 @@ class TensorYlmFilter : public Filters::Filter {
  public:  // DataBox-mutator protocol
   using argument_tags = tmpl::list<
       domain::Tags::Mesh<3>,
-      domain::Tags::InverseJacobian<3, Frame::Grid, Frame::Inertial>>;
+      domain::Tags::CoordinatesMeshVelocityAndJacobians<3>>;
 
   void operator()(
       gsl::not_null<
           Variables<filter_detail::ccz4_vars_list<Frame::Inertial>>*>
           ccz4_vars,
       const Mesh<3>& mesh,
-      const InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>&
-          jac_grid_to_inertial) const;
+      const std::optional<std::tuple<
+          tnsr::I<DataVector, 3, Frame::Inertial>,
+          InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>,
+          Jacobian<DataVector, 3, Frame::Grid, Frame::Inertial>,
+          tnsr::I<DataVector, 3, Frame::Inertial>>>&
+          grid_to_inertial_quantities) const;
 
   /// Tuple overload required because filter_all_vars is false for CCZ4
   /// (the 9 filtered tags != the 17+ total system tags). The filter action
@@ -192,8 +197,12 @@ class TensorYlmFilter : public Filters::Filter {
   void operator()(
       const std::tuple<gsl::not_null<TensorTypes*>...>& tensors,
       const Mesh<3>& mesh,
-      const InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>&
-          jac_grid_to_inertial) const {
+      const std::optional<std::tuple<
+          tnsr::I<DataVector, 3, Frame::Inertial>,
+          InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>,
+          Jacobian<DataVector, 3, Frame::Grid, Frame::Inertial>,
+          tnsr::I<DataVector, 3, Frame::Inertial>>>&
+          grid_to_inertial_quantities) const {
     static_assert(sizeof...(TensorTypes) == 9,
                   "CCZ4 TensorYlmFilter expects exactly 9 tensors");
     const size_t num_points = mesh.number_of_grid_points();
@@ -212,18 +221,19 @@ class TensorYlmFilter : public Filters::Filter {
     shift = *std::get<7>(tensors);
     aux_shift = *std::get<8>(tensors);
 
-    (*this)(make_not_null(&ccz4_vars), mesh, jac_grid_to_inertial);
+    (*this)(make_not_null(&ccz4_vars), mesh, grid_to_inertial_quantities);
 
-    // Move filtered results back to tuple
-    *std::get<0>(tensors) = std::move(conf_metric);
-    *std::get<1>(tensors) = std::move(conf_factor);
-    *std::get<2>(tensors) = std::move(a_tilde);
-    *std::get<3>(tensors) = std::move(trace_k);
-    *std::get<4>(tensors) = std::move(theta);
-    *std::get<5>(tensors) = std::move(gamma_hat);
-    *std::get<6>(tensors) = std::move(lapse);
-    *std::get<7>(tensors) = std::move(shift);
-    *std::get<8>(tensors) = std::move(aux_shift);
+    // Copy filtered results back to tuple (can't move: structured bindings
+    // into Variables are non-owning)
+    *std::get<0>(tensors) = conf_metric;
+    *std::get<1>(tensors) = conf_factor;
+    *std::get<2>(tensors) = a_tilde;
+    *std::get<3>(tensors) = trace_k;
+    *std::get<4>(tensors) = theta;
+    *std::get<5>(tensors) = gamma_hat;
+    *std::get<6>(tensors) = lapse;
+    *std::get<7>(tensors) = shift;
+    *std::get<8>(tensors) = aux_shift;
   }
 
  private:

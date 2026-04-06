@@ -241,6 +241,7 @@ TensorYlmFilter& TensorYlmFilter::operator=(const TensorYlmFilter& rhs) {
   if (this != &rhs) {
     num_modes_to_kill_ = rhs.num_modes_to_kill_;
     half_power_ = rhs.half_power_;
+    cached_l_max_ = 0;
   }
   return *this;
 }
@@ -254,6 +255,7 @@ TensorYlmFilter& TensorYlmFilter::operator=(TensorYlmFilter&& rhs) {
   if (this != &rhs) {
     num_modes_to_kill_ = rhs.num_modes_to_kill_;
     half_power_ = std::move(rhs.half_power_);
+    cached_l_max_ = 0;
   }
   return *this;
 }
@@ -275,8 +277,12 @@ void TensorYlmFilter::operator()(
         Variables<filter_detail::ccz4_vars_list<Frame::Inertial>>*>
         ccz4_vars,
     const Mesh<3>& mesh,
-    const InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>&
-        jac_grid_to_inertial) const {
+    const std::optional<std::tuple<
+        tnsr::I<DataVector, 3, Frame::Inertial>,
+        InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>,
+        Jacobian<DataVector, 3, Frame::Grid, Frame::Inertial>,
+        tnsr::I<DataVector, 3, Frame::Inertial>>>&
+        grid_to_inertial_quantities) const {
   if (mesh.basis(1) != Spectral::Basis::SphericalHarmonic) {
     return;
   }
@@ -300,9 +306,24 @@ void TensorYlmFilter::operator()(
     cached_l_max_ = l_max;
   }
 
-  // Apply the filter
-  const auto jac_inertial_to_grid =
-      determinant_and_inverse(jac_grid_to_inertial).second;
+  // When Grid==Inertial (non-moving mesh), the Jacobian is the identity.
+  // Construct identity Jacobians in that case.
+  const size_t num_points = mesh.number_of_grid_points();
+  InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>
+      jac_grid_to_inertial(num_points, 0.0);
+  InverseJacobian<DataVector, 3, Frame::Inertial, Frame::Grid>
+      jac_inertial_to_grid(num_points, 0.0);
+  if (grid_to_inertial_quantities.has_value()) {
+    jac_grid_to_inertial = std::get<1>(*grid_to_inertial_quantities);
+    jac_inertial_to_grid =
+        determinant_and_inverse(jac_grid_to_inertial).second;
+  } else {
+    for (size_t i = 0; i < 3; ++i) {
+      jac_grid_to_inertial.get(i, i) = 1.0;
+      jac_inertial_to_grid.get(i, i) = 1.0;
+    }
+  }
+
   apply_tensor_ylm_filter(ccz4_vars, make_not_null(&temp_storage_),
                           jac_inertial_to_grid, jac_grid_to_inertial,
                           filter_matrix_scalar_, filter_matrix_i_,

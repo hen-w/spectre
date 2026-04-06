@@ -215,6 +215,7 @@ TensorYlmFilter& TensorYlmFilter::operator=(const TensorYlmFilter& rhs) {
   if (this != &rhs) {
     num_modes_to_kill_ = rhs.num_modes_to_kill_;
     half_power_ = rhs.half_power_;
+    cached_l_max_ = 0;
   }
   return *this;
 }
@@ -228,6 +229,7 @@ TensorYlmFilter& TensorYlmFilter::operator=(TensorYlmFilter&& rhs) {
   if (this != &rhs) {
     num_modes_to_kill_ = rhs.num_modes_to_kill_;
     half_power_ = std::move(rhs.half_power_);
+    cached_l_max_ = 0;
   }
   return *this;
 }

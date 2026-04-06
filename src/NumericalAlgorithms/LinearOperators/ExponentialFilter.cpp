@@ -64,7 +64,7 @@ const Matrix& Exponential<Dim>::filter_matrix(const Mesh<1>& mesh) const {
 template <size_t Dim>
 std::array<std::reference_wrapper<const Matrix>, Dim>
 Exponential<Dim>::filter_matrices(const Mesh<Dim>& mesh) const {
-  const Matrix empty{};
+  static const Matrix empty{};
   std::array<std::reference_wrapper<const Matrix>, Dim> filter =
       make_array<Dim>(std::cref(empty));
   for (size_t d = 0; d < Dim; d++) {
