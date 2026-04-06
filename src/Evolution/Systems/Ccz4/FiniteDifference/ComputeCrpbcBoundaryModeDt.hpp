@@ -109,6 +109,8 @@ struct ComputeCrpbcBoundaryModeDt {
 
     // All CRPBC faces share the same BC object; retrieve penalty multiplier
     // once.
+    // *** THIS IS A BUG; CANNOT ASSUME SAME PENALTY MULTIPLIER ON ALL FACES.
+    // *** FIX IN FUTURE. ***
     const auto* crpbc_ptr = dynamic_cast<
         const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving*>(
         block_boundary_conditions.at(crpbc_directions[0]).get());

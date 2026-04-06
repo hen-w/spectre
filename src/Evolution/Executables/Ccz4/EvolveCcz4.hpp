@@ -53,6 +53,7 @@
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/UpdateAuxiliaryVariables.hpp"
 #include "Evolution/Systems/Ccz4/Solutions/Factory.hpp"
+#include "Evolution/Systems/Ccz4/ApplyTensorYlmFilter.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Evolution/Tags/Filter.hpp"
 #include "IO/Observer/Actions/RegisterEvents.hpp"
@@ -123,6 +124,8 @@ struct EvolutionMetavars {
 
   // For labeling the yaml option for RandomizeVariables
   struct RandomizeInitialData {};
+
+  struct FilterEvolvedVariables {};
 
   static constexpr bool local_time_stepping =
       TimeStepperBase::local_time_stepping;
@@ -214,7 +217,11 @@ struct EvolutionMetavars {
                    TimeSequences::all_time_sequences<std::uint64_t>>,
         tmpl::pair<TimeStepper, TimeSteppers::time_steppers>,
         tmpl::pair<Trigger, tmpl::append<Triggers::logical_triggers,
-                                         Triggers::time_triggers>>>;
+                                         Triggers::time_triggers>>,
+        tmpl::pair<Filters::Filter,
+                   tmpl::list<Filters::Exponential<volume_dim>,
+                              Filters::CgFilter<volume_dim>,
+                              Ccz4::TensorYlmFilter>>>;
   };
 
   using observed_reduction_data_tags = observers::collect_reduction_data_tags<
@@ -265,18 +272,7 @@ struct EvolutionMetavars {
       Actions::MutateApply<UpdateU<system, local_time_stepping>>,
       Actions::MutateApply<CleanHistory<system>>,
       dg::Actions::Filter<
-          Filters::Exponential<0>,
-          tmpl::list<::Ccz4::Tags::ConformalMetric<DataVector, 3>,
-                     ::Ccz4::Tags::ConformalFactor<DataVector>,
-                     ::Ccz4::Tags::ATilde<DataVector, 3>,
-                     gr::Tags::TraceExtrinsicCurvature<DataVector>,
-                     ::Ccz4::Tags::Theta<DataVector>,
-                     ::Ccz4::Tags::GammaHat<DataVector, 3>,
-                     gr::Tags::Lapse<DataVector>,
-                     gr::Tags::Shift<DataVector, 3>,
-                     ::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>>,
-      dg::Actions::Filter<
-          Filters::CgFilter<0>,
+          FilterEvolvedVariables,
           tmpl::list<::Ccz4::Tags::ConformalMetric<DataVector, 3>,
                      ::Ccz4::Tags::ConformalFactor<DataVector>,
                      ::Ccz4::Tags::ATilde<DataVector, 3>,
@@ -329,6 +325,7 @@ struct EvolutionMetavars {
       Initialization::Actions::InitializeItems<
           Initialization::TimeStepping<EvolutionMetavars, TimeStepperBase>,
           evolution::dg::Initialization::Domain<EvolutionMetavars>,
+          dg::Actions::InitializeFilters<FilterEvolvedVariables>,
           Initialization::TimeStepperHistory<EvolutionMetavars>>,
       Initialization::Actions::NonconservativeSystem<system>,
       evolution::Initialization::Actions::SetVariables<

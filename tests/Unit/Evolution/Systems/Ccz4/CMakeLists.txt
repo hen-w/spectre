@@ -26,6 +26,7 @@ set(LIBRARY_SOURCES
   FiniteDifference/Test_SetK0.cpp
   # FiniteDifference/Test_SoTimeDerivative.cpp
   FiniteDifference/Test_Tags.cpp
+  Test_ApplyTensorYlmFilter.cpp
   Test_ATilde.cpp
   Test_Ccz4WrappedGr.cpp
   Test_Christoffel.cpp
@@ -57,6 +58,7 @@ target_link_libraries(
   GeneralRelativitySolutions
   LinearOperators
   SoCcz4
+  SphericalHarmonics
   Spectral
   Utilities
 )

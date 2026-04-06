@@ -8,6 +8,7 @@ add_spectre_library(${LIBRARY})
 spectre_target_sources(
   ${LIBRARY}
   PRIVATE
+  ApplyTensorYlmFilter.cpp
   ATilde.cpp
   Ccz4WrappedGr.cpp
   Christoffel.cpp
@@ -23,6 +24,7 @@ spectre_target_headers(
   ${LIBRARY}
   INCLUDE_DIRECTORY ${CMAKE_SOURCE_DIR}/src
   HEADERS
+  ApplyTensorYlmFilter.hpp
   ATilde.hpp
   Ccz4WrappedGr.hpp
   Ccz4WrappedGr.tpp
@@ -51,6 +53,7 @@ target_link_libraries(
   FiniteDifference
   GeneralRelativity
   GeneralRelativitySolutions
+  LinearOperators
   Options
   Serialization
   Spectral
