@@ -263,8 +263,8 @@ struct EvolutionMetavars {
           use_dg_element_collection>,
       evolution::dg::Actions::ApplyBoundaryCorrectionsToTimeDerivative<
           volume_dim, use_dg_element_collection>,
-      Actions::MutateApply<Ccz4::fd::OverwriteExternalBoundaryDtDirichlet>,
       Actions::MutateApply<::Ccz4::fd::EnforceTracelessDtConformalMetric>,
+      Actions::MutateApply<Ccz4::fd::OverwriteExternalBoundaryDtDirichlet>,
       Actions::MutateApply<Ccz4::fd::ComputeCrpbcBoundaryModeDt>,
       // Actions::MutateApply<::Ccz4::fd::SetInitialBoundaryModes>,
       Actions::MutateApply<RecordTimeStepperData<system>>,

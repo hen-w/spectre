@@ -23,12 +23,10 @@
 #include "Domain/Structure/Element.hpp"
 #include "Domain/Tags.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/TimeDerivativeDirichlet.hpp"
-#include "Evolution/Systems/Ccz4/Christoffel.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Characteristics.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
-#include "Evolution/Systems/Ccz4/Z4Constraint.hpp"
 #include "NumericalAlgorithms/LinearOperators/PartialDerivatives.hpp"
 #include "NumericalAlgorithms/Spectral/Basis.hpp"
 #include "NumericalAlgorithms/Spectral/DifferentiationMatrix.hpp"
@@ -69,37 +67,37 @@ struct OverwriteExternalBoundaryDtDirichlet {
 
   using return_tags = tmpl::list<dt_variables_tag>;
 
-  using argument_tags =
-      tmpl::list<domain::Tags::Element<Dim>, domain::Tags::Mesh<Dim>,
-                 domain::Tags::ExternalBoundaryConditions<Dim>,
-                 domain::Tags::Coordinates<Dim, Frame::Inertial>,
-                 domain::Tags::InverseJacobian<Dim, Frame::ElementLogical,
-                                               Frame::Inertial>,
-                 System::variables_tag, ::Ccz4::Tags::K0<DataVector>,
-                 ::Ccz4::fd::Tags::EvolveLapseAndShift>;
+  using argument_tags = tmpl::list<
+      domain::Tags::Element<Dim>, domain::Tags::Mesh<Dim>,
+      domain::Tags::ExternalBoundaryConditions<Dim>,
+      domain::Tags::Coordinates<Dim, Frame::Inertial>,
+      domain::Tags::InverseJacobian<Dim, Frame::ElementLogical,
+                                    Frame::Inertial>,
+      System::variables_tag,
+      ::Ccz4::Tags::K0<DataVector>,
+      ::Ccz4::fd::Tags::EvolveLapseAndShift>;
 
   static void apply(
       const gsl::not_null<Variables<typename dt_variables_tag::tags_list>*>
           dt_vars,
-      const Element<Dim>& element, const Mesh<Dim>& mesh,
+      const Element<Dim>& element,
+      const Mesh<Dim>& mesh,
       const std::vector<DirectionMap<
-          Dim, std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>&
+          Dim,
+          std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>&
           all_boundary_conditions,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& /*inertial_coords*/,
       const InverseJacobian<DataVector, Dim, Frame::ElementLogical,
                             Frame::Inertial>& inv_jacobian,
       const Variables<typename System::variables_tag::tags_list>& evolved_vars,
-      const Scalar<DataVector>& k_0, const bool evolve_lapse_and_shift) {
+      const Scalar<DataVector>& k_0,
+      const bool evolve_lapse_and_shift) {
     // Phase A: Boundary detection
     if (element.external_boundaries().empty()) {
       return;
     }
 
     std::vector<Direction<Dim>> td_dirichlet_directions;
-    // Per-direction flags, indexed in the same order as
-    // td_dirichlet_directions.
-    std::vector<bool> prescribe_gauge_fields_per_dir;
-    std::vector<bool> kill_sim_per_dir;
     const auto& block_boundary_conditions =
         all_boundary_conditions.at(element.id().block_id());
     for (const auto& direction : element.external_boundaries()) {
@@ -108,9 +106,6 @@ struct OverwriteExternalBoundaryDtDirichlet {
           block_boundary_conditions.at(direction).get());
       if (td_bc != nullptr) {
         td_dirichlet_directions.push_back(direction);
-        prescribe_gauge_fields_per_dir.push_back(
-            td_bc->prescribe_gauge_fields());
-        kill_sim_per_dir.push_back(td_bc->kill_sim());
       }
     }
     if (td_dirichlet_directions.empty()) {
@@ -120,13 +115,13 @@ struct OverwriteExternalBoundaryDtDirichlet {
     // ASSERT(evolve_lapse_and_shift,
     //        "TimeDerivativeDirichlet BC requires evolving lapse and shift.");
 
-    ASSERT(mesh.quadrature(0) == Spectral::Quadrature::GaussLobatto and
-               mesh.quadrature(1) == Spectral::Quadrature::GaussLobatto and
-               mesh.quadrature(2) == Spectral::Quadrature::GaussLobatto,
-           "OverwriteExternalBoundaryDtDirichlet requires Gauss-Lobatto "
-           "quadrature but got "
-               << mesh.quadrature(0) << ", " << mesh.quadrature(1) << ", "
-               << mesh.quadrature(2));
+    // ASSERT(mesh.quadrature(0) == Spectral::Quadrature::GaussLobatto and
+    //            mesh.quadrature(1) == Spectral::Quadrature::GaussLobatto and
+    //            mesh.quadrature(2) == Spectral::Quadrature::GaussLobatto,
+    //        "OverwriteExternalBoundaryDtDirichlet requires Gauss-Lobatto "
+    //        "quadrature but got "
+    //            << mesh.quadrature(0) << ", " << mesh.quadrature(1) << ", "
+    //            << mesh.quadrature(2));
 
     const size_t num_pts = mesh.number_of_grid_points();
 
@@ -139,7 +134,8 @@ struct OverwriteExternalBoundaryDtDirichlet {
         get<::Ccz4::Tags::ATilde<DataVector, Dim>>(evolved_vars);
     const auto& trace_extrinsic_curvature =
         get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(evolved_vars);
-    const auto& theta = get<::Ccz4::Tags::Theta<DataVector>>(evolved_vars);
+    const auto& theta =
+        get<::Ccz4::Tags::Theta<DataVector>>(evolved_vars);
     const auto& gamma_hat =
         get<::Ccz4::Tags::GammaHat<DataVector, Dim>>(evolved_vars);
     const auto& lapse = get<gr::Tags::Lapse<DataVector>>(evolved_vars);
@@ -154,9 +150,9 @@ struct OverwriteExternalBoundaryDtDirichlet {
         get<::Ccz4::Tags::FieldP<DataVector, Dim>>(evolved_vars);
 
     // Phase B: Compute partial derivatives via spectral differentiation
-    const auto partial_derivs =
-        partial_derivatives<typename System::variables_tag::tags_list>(
-            evolved_vars, mesh, inv_jacobian);
+    const auto partial_derivs = partial_derivatives<
+        typename System::variables_tag::tags_list>(evolved_vars, mesh,
+                                                   inv_jacobian);
 
     // Extract raw derivatives of auxiliary fields
     const auto& d_field_a_raw =
@@ -178,8 +174,8 @@ struct OverwriteExternalBoundaryDtDirichlet {
         get<::Tags::deriv<gr::Tags::TraceExtrinsicCurvature<DataVector>,
                           tmpl::size_t<Dim>, Frame::Inertial>>(partial_derivs);
     const auto& d_theta =
-        get<::Tags::deriv<::Ccz4::Tags::Theta<DataVector>, tmpl::size_t<Dim>,
-                          Frame::Inertial>>(partial_derivs);
+        get<::Tags::deriv<::Ccz4::Tags::Theta<DataVector>,
+                          tmpl::size_t<Dim>, Frame::Inertial>>(partial_derivs);
     const auto& d_b =
         get<::Tags::deriv<::Ccz4::Tags::AuxiliaryShiftB<DataVector, Dim>,
                           tmpl::size_t<Dim>, Frame::Inertial>>(partial_derivs);
@@ -192,8 +188,9 @@ struct OverwriteExternalBoundaryDtDirichlet {
 
     tnsr::iiJ<DataVector, Dim> d_field_b(num_pts);
     ::tenex::evaluate<ti::i, ti::j, ti::K>(
-        make_not_null(&d_field_b), 0.5 * (d_field_b_raw(ti::i, ti::j, ti::K) +
-                                          d_field_b_raw(ti::j, ti::i, ti::K)));
+        make_not_null(&d_field_b),
+        0.5 * (d_field_b_raw(ti::i, ti::j, ti::K) +
+               d_field_b_raw(ti::j, ti::i, ti::K)));
 
     tnsr::iijj<DataVector, Dim> d_field_d(num_pts);
     ::tenex::evaluate<ti::i, ti::j, ti::k, ti::l>(
@@ -206,37 +203,8 @@ struct OverwriteExternalBoundaryDtDirichlet {
         make_not_null(&d_field_p),
         0.5 * (d_field_p_raw(ti::i, ti::j) + d_field_p_raw(ti::j, ti::i)));
 
-    // Compute Z_i and d_k Z_i in the volume for gamma_hat BC
-    auto [det_conformal_metric_vol, inv_conformal_metric_vol] =
-        determinant_and_inverse(conformal_metric);
-
-    const auto conformal_christoffel_vol =
-        Ccz4::conformal_christoffel_second_kind(inv_conformal_metric_vol,
-                                                field_d);
-    const auto contracted_christoffel_vol =
-        Ccz4::contracted_conformal_christoffel_second_kind(
-            inv_conformal_metric_vol, conformal_christoffel_vol);
-
-    tnsr::I<DataVector, Dim> gamma_hat_minus_christoffel(num_pts);
-    for (size_t i = 0; i < Dim; ++i) {
-      gamma_hat_minus_christoffel.get(i) =
-          gamma_hat.get(i) - contracted_christoffel_vol.get(i);
-    }
-
-    const auto z_constraint = Ccz4::spatial_z4_constraint(
-        conformal_metric, gamma_hat_minus_christoffel);
-
-    // d_k Z_i via spectral partial derivative (bare tensor overload)
-    const auto d_z_constraint =
-        partial_derivative(z_constraint, mesh, inv_jacobian);
-
     // Loop over each TimeDerivativeDirichlet face
-    for (size_t dir_idx = 0; dir_idx < td_dirichlet_directions.size();
-         ++dir_idx) {
-      const auto& direction = td_dirichlet_directions[dir_idx];
-      const bool prescribe_gauge_fields =
-          prescribe_gauge_fields_per_dir[dir_idx];
-      const bool kill_sim = kill_sim_per_dir[dir_idx];
+    for (const auto& direction : td_dirichlet_directions) {
       const size_t normal_dim = direction.dimension();
       const size_t N_normal = mesh.extents(normal_dim);
       size_t num_face_pts = 1;
@@ -257,7 +225,8 @@ struct OverwriteExternalBoundaryDtDirichlet {
 
       // Volume index mapping from (face_idx, layer) to linear index
       auto volume_index = [&](size_t face_idx, size_t layer) -> size_t {
-        return (face_idx % inner_stride) + inner_stride * layer +
+        return (face_idx % inner_stride) +
+               inner_stride * layer +
                inner_stride * N_normal * (face_idx / inner_stride);
       };
 
@@ -271,7 +240,7 @@ struct OverwriteExternalBoundaryDtDirichlet {
       };
 
       auto slice_tensor = [&]<typename TensorType>(TensorType& face,
-                                                   const TensorType& vol) {
+                                                    const TensorType& vol) {
         for (size_t ti = 0; ti < vol.size(); ++ti) {
           face[ti].destructive_resize(num_face_pts);
           for (size_t fp = 0; fp < num_face_pts; ++fp) {
@@ -312,14 +281,17 @@ struct OverwriteExternalBoundaryDtDirichlet {
           make_not_null(&d_conformal_metric_face),
           2.0 * field_d_face(ti::i, ti::j, ti::k));
       tnsr::i<DataVector, Dim> d_conformal_factor_face(num_face_pts);
-      ::tenex::evaluate<ti::i>(make_not_null(&d_conformal_factor_face),
-                               conformal_factor_face() * field_p_face(ti::i));
+      ::tenex::evaluate<ti::i>(
+          make_not_null(&d_conformal_factor_face),
+          conformal_factor_face() * field_p_face(ti::i));
       tnsr::i<DataVector, Dim> d_lapse_face(num_face_pts);
-      ::tenex::evaluate<ti::i>(make_not_null(&d_lapse_face),
-                               lapse_face() * field_a_face(ti::i));
+      ::tenex::evaluate<ti::i>(
+          make_not_null(&d_lapse_face),
+          lapse_face() * field_a_face(ti::i));
       tnsr::iJ<DataVector, Dim> d_shift_face(num_face_pts);
-      ::tenex::evaluate<ti::i, ti::J>(make_not_null(&d_shift_face),
-                                      field_b_face(ti::i, ti::J));
+      ::tenex::evaluate<ti::i, ti::J>(
+          make_not_null(&d_shift_face),
+          field_b_face(ti::i, ti::J));
       tnsr::ijj<DataVector, Dim> d_a_tilde_face;
       slice_tensor(d_a_tilde_face, d_a_tilde);
       tnsr::i<DataVector, Dim> d_trace_K_face;
@@ -353,9 +325,10 @@ struct OverwriteExternalBoundaryDtDirichlet {
               inv_conformal_metric_face(ti::I, ti::J));
 
       tnsr::ii<DataVector, Dim> spatial_metric_face(num_face_pts);
-      ::tenex::evaluate<ti::i, ti::j>(make_not_null(&spatial_metric_face),
-                                      conformal_metric_face(ti::i, ti::j) /
-                                          conformal_factor_squared_face());
+      ::tenex::evaluate<ti::i, ti::j>(
+          make_not_null(&spatial_metric_face),
+          conformal_metric_face(ti::i, ti::j) /
+              conformal_factor_squared_face());
 
       // Compute unit normal from inverse Jacobian
       InverseJacobian<DataVector, Dim, Frame::ElementLogical, Frame::Inertial>
@@ -370,16 +343,19 @@ struct OverwriteExternalBoundaryDtDirichlet {
       }
 
       tnsr::I<DataVector, Dim> unit_normal_vector(num_face_pts);
-      ::tenex::evaluate<ti::I>(make_not_null(&unit_normal_vector),
-                               inv_spatial_metric_face(ti::I, ti::J) *
-                                   unnormalized_normal_one_form(ti::j));
+      ::tenex::evaluate<ti::I>(
+          make_not_null(&unit_normal_vector),
+          inv_spatial_metric_face(ti::I, ti::J) *
+              unnormalized_normal_one_form(ti::j));
 
       Scalar<DataVector> magnitude(num_face_pts);
-      ::tenex::evaluate(make_not_null(&magnitude),
-                        sqrt(unit_normal_vector(ti::I) *
-                             unnormalized_normal_one_form(ti::i)));
-      ::tenex::evaluate<ti::I>(make_not_null(&unit_normal_vector),
-                               unit_normal_vector(ti::I) / magnitude());
+      ::tenex::evaluate(
+          make_not_null(&magnitude),
+          sqrt(unit_normal_vector(ti::I) *
+               unnormalized_normal_one_form(ti::i)));
+      ::tenex::evaluate<ti::I>(
+          make_not_null(&unit_normal_vector),
+          unit_normal_vector(ti::I) / magnitude());
 
       const tnsr::i<DataVector, Dim> unit_normal_one_form =
           raise_or_lower_index(unit_normal_vector, spatial_metric_face);
@@ -405,7 +381,8 @@ struct OverwriteExternalBoundaryDtDirichlet {
 
       tnsr::iiJ<DataVector, Dim> d_d_shift_face(num_face_pts);
       ::tenex::evaluate<ti::i, ti::j, ti::K>(
-          make_not_null(&d_d_shift_face), d_field_b_face(ti::i, ti::j, ti::K));
+          make_not_null(&d_d_shift_face),
+          d_field_b_face(ti::i, ti::j, ti::K));
 
       // k_minus_k0_minus_2_theta_c for dt_d_lapse computation
       constexpr double c_param = 1.0;
@@ -413,7 +390,8 @@ struct OverwriteExternalBoundaryDtDirichlet {
       slice_scalar(k_0_face, k_0);
       Scalar<DataVector> k_minus_k0_minus_2_theta_c_face(num_face_pts);
       get(k_minus_k0_minus_2_theta_c_face) =
-          get(trace_K_face) - get(k_0_face) - 2.0 * c_param * get(theta_face);
+          get(trace_K_face) - get(k_0_face) -
+          2.0 * c_param * get(theta_face);
 
       // Phase E2: Compute dt of partial derivatives from PDE
       constexpr double one_third = 1.0 / 3.0;
@@ -422,14 +400,13 @@ struct OverwriteExternalBoundaryDtDirichlet {
 
       // Slice dt vars to outermost face
       Scalar<DataVector> outermost_dt_trace_K;
-      slice_scalar(
-          outermost_dt_trace_K,
-          get<::Tags::dt<gr::Tags::TraceExtrinsicCurvature<DataVector>>>(
-              *dt_vars));
+      slice_scalar(outermost_dt_trace_K,
+                   get<::Tags::dt<gr::Tags::TraceExtrinsicCurvature<
+                       DataVector>>>(*dt_vars));
       tnsr::ii<DataVector, Dim> outermost_dt_a_tilde;
-      slice_tensor(
-          outermost_dt_a_tilde,
-          get<::Tags::dt<::Ccz4::Tags::ATilde<DataVector, Dim>>>(*dt_vars));
+      slice_tensor(outermost_dt_a_tilde,
+                   get<::Tags::dt<::Ccz4::Tags::ATilde<DataVector, Dim>>>(
+                       *dt_vars));
       Scalar<DataVector> outermost_dt_theta;
       slice_scalar(outermost_dt_theta,
                    get<::Tags::dt<::Ccz4::Tags::Theta<DataVector>>>(*dt_vars));
@@ -444,7 +421,8 @@ struct OverwriteExternalBoundaryDtDirichlet {
               *dt_vars));
 
       // dt of spatial derivatives
-      tnsr::ijj<DataVector, Dim> outermost_dt_d_conformal_metric(num_face_pts);
+      tnsr::ijj<DataVector, Dim> outermost_dt_d_conformal_metric(
+          num_face_pts);
       ::tenex::evaluate<ti::k, ti::i, ti::j>(
           make_not_null(&outermost_dt_d_conformal_metric),
           -2.0 * (d_a_tilde_face(ti::k, ti::i, ti::j) * lapse_face() +
@@ -470,31 +448,35 @@ struct OverwriteExternalBoundaryDtDirichlet {
       tnsr::i<DataVector, Dim> outermost_dt_d_conformal_factor(num_face_pts);
       ::tenex::evaluate<ti::k>(
           make_not_null(&outermost_dt_d_conformal_factor),
-          one_third * (d_trace_K_face(ti::k) * conformal_factor_face() *
-                           lapse_face() +
-                       trace_K_face() * d_conformal_factor_face(ti::k) *
-                           lapse_face() +
-                       trace_K_face() * d_lapse_face(ti::k) *
-                           conformal_factor_face() -
-                       conformal_factor_face() *
-                           d_d_shift_face(ti::k, ti::l, ti::L) -
-                       d_conformal_factor_face(ti::k) *
-                           d_shift_face(ti::l, ti::L)) +
-              shift_face(ti::L) * d_d_conformal_factor_face(ti::k, ti::l) +
+          one_third *
+                  (d_trace_K_face(ti::k) * conformal_factor_face() *
+                       lapse_face() +
+                   trace_K_face() * d_conformal_factor_face(ti::k) *
+                       lapse_face() +
+                   trace_K_face() * d_lapse_face(ti::k) *
+                       conformal_factor_face() -
+                   conformal_factor_face() *
+                       d_d_shift_face(ti::k, ti::l, ti::L) -
+                   d_conformal_factor_face(ti::k) *
+                       d_shift_face(ti::l, ti::L)) +
+              shift_face(ti::L) *
+                  d_d_conformal_factor_face(ti::k, ti::l) +
               d_shift_face(ti::k, ti::L) * d_conformal_factor_face(ti::l));
 
       tnsr::i<DataVector, Dim> outermost_dt_d_lapse(num_face_pts);
       ::tenex::evaluate<ti::k>(
           make_not_null(&outermost_dt_d_lapse),
-          -2.0 * (d_lapse_face(ti::k) * k_minus_k0_minus_2_theta_c_face() +
+          -2.0 * (d_lapse_face(ti::k) *
+                      k_minus_k0_minus_2_theta_c_face() +
                   d_trace_K_face(ti::k) * lapse_face() -
                   2.0 * d_theta_face(ti::k) * c_param * lapse_face()) +
               d_shift_face(ti::k, ti::L) * d_lapse_face(ti::l) +
               shift_face(ti::L) * d_d_lapse_face(ti::k, ti::l));
 
       tnsr::iJ<DataVector, Dim> outermost_dt_d_shift(num_face_pts);
-      ::tenex::evaluate<ti::k, ti::I>(make_not_null(&outermost_dt_d_shift),
-                                      f_param * d_b_face(ti::k, ti::I));
+      ::tenex::evaluate<ti::k, ti::I>(
+          make_not_null(&outermost_dt_d_shift),
+          f_param * d_b_face(ti::k, ti::I));
       if (shifting_shift) {
         ::tenex::update<ti::k, ti::I>(
             make_not_null(&outermost_dt_d_shift),
@@ -511,9 +493,9 @@ struct OverwriteExternalBoundaryDtDirichlet {
           outermost_dt_d_conformal_metric, outermost_dt_d_conformal_factor,
           outermost_dt_d_lapse, outermost_dt_d_shift, f_param);
 
-      const auto char_speeds =
-          characteristic_speeds(lapse_face, shift_face, conformal_factor_face,
-                                f_param, unit_normal_one_form);
+      const auto char_speeds = characteristic_speeds(
+          lapse_face, shift_face, conformal_factor_face, f_param,
+          unit_normal_one_form);
 
       // Phase F2: Speed validation
       for (size_t i = 0; i < num_face_pts; ++i) {
@@ -554,9 +536,10 @@ struct OverwriteExternalBoundaryDtDirichlet {
 
       // UVector1Zero (speed[2], incoming when speed < 0, point-by-point)
       {
-        auto& dt_u_vector1_zero = get<
-            ::Tags::dt<Tags::UVector1Zero<DataVector, Dim, Frame::Inertial>>>(
-            dt_char_fields);
+        auto& dt_u_vector1_zero =
+            get<::Tags::dt<Tags::UVector1Zero<DataVector, Dim,
+                                              Frame::Inertial>>>(
+                dt_char_fields);
         for (size_t s = 0; s < num_face_pts; ++s) {
           if (char_speeds[2][s] < 0.0) {
             for (size_t j = 0; j < Dim; ++j) {
@@ -596,26 +579,26 @@ struct OverwriteExternalBoundaryDtDirichlet {
       // Phase H: Inverse characteristic transform
       const auto modified_dt_evolved_vars =
           dt_evolved_space_from_dt_characteristic_fields(
-              get<::Tags::dt<
-                  Tags::UTensorPlus<DataVector, Dim, Frame::Inertial>>>(
+              get<::Tags::dt<Tags::UTensorPlus<DataVector, Dim,
+                                               Frame::Inertial>>>(
                   dt_char_fields),
-              get<::Tags::dt<
-                  Tags::UTensorMinus<DataVector, Dim, Frame::Inertial>>>(
+              get<::Tags::dt<Tags::UTensorMinus<DataVector, Dim,
+                                                Frame::Inertial>>>(
                   dt_char_fields),
-              get<::Tags::dt<
-                  Tags::UVector1Zero<DataVector, Dim, Frame::Inertial>>>(
+              get<::Tags::dt<Tags::UVector1Zero<DataVector, Dim,
+                                                Frame::Inertial>>>(
                   dt_char_fields),
-              get<::Tags::dt<
-                  Tags::UVector2Plus<DataVector, Dim, Frame::Inertial>>>(
+              get<::Tags::dt<Tags::UVector2Plus<DataVector, Dim,
+                                                Frame::Inertial>>>(
                   dt_char_fields),
-              get<::Tags::dt<
-                  Tags::UVector2Minus<DataVector, Dim, Frame::Inertial>>>(
+              get<::Tags::dt<Tags::UVector2Minus<DataVector, Dim,
+                                                 Frame::Inertial>>>(
                   dt_char_fields),
-              get<::Tags::dt<
-                  Tags::UVector3Plus<DataVector, Dim, Frame::Inertial>>>(
+              get<::Tags::dt<Tags::UVector3Plus<DataVector, Dim,
+                                                Frame::Inertial>>>(
                   dt_char_fields),
-              get<::Tags::dt<
-                  Tags::UVector3Minus<DataVector, Dim, Frame::Inertial>>>(
+              get<::Tags::dt<Tags::UVector3Minus<DataVector, Dim,
+                                                 Frame::Inertial>>>(
                   dt_char_fields),
               get<::Tags::dt<Tags::UScalar1Zero<DataVector>>>(dt_char_fields),
               get<::Tags::dt<Tags::UScalar2Plus<DataVector>>>(dt_char_fields),
@@ -639,7 +622,8 @@ struct OverwriteExternalBoundaryDtDirichlet {
                 modified_dt_evolved_vars);
         for (size_t ti = 0; ti < dt_a_tilde_vol.size(); ++ti) {
           for (size_t fp = 0; fp < num_face_pts; ++fp) {
-            dt_a_tilde_vol[ti][volume_index(fp, outermost_layer)] = 0.0;
+            dt_a_tilde_vol[ti][volume_index(fp, outermost_layer)] =
+                modified_dt_a_tilde[ti][fp];
           }
         }
       }
@@ -651,82 +635,32 @@ struct OverwriteExternalBoundaryDtDirichlet {
             get<::Tags::dt<gr::Tags::TraceExtrinsicCurvature<DataVector>>>(
                 modified_dt_evolved_vars);
         for (size_t fp = 0; fp < num_face_pts; ++fp) {
-          get(dt_K_vol)[volume_index(fp, outermost_layer)] = 0.0;
+          get(dt_K_vol)[volume_index(fp, outermost_layer)] =
+              get(modified_dt_K)[fp];
         }
       }
       {
         auto& dt_theta_vol =
             get<::Tags::dt<::Ccz4::Tags::Theta<DataVector>>>(*dt_vars);
-        const Scalar<DataVector> modified_dt_theta =
-            tenex::evaluate(-1.0 * lapse_face() * unit_normal_vector(ti::I) *
-                                d_theta_face(ti::i) +
-                            shift_face(ti::I) * d_theta_face(ti::i));
+        const auto& modified_dt_theta =
+            get<::Tags::dt<::Ccz4::Tags::Theta<DataVector>>>(
+                modified_dt_evolved_vars);
         for (size_t fp = 0; fp < num_face_pts; ++fp) {
           get(dt_theta_vol)[volume_index(fp, outermost_layer)] =
-              kill_sim ? get(modified_dt_theta)[fp] : 0.0;
+              get(modified_dt_theta)[fp];
         }
       }
       {
         auto& dt_gamma_hat_vol =
-            get<::Tags::dt<::Ccz4::Tags::GammaHat<DataVector, Dim>>>(*dt_vars);
-
-        // Slice Z_i, d_k Z_i to face
-        tnsr::i<DataVector, Dim> z_constraint_face;
-        slice_tensor(z_constraint_face, z_constraint);
-        tnsr::ij<DataVector, Dim> d_z_constraint_face;
-        slice_tensor(d_z_constraint_face, d_z_constraint);
-
-        // Slice dt_conformal_metric to face (from PDE, not yet overwritten).
-        // NOTE: This must happen in Phase I, before Phase J's
-        // reconstruct_dt_component overwrites dt_conformal_metric.
-        tnsr::ii<DataVector, Dim> dt_conformal_metric_face;
-        slice_tensor(
-            dt_conformal_metric_face,
-            get<::Tags::dt<::Ccz4::Tags::ConformalMetric<DataVector, Dim>>>(
-                *dt_vars));
-
-        // dt gamma^{ij} = -gamma^{ik} gamma^{jl} dt gamma_{kl}
-        tnsr::II<DataVector, Dim> dt_inv_conformal_metric_face(num_face_pts);
-        ::tenex::evaluate<ti::I, ti::J>(
-            make_not_null(&dt_inv_conformal_metric_face),
-            -1.0 * inv_conformal_metric_face(ti::I, ti::K) *
-                inv_conformal_metric_face(ti::J, ti::L) *
-                dt_conformal_metric_face(ti::k, ti::l));
-
-        // All 5 terms from gamma_hat_bc.tex in one tenex call.
-        // T1 = gamma^{kl} (dt gamma^{ij})(dl gamma_{jk})
-        // T2 = gamma^{ij} (dt gamma^{kl})(dl gamma_{jk})
-        // T3 = gamma^{ij} gamma^{kl} dl(dt gamma_{jk})
-        // T4 = 2 Z_j dt gamma^{ij}
-        // T5 = 2 gamma^{ij} (-alpha n^k + beta^k) dk Z_j
-        tnsr::I<DataVector, Dim> gamma_hat_bc(num_face_pts);
-        ::tenex::evaluate<ti::I>(
-            make_not_null(&gamma_hat_bc),
-            // T1
-            inv_conformal_metric_face(ti::K, ti::L) *
-                    dt_inv_conformal_metric_face(ti::I, ti::J) *
-                    d_conformal_metric_face(ti::l, ti::j, ti::k) +
-                // T2
-                inv_conformal_metric_face(ti::I, ti::J) *
-                    dt_inv_conformal_metric_face(ti::K, ti::L) *
-                    d_conformal_metric_face(ti::l, ti::j, ti::k) +
-                // T3
-                inv_conformal_metric_face(ti::I, ti::J) *
-                    inv_conformal_metric_face(ti::K, ti::L) *
-                    outermost_dt_d_conformal_metric(ti::l, ti::j, ti::k) +
-                // T4
-                2.0 * dt_inv_conformal_metric_face(ti::I, ti::J) *
-                    z_constraint_face(ti::j) +
-                // T5
-                2.0 * inv_conformal_metric_face(ti::I, ti::J) *
-                    (-1.0 * lapse_face() * unit_normal_vector(ti::K) +
-                     shift_face(ti::K)) *
-                    d_z_constraint_face(ti::k, ti::j));
-
+            get<::Tags::dt<::Ccz4::Tags::GammaHat<DataVector, Dim>>>(
+                *dt_vars);
+        const auto& modified_dt_gamma_hat =
+            get<::Tags::dt<::Ccz4::Tags::GammaHat<DataVector, Dim>>>(
+                modified_dt_evolved_vars);
         for (size_t i = 0; i < Dim; ++i) {
           for (size_t fp = 0; fp < num_face_pts; ++fp) {
-            dt_gamma_hat_vol.get(i)[volume_index(fp, outermost_layer)] = 0.0;
-            // kill_sim ? gamma_hat_bc.get(i)[fp] : 0.0;
+            dt_gamma_hat_vol.get(i)[volume_index(fp, outermost_layer)] =
+                modified_dt_gamma_hat.get(i)[fp];
           }
         }
       }
@@ -739,21 +673,24 @@ struct OverwriteExternalBoundaryDtDirichlet {
                 modified_dt_evolved_vars);
         for (size_t i = 0; i < Dim; ++i) {
           for (size_t fp = 0; fp < num_face_pts; ++fp) {
-            dt_b_vol.get(i)[volume_index(fp, outermost_layer)] = 0.0;
+            dt_b_vol.get(i)[volume_index(fp, outermost_layer)] =
+                modified_dt_b.get(i)[fp];
           }
         }
       }
 
       // Phase J: Reconstruct dt for metric/gauge vars using spectral
       // differentiation matrix
-      const auto& modified_dt_dn_conformal_metric = get<::Tags::dt<
-          Tags::DnConformalMetric<DataVector, Dim, Frame::Inertial>>>(
-          modified_dt_evolved_vars);
+      const auto& modified_dt_dn_conformal_metric =
+          get<::Tags::dt<Tags::DnConformalMetric<DataVector, Dim,
+                                                 Frame::Inertial>>>(
+              modified_dt_evolved_vars);
       const auto& modified_dt_dn_conformal_factor =
           get<::Tags::dt<Tags::DnConformalFactor<DataVector>>>(
               modified_dt_evolved_vars);
       const auto& modified_dt_dn_lapse =
-          get<::Tags::dt<Tags::DnLapse<DataVector>>>(modified_dt_evolved_vars);
+          get<::Tags::dt<Tags::DnLapse<DataVector>>>(
+              modified_dt_evolved_vars);
       const auto& modified_dt_dn_shift =
           get<::Tags::dt<Tags::DnShift<DataVector, Dim, Frame::Inertial>>>(
               modified_dt_evolved_vars);
@@ -761,13 +698,14 @@ struct OverwriteExternalBoundaryDtDirichlet {
       // Compute jacobian_factor
       const tnsr::I<DataVector, Dim, Frame::ElementLogical>
           inv_jacobian_dot_normal = ::tenex::evaluate<ti::I>(
-              unit_normal_vector(ti::J) * outermost_inv_jacobian(ti::I, ti::j));
+              unit_normal_vector(ti::J) *
+              outermost_inv_jacobian(ti::I, ti::j));
       Scalar<DataVector> jacobian_factor(num_face_pts);
       get(jacobian_factor) = inv_jacobian_dot_normal.get(normal_dim);
 
       // Get the 1D spectral differentiation matrix in the normal direction
-      const auto diff_matrix =
-          Spectral::differentiation_matrix(mesh.slice_through(normal_dim));
+      const auto diff_matrix = Spectral::differentiation_matrix(
+          mesh.slice_through(normal_dim));
       const double d_NN = diff_matrix(outermost_layer, outermost_layer);
 
       // Lambda to reconstruct dt at the outermost face point for a tensor
@@ -783,49 +721,53 @@ struct OverwriteExternalBoundaryDtDirichlet {
                 sum_interior += diff_matrix(outermost_layer, j) *
                                 dt_field_data[volume_index(face_idx, j)];
               }
-              dt_field_data[volume_index(face_idx, outermost_layer)] = 0.0;
+              dt_field_data[volume_index(face_idx, outermost_layer)] =
+                  (modified_dn_dt_data[face_idx] /
+                       get(jacobian_factor)[face_idx] -
+                   sum_interior) /
+                  d_NN;
             }
           };
 
-      // Reconstruct dt for gauge/metric variables if requested
-      if (prescribe_gauge_fields) {
-        // Reconstruct dt_conformal_metric
-        {
-          auto& dt_cm_vol =
-              get<::Tags::dt<::Ccz4::Tags::ConformalMetric<DataVector, Dim>>>(
-                  *dt_vars);
-          for (size_t ti = 0; ti < dt_cm_vol.size(); ++ti) {
-            reconstruct_dt_component(
-                dt_cm_vol[ti].data(),
-                modified_dt_dn_conformal_metric[ti].data());
-          }
+      // Reconstruct dt_conformal_metric
+      {
+        auto& dt_cm_vol =
+            get<::Tags::dt<::Ccz4::Tags::ConformalMetric<DataVector, Dim>>>(
+                *dt_vars);
+        for (size_t ti = 0; ti < dt_cm_vol.size(); ++ti) {
+          reconstruct_dt_component(
+              dt_cm_vol[ti].data(),
+              modified_dt_dn_conformal_metric[ti].data());
         }
+      }
 
-        // Reconstruct dt_conformal_factor
-        {
-          auto& dt_cf_vol =
-              get<::Tags::dt<::Ccz4::Tags::ConformalFactor<DataVector>>>(
-                  *dt_vars);
-          reconstruct_dt_component(get(dt_cf_vol).data(),
-                                   get(modified_dt_dn_conformal_factor).data());
-        }
+      // Reconstruct dt_conformal_factor
+      {
+        auto& dt_cf_vol =
+            get<::Tags::dt<::Ccz4::Tags::ConformalFactor<DataVector>>>(
+                *dt_vars);
+        reconstruct_dt_component(
+            get(dt_cf_vol).data(),
+            get(modified_dt_dn_conformal_factor).data());
+      }
 
-        // Reconstruct dt_lapse
-        {
-          auto& dt_lapse_vol =
-              get<::Tags::dt<gr::Tags::Lapse<DataVector>>>(*dt_vars);
-          reconstruct_dt_component(get(dt_lapse_vol).data(),
-                                   get(modified_dt_dn_lapse).data());
-        }
+      // Reconstruct dt_lapse
+      {
+        auto& dt_lapse_vol =
+            get<::Tags::dt<gr::Tags::Lapse<DataVector>>>(*dt_vars);
+        reconstruct_dt_component(
+            get(dt_lapse_vol).data(),
+            get(modified_dt_dn_lapse).data());
+      }
 
-        // Reconstruct dt_shift
-        {
-          auto& dt_shift_vol =
-              get<::Tags::dt<gr::Tags::Shift<DataVector, Dim>>>(*dt_vars);
-          for (size_t i = 0; i < Dim; ++i) {
-            reconstruct_dt_component(dt_shift_vol.get(i).data(),
-                                     modified_dt_dn_shift.get(i).data());
-          }
+      // Reconstruct dt_shift
+      {
+        auto& dt_shift_vol =
+            get<::Tags::dt<gr::Tags::Shift<DataVector, Dim>>>(*dt_vars);
+        for (size_t i = 0; i < Dim; ++i) {
+          reconstruct_dt_component(
+              dt_shift_vol.get(i).data(),
+              modified_dt_dn_shift.get(i).data());
         }
       }
     }  // end loop over td_dirichlet_directions

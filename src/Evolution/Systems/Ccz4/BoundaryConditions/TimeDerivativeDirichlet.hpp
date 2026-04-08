@@ -44,38 +44,13 @@ namespace Ccz4::BoundaryConditions {
  */
 class TimeDerivativeDirichlet final : public BoundaryCondition {
  public:
-  /// If true, use the spectral differentiation matrix to prescribe
-  /// dt of the gauge/metric variables (conformal metric, conformal factor,
-  /// lapse, shift) at the boundary face via the reconstruct_dt_component
-  /// lambda.  If false (default), these variables are not overwritten.
-  struct PrescribeGaugeFields {
-    using type = bool;
-    static constexpr Options::String help{
-        "If true, reconstruct dt of gauge fields (conformal metric, "
-        "conformal factor, lapse, shift) at the boundary using the "
-        "spectral differentiation matrix. Default is false."};
-    static bool default_value() { return false; }
-  };
-
-  /// If true, assign dt_theta at the boundary to the modified value
-  /// (advection-only expression) rather than freezing it to zero.
-  /// Default is false (freeze dt_theta to zero).
-  struct KillSim {
-    using type = bool;
-    static constexpr Options::String help{
-        "If true, assign dt_theta at the boundary to the modified "
-        "advection-only value instead of zero. Default is false."};
-    static bool default_value() { return false; }
-  };
-
-  using options = tmpl::list<PrescribeGaugeFields, KillSim>;
+  using options = tmpl::list<>;
   static constexpr Options::String help{
       "TimeDerivative boundary condition that freezes incoming "
       "characteristic modes to zero. The actual logic is in the "
       "OverwriteExternalBoundaryDtDirichlet MutateApply action."};
 
   TimeDerivativeDirichlet() = default;
-  explicit TimeDerivativeDirichlet(bool prescribe_gauge_fields, bool kill_sim);
   TimeDerivativeDirichlet(TimeDerivativeDirichlet&&) = default;
   TimeDerivativeDirichlet& operator=(TimeDerivativeDirichlet&&) = default;
   TimeDerivativeDirichlet(const TimeDerivativeDirichlet&) = default;
@@ -85,7 +60,8 @@ class TimeDerivativeDirichlet final : public BoundaryCondition {
   explicit TimeDerivativeDirichlet(CkMigrateMessage* msg);
 
   WRAPPED_PUPable_decl_base_template(
-      domain::BoundaryConditions::BoundaryCondition, TimeDerivativeDirichlet);
+      domain::BoundaryConditions::BoundaryCondition,
+      TimeDerivativeDirichlet);
 
   auto get_clone() const -> std::unique_ptr<
       domain::BoundaryConditions::BoundaryCondition> override;
@@ -144,22 +120,18 @@ class TimeDerivativeDirichlet final : public BoundaryCondition {
   using fd_interior_temporary_tags = tmpl::list<>;
   using fd_interior_primitive_variables_tags = tmpl::list<>;
   using fd_gridless_tags = tmpl::list<>;
-  void fd_ghost(gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>,
-                gsl::not_null<Scalar<DataVector>*>,
-                gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>,
-                gsl::not_null<Scalar<DataVector>*>,
-                gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>,
-                gsl::not_null<Scalar<DataVector>*>,
-                gsl::not_null<Scalar<DataVector>*>,
-                gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>,
-                gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>,
-                const Direction<3>&) const;
-
-  bool prescribe_gauge_fields() const { return prescribe_gauge_fields_; }
-  bool kill_sim() const { return kill_sim_; }
+  void fd_ghost(
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>,
+      gsl::not_null<Scalar<DataVector>*>,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>,
+      gsl::not_null<Scalar<DataVector>*>,
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>,
+      gsl::not_null<Scalar<DataVector>*>,
+      gsl::not_null<Scalar<DataVector>*>,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>,
+      const Direction<3>&) const;
 
  private:
-  bool prescribe_gauge_fields_{false};
-  bool kill_sim_{false};
 };
 }  // namespace Ccz4::BoundaryConditions
