@@ -12,6 +12,7 @@
 #include <type_traits>
 
 #include "DataStructures/DataBox/PrefixHelpers.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "DataStructures/DataBox/Prefixes.hpp"
 #include "DataStructures/DataBox/TagName.hpp"
 #include "DataStructures/DataVector.hpp"
@@ -96,6 +97,7 @@ double call_dg_package_data(
       make_not_null(&get<PackageTags>(*package_data))...,
       get<FaceTagsToForward>(face_variables)..., unit_normal_covector,
       mesh_velocity, normal_dot_mesh_velocity,
+      Direction<Dim>::lower_xi(),
       StdHelpers::retrieve(get<VolumeTagsToForward>(volume_data))...);
   return max_speed;
 }
@@ -124,6 +126,7 @@ double call_dg_package_data(
       make_not_null(&get<PackageTags>(*package_data))...,
       get<FaceTagsToForward>(face_variables)..., unit_normal_covector,
       unit_normal_vector, mesh_velocity, normal_dot_mesh_velocity,
+      Direction<Dim>::lower_xi(),
       StdHelpers::retrieve(tuples::get<VolumeTagsToForward>(volume_data))...);
   return max_speed;
 }

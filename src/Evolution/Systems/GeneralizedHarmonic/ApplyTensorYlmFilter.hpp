@@ -5,12 +5,14 @@
 
 #include <cstddef>
 #include <optional>
+#include <tuple>
 #include <unordered_set>
 
 #include "DataStructures/SimpleSparseMatrix.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
 #include "DataStructures/Variables.hpp"
 #include "Domain/Tags.hpp"
+#include "Domain/TagsTimeDependent.hpp"
 #include "Evolution/Systems/GeneralizedHarmonic/Tags.hpp"
 #include "NumericalAlgorithms/LinearOperators/Filter.hpp"
 #include "NumericalAlgorithms/SphericalHarmonics/ApplyTensorYlmFilter.hpp"
@@ -261,13 +263,17 @@ class TensorYlmFilter : public Filters::Filter {
  public:  // DataBox-mutator protocol
   using argument_tags = tmpl::list<
       domain::Tags::Mesh<3>,
-      domain::Tags::InverseJacobian<3, Frame::Grid, Frame::Inertial>>;
+      domain::Tags::CoordinatesMeshVelocityAndJacobians<3>>;
 
   void operator()(
       gsl::not_null<Variables<filter_detail::gh_spacetime_vars_list>*> gh_vars,
       const Mesh<3>& mesh,
-      const InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>&
-          jac_grid_to_inertial) const;
+      const std::optional<std::tuple<
+          tnsr::I<DataVector, 3, Frame::Inertial>,
+          InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>,
+          Jacobian<DataVector, 3, Frame::Grid, Frame::Inertial>,
+          tnsr::I<DataVector, 3, Frame::Inertial>>>&
+          grid_to_inertial_quantities) const;
 
  private:
   friend bool operator==(const TensorYlmFilter& lhs,

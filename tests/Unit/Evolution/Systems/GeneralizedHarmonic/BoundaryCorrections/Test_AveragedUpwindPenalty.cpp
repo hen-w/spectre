@@ -15,6 +15,7 @@
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
 #include "Domain/FaceNormal.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "Evolution/Systems/GeneralizedHarmonic/BoundaryCorrections/AveragedUpwindPenalty.hpp"
 #include "Evolution/Systems/GeneralizedHarmonic/Characteristics.hpp"
 #include "Evolution/Systems/GeneralizedHarmonic/Tags.hpp"
@@ -76,7 +77,8 @@ Variables<typename Correction::dg_package_field_tags> call_dg_package_data(
                                   : std::nullopt,
             include_mesh_velocity
                 ? std::optional{unused_normal_dot_mesh_velocity}
-                : std::nullopt);
+                : std::nullopt,
+            Direction<Dim>::lower_xi());
       });
   return packaged_data;
 }

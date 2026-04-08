@@ -404,8 +404,12 @@ void TensorYlmFilter::operator()(
     const gsl::not_null<Variables<filter_detail::gh_spacetime_vars_list>*>
         gh_vars,
     const Mesh<3>& mesh,
-    const InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>&
-        jac_grid_to_inertial) const {
+    const std::optional<std::tuple<
+        tnsr::I<DataVector, 3, Frame::Inertial>,
+        InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>,
+        Jacobian<DataVector, 3, Frame::Grid, Frame::Inertial>,
+        tnsr::I<DataVector, 3, Frame::Inertial>>>&
+        grid_to_inertial_quantities) const {
   if (mesh.basis(1) != Spectral::Basis::SphericalHarmonic) {
     return;
   }
@@ -433,6 +437,19 @@ void TensorYlmFilter::operator()(
         make_not_null(&filter_matrix_kii_), l_max, num_modes_to_kill_,
         half_power_, normalization_);
     cached_l_max_ = l_max;
+  }
+
+  // When Grid==Inertial (non-moving mesh), the Jacobian is the identity.
+  // Construct identity Jacobians in that case.
+  const size_t num_points = mesh.number_of_grid_points();
+  InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>
+      jac_grid_to_inertial(num_points, 0.0);
+  if (grid_to_inertial_quantities.has_value()) {
+    jac_grid_to_inertial = std::get<1>(*grid_to_inertial_quantities);
+  } else {
+    for (size_t i = 0; i < 3; ++i) {
+      jac_grid_to_inertial.get(i, i) = 1.0;
+    }
   }
 
   // Apply the filter
