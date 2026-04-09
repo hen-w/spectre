@@ -36,7 +36,9 @@ DirichletCharacteristics::DirichletCharacteristics(
     const DirichletCharacteristics& rhs)
     : BoundaryCondition{dynamic_cast<const BoundaryCondition&>(rhs)},
       analytic_prescription_(rhs.analytic_prescription_->get_clone()),
-      prescribe_outgoing_(rhs.prescribe_outgoing_) {}
+      prescribe_outgoing_(rhs.prescribe_outgoing_),
+      prescribe_analytic_second_order_fields_(
+          rhs.prescribe_analytic_second_order_fields_) {}
 
 DirichletCharacteristics& DirichletCharacteristics::operator=(
     const DirichletCharacteristics& rhs) {
@@ -45,14 +47,18 @@ DirichletCharacteristics& DirichletCharacteristics::operator=(
   }
   analytic_prescription_ = rhs.analytic_prescription_->get_clone();
   prescribe_outgoing_ = rhs.prescribe_outgoing_;
+  prescribe_analytic_second_order_fields_ =
+      rhs.prescribe_analytic_second_order_fields_;
   return *this;
 }
 
 DirichletCharacteristics::DirichletCharacteristics(
     std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription,
-    bool prescribe_outgoing)
+    bool prescribe_outgoing, bool prescribe_analytic_second_order_fields)
     : analytic_prescription_(std::move(analytic_prescription)),
-      prescribe_outgoing_(prescribe_outgoing) {}
+      prescribe_outgoing_(prescribe_outgoing),
+      prescribe_analytic_second_order_fields_(
+          prescribe_analytic_second_order_fields) {}
 
 std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>
 DirichletCharacteristics::get_clone() const {
@@ -63,6 +69,7 @@ void DirichletCharacteristics::pup(PUP::er& p) {
   BoundaryCondition::pup(p);
   p | analytic_prescription_;
   p | prescribe_outgoing_;
+  p | prescribe_analytic_second_order_fields_;
 }
 // NOLINTNEXTLINE
 PUP::able::PUP_ID DirichletCharacteristics::my_PUP_ID = 0;
@@ -124,11 +131,9 @@ std::optional<std::string> DirichletCharacteristics::dg_ghost(
 
   // ============================================================
   // Phase A: Copy interior metric/gauge to exterior
+  //          (or analytic, if prescribe_analytic_second_order_fields_)
+  //          Deferred to after Phase E1 so analytic values are available.
   // ============================================================
-  *conformal_metric = interior_conformal_metric;
-  *conformal_factor = interior_conformal_factor;
-  *lapse = interior_lapse;
-  *shift = interior_shift;
 
   // ============================================================
   // Phase B: Reconstruct spatial derivatives from interior auxiliary fields
@@ -298,6 +303,19 @@ std::optional<std::string> DirichletCharacteristics::dg_ghost(
       get<Tags::FieldD<DataVector, 3>>(analytic_values);
   const auto& analytic_field_p =
       get<Tags::FieldP<DataVector, 3>>(analytic_values);
+
+  // Phase A (deferred): Set exterior metric/gauge fields
+  if (prescribe_analytic_second_order_fields_) {
+    *conformal_metric = analytic_conformal_metric;
+    *conformal_factor = analytic_conformal_factor;
+    *lapse = analytic_lapse;
+    *shift = analytic_shift;
+  } else {
+    *conformal_metric = interior_conformal_metric;
+    *conformal_factor = interior_conformal_factor;
+    *lapse = interior_lapse;
+    *shift = interior_shift;
+  }
 
   // E2: Reconstruct analytic spatial derivatives from analytic auxiliary fields
   tnsr::ijj<DataVector, Dim, Frame::Inertial> analytic_d_conformal_metric{};

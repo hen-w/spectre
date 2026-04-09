@@ -64,7 +64,19 @@ class DirichletCharacteristics final : public BoundaryCondition {
     using type = bool;
     static type default_value() { return false; }
   };
-  using options = tmpl::list<AnalyticPrescription, PrescribeOutgoing>;
+  /// \brief Whether to use analytic values for the second-order evolved
+  /// fields (conformal metric, conformal factor, lapse, shift) on the
+  /// exterior ghost state instead of copying from the interior.
+  struct PrescribeAnalyticSecondOrderFields {
+    static constexpr Options::String help =
+        "If true, use analytic values for conformal metric, conformal factor, "
+        "lapse, and shift on the exterior ghost state. If false (default), "
+        "copy these from the interior.";
+    using type = bool;
+    static type default_value() { return false; }
+  };
+  using options = tmpl::list<AnalyticPrescription, PrescribeOutgoing,
+                             PrescribeAnalyticSecondOrderFields>;
   static constexpr Options::String help{
       "Dirichlet boundary conditions via characteristic decomposition. "
       "Incoming characteristic modes are set to analytic values."};
@@ -81,7 +93,8 @@ class DirichletCharacteristics final : public BoundaryCondition {
   explicit DirichletCharacteristics(
       std::unique_ptr<evolution::initial_data::InitialData>
           analytic_prescription,
-      bool prescribe_outgoing = false);
+      bool prescribe_outgoing = false,
+      bool prescribe_analytic_second_order_fields = false);
 
   WRAPPED_PUPable_decl_base_template(
       domain::BoundaryConditions::BoundaryCondition, DirichletCharacteristics);
@@ -170,5 +183,6 @@ class DirichletCharacteristics final : public BoundaryCondition {
  private:
   std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription_;
   bool prescribe_outgoing_{false};
+  bool prescribe_analytic_second_order_fields_{false};
 };
 }  // namespace Ccz4::BoundaryConditions
