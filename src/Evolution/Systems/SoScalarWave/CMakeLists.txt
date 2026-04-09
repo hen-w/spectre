@@ -8,6 +8,7 @@ add_spectre_library(${LIBRARY})
 spectre_target_sources(
   ${LIBRARY}
   PRIVATE
+  Characteristics.cpp
   TimeDerivative.cpp
   )
 
@@ -16,6 +17,7 @@ spectre_target_headers(
   INCLUDE_DIRECTORY ${CMAKE_SOURCE_DIR}/src
   HEADERS
   Actions/OverwriteExternalBoundaryDt.hpp
+  Characteristics.hpp
   System.hpp
   Tags.hpp
   TagsDeclarations.hpp

@@ -70,24 +70,13 @@ def _first_deriv(u):
     )
 
 
-def _second_deriv(u):
-    gauss_term = np.exp(-((u - _gauss_center()) ** 2) / _gauss_width() ** 2)
-    first_term = (-2.0 * _gauss_amplitude() / _gauss_width() ** 2) * gauss_term
-    second_term = (
-        (4.0 * _gauss_amplitude() / _gauss_width() ** 4)
-        * (u - _gauss_center()) ** 2
-        * gauss_term
-    )
-    return first_term + second_term
-
-
-def _pi_value(coords, time, dim):
-    """Compute the actual Pi value from the analytic solution."""
-    return _omega(dim) * _first_deriv(_1d_u(coords, time, dim))
-
-
-def _psi_value(coords, time, dim):
-    """Compute the actual Psi value from the analytic solution."""
+def psi(
+    face_mesh_velocity,
+    outward_directed_normal_covector,
+    coords,
+    time,
+    dim,
+):
     return _profile(_1d_u(coords, time, dim))
 
 
@@ -98,43 +87,18 @@ def pi(
     time,
     dim,
 ):
-    # Return 0.0 because Pi is not used by CgCollocation's dg_package_data.
-    # Setting to zero helps catch bugs if something unexpectedly uses this.
-    return 0.0
+    return _omega(dim) * _first_deriv(_1d_u(coords, time, dim))
 
 
-def psi(
+def phi(
     face_mesh_velocity,
     outward_directed_normal_covector,
     coords,
     time,
     dim,
 ):
-    # Return 0.0 because Psi is not used by CgCollocation's dg_package_data.
-    # Setting to zero helps catch bugs if something unexpectedly uses this.
-    return 0.0
-
-
-def dt_psi(
-    face_mesh_velocity,
-    outward_directed_normal_covector,
-    coords,
-    time,
-    dim,
-):
-    # dt<Psi> = -Pi (use the actual value, not NaN)
-    return -_pi_value(coords, time, dim)
-
-
-def dt_pi(
-    face_mesh_velocity,
-    outward_directed_normal_covector,
-    coords,
-    time,
-    dim,
-):
-    # dt<Pi> = -∇²Psi = -d²Psi/du² * (du/dx_i)²
-    # For the plane wave: du/dx_i = wave_vector[i]
-    # So ∇²Psi = d²Psi/du² * sum_i(wave_vector[i]²) = d²Psi/du² * omega²
-    u = _1d_u(coords, time, dim)
-    return -_omega(dim) ** 2 * _second_deriv(u)
+    result = np.empty([dim])
+    du = _first_deriv(_1d_u(coords, time, dim))
+    for i in range(dim):
+        result[i] = _wave_vector(dim)[i] * du
+    return result

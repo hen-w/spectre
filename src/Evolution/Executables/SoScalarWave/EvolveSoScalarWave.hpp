@@ -137,6 +137,8 @@ struct EvolutionMetavars {
   using temporal_id = Tags::TimeStepId;
   using TimeStepperBase = TimeStepper;
 
+  struct FilterEvolvedVariables {};
+
   static constexpr bool local_time_stepping =
       TimeStepperBase::local_time_stepping;
   static constexpr bool use_dg_element_collection = false;
@@ -190,6 +192,8 @@ struct EvolutionMetavars {
         tmpl::pair<LtsTimeStepper, TimeSteppers::lts_time_steppers>,
         tmpl::pair<MathFunction<1, Frame::Inertial>,
                    MathFunctions::all_math_functions<1, Frame::Inertial>>,
+        tmpl::pair<Filters::Filter,
+                   tmpl::list<Filters::Exponential<volume_dim>>>,
         tmpl::pair<PhaseChange, PhaseControl::factory_creatable_classes>,
         tmpl::pair<
             SoScalarWave::BoundaryConditions::BoundaryCondition<volume_dim>,
@@ -197,11 +201,11 @@ struct EvolutionMetavars {
                 volume_dim>>,
         tmpl::pair<
             StepChooser<StepChooserUse::LtsStep>,
-            tmpl::push_back<StepChoosers::standard_step_choosers<system, false>,
+            tmpl::push_back<StepChoosers::standard_step_choosers<system>,
                             StepChoosers::ByBlock<volume_dim>>>,
         tmpl::pair<StepChooser<StepChooserUse::Slab>,
                    tmpl::push_back<StepChoosers::standard_slab_choosers<
-                                       system, local_time_stepping, false>,
+                                       system, local_time_stepping>,
                                    StepChoosers::ByBlock<volume_dim>>>,
         tmpl::pair<TimeSequence<double>,
                    TimeSequences::all_time_sequences<double>>,
@@ -254,7 +258,7 @@ struct EvolutionMetavars {
       Actions::MutateApply<CleanHistory<system>>,
       tmpl::conditional_t<
           local_time_stepping,
-          Actions::MutateApply<evolution::dg::CleanMortarHistory<system>>,
+          Actions::MutateApply<evolution::dg::CleanMortarHistory<volume_dim>>,
           tmpl::list<>>,
       //   tmpl::conditional_t<
       //       use_filtering,
@@ -265,7 +269,7 @@ struct EvolutionMetavars {
       tmpl::conditional_t<
           use_filtering,
           dg::Actions::Filter<
-              Filters::Exponential<0>,
+              FilterEvolvedVariables,
               tmpl::list<SoScalarWave::Tags::Psi, SoScalarWave::Tags::Pi>>,
           tmpl::list<>>>>;
 
@@ -279,6 +283,7 @@ struct EvolutionMetavars {
       Initialization::Actions::InitializeItems<
           Initialization::TimeStepping<EvolutionMetavars, TimeStepperBase>,
           evolution::dg::Initialization::Domain<EvolutionMetavars>,
+          dg::Actions::InitializeFilters<FilterEvolvedVariables>,
           ::amr::Initialization::Initialize<volume_dim, EvolutionMetavars>,
           Initialization::TimeStepperHistory<EvolutionMetavars>>,
       Initialization::Actions::NonconservativeSystem<system>,
@@ -340,7 +345,9 @@ struct EvolutionMetavars {
         Initialization::ProjectTimeStepperHistory<EvolutionMetavars>,
         ::amr::projectors::ProjectVariables<volume_dim,
                                             typename system::variables_tag>,
-        evolution::dg::Initialization::ProjectMortars<EvolutionMetavars>,
+        evolution::dg::Initialization::ProjectMortars<volume_dim,
+                                                         local_time_stepping>,
+        dg::Actions::InitializeFilters<FilterEvolvedVariables>,
         evolution::Actions::ProjectRunEventsAndDenseTriggers,
         ::amr::projectors::DefaultInitialize<
             Initialization::Tags::InitialTimeDelta,

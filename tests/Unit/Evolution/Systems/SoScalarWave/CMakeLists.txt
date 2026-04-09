@@ -5,8 +5,10 @@ set(LIBRARY Test_SoScalarWave)
 
 set(LIBRARY_SOURCES
   BoundaryConditions/Test_DirichletAnalytic.cpp
+  BoundaryConditions/Test_DirichletCharacteristics.cpp
   BoundaryConditions/Test_Periodic.cpp
-  BoundaryCorrections/Test_CgCollocation.cpp
+  BoundaryCorrections/Test_LaxFriedrichs.cpp
+  Test_Characteristics.cpp
   Test_Tags.cpp
   Test_TimeDerivative.cpp
   )

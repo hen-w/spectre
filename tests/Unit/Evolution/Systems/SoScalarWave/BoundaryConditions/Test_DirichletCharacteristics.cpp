@@ -5,7 +5,7 @@
 
 #include "DataStructures/DataBox/DataBox.hpp"
 #include "DataStructures/Index.hpp"
-#include "Evolution/Systems/SoScalarWave/BoundaryConditions/DirichletAnalytic.hpp"
+#include "Evolution/Systems/SoScalarWave/BoundaryConditions/DirichletCharacteristics.hpp"
 #include "Evolution/Systems/SoScalarWave/BoundaryConditions/Factory.hpp"
 #include "Evolution/Systems/SoScalarWave/BoundaryCorrections/LaxFriedrichs.hpp"
 #include "Evolution/Systems/SoScalarWave/System.hpp"
@@ -34,6 +34,8 @@ struct Metavariables {
     using factory_classes = tmpl::map<
         tmpl::pair<SoScalarWave::BoundaryConditions::BoundaryCondition<Dim>,
                    tmpl::list<SoScalarWave::BoundaryConditions::
+                                  DirichletCharacteristics<Dim>,
+                              SoScalarWave::BoundaryConditions::
                                   DirichletAnalytic<Dim>>>,
         tmpl::pair<evolution::initial_data::InitialData,
                    SoScalarWave::Solutions::all_solutions<Dim>>,
@@ -64,13 +66,12 @@ struct ConvertPlaneWave {
 
   static inline unpacked_container unpack(const packed_container& /*packed*/,
                                           const size_t /*grid_point_index*/) {
-    // No way of getting the args from the boundary condition.
     return Dim;
   }
 
   static inline void pack(const gsl::not_null<packed_container*> packed,
-                          const unpacked_container /*unpacked*/,
-                          const size_t /*grid_point_index*/) {
+                           const unpacked_container /*unpacked*/,
+                           const size_t /*grid_point_index*/) {
     *packed = create_container();
   }
 
@@ -80,7 +81,27 @@ struct ConvertPlaneWave {
 };
 
 template <size_t Dim>
-void test() {
+std::string yaml_string() {
+  return "DirichletCharacteristics:\n"
+         "  AnalyticPrescription:\n"
+         "    SoPlaneWave:\n"
+         "      WaveVector: [0.1" +
+         (Dim > 1 ? std::string{", 1.1"} : std::string{}) +
+         (Dim > 2 ? std::string{", 2.1"} : std::string{}) +
+         "]\n"
+         "      Center: [1.1" +
+         (Dim > 1 ? std::string{", 0.1"} : std::string{}) +
+         (Dim > 2 ? std::string{", -0.9"} : std::string{}) +
+         "]\n"
+         "      Profile:\n"
+         "        Gaussian:\n"
+         "          Amplitude: 0.9\n"
+         "          Width: 0.6\n"
+         "          Center: 0.0\n";
+}
+
+template <size_t Dim>
+void test_prescribe_zero() {
   register_classes_with_charm(SoScalarWave::Solutions::all_solutions<Dim>{});
   register_classes_with_charm(
       MathFunctions::all_math_functions<1, Frame::Inertial>{});
@@ -92,7 +113,7 @@ void test() {
       0.5, ConvertPlaneWave<Dim>::create_container());
 
   helpers::test_boundary_condition_with_python<
-      SoScalarWave::BoundaryConditions::DirichletAnalytic<Dim>,
+      SoScalarWave::BoundaryConditions::DirichletCharacteristics<Dim>,
       SoScalarWave::BoundaryConditions::BoundaryCondition<Dim>,
       SoScalarWave::System<Dim>,
       tmpl::list<SoScalarWave::BoundaryCorrections::LaxFriedrichs<Dim>>,
@@ -100,39 +121,62 @@ void test() {
       tmpl::list<
           Tags::AnalyticSolution<SoScalarWave::Solutions::SoPlaneWave<Dim>>>,
       Metavariables<Dim>>(
-      make_not_null(&gen), "DirichletAnalytic",
+      make_not_null(&gen), "DirichletCharacteristics",
       tuples::TaggedTuple<
           helpers::Tags::PythonFunctionForErrorMessage<>,
           helpers::Tags::PythonFunctionName<SoScalarWave::Tags::Psi>,
           helpers::Tags::PythonFunctionName<SoScalarWave::Tags::Pi>,
           helpers::Tags::PythonFunctionName<SoScalarWave::Tags::Phi<Dim>>>{
-          "error", "psi", "pi", "phi"},
-      "DirichletAnalytic:\n"
-      "  AnalyticPrescription:\n"
-      "    SoPlaneWave:\n"
-      "      WaveVector: [0.1" +
-          (Dim > 1 ? std::string{", 1.1"} : std::string{}) +
-          (Dim > 2 ? std::string{", 2.1"} : std::string{}) +
-          "]\n"
-          "      Center: [1.1" +
-          (Dim > 1 ? std::string{", 0.1"} : std::string{}) +
-          (Dim > 2 ? std::string{", -0.9"} : std::string{}) +
-          "]\n"
-          "      Profile:\n"
-          "        Gaussian:\n"
-          "          Amplitude: 0.9\n"
-          "          Width: 0.6\n"
-          "          Center: 0.0\n",
+          "error", "psi_prescribe_zero", "pi_prescribe_zero",
+          "phi_prescribe_zero"},
+      yaml_string<Dim>() + "  PrescribeZeroSpeedModes: true\n",
+      Index<Dim - 1>{Dim == 1 ? 1 : 5}, box_analytic_soln,
+      tuples::TaggedTuple<>{});
+}
+
+template <size_t Dim>
+void test_keep_zero() {
+  register_classes_with_charm(SoScalarWave::Solutions::all_solutions<Dim>{});
+  register_classes_with_charm(
+      MathFunctions::all_math_functions<1, Frame::Inertial>{});
+  CAPTURE(Dim);
+  MAKE_GENERATOR(gen);
+  const auto box_analytic_soln = db::create<db::AddSimpleTags<
+      Tags::Time,
+      Tags::AnalyticSolution<SoScalarWave::Solutions::SoPlaneWave<Dim>>>>(
+      0.5, ConvertPlaneWave<Dim>::create_container());
+
+  helpers::test_boundary_condition_with_python<
+      SoScalarWave::BoundaryConditions::DirichletCharacteristics<Dim>,
+      SoScalarWave::BoundaryConditions::BoundaryCondition<Dim>,
+      SoScalarWave::System<Dim>,
+      tmpl::list<SoScalarWave::BoundaryCorrections::LaxFriedrichs<Dim>>,
+      tmpl::list<ConvertPlaneWave<Dim>>,
+      tmpl::list<
+          Tags::AnalyticSolution<SoScalarWave::Solutions::SoPlaneWave<Dim>>>,
+      Metavariables<Dim>>(
+      make_not_null(&gen), "DirichletCharacteristics",
+      tuples::TaggedTuple<
+          helpers::Tags::PythonFunctionForErrorMessage<>,
+          helpers::Tags::PythonFunctionName<SoScalarWave::Tags::Psi>,
+          helpers::Tags::PythonFunctionName<SoScalarWave::Tags::Pi>,
+          helpers::Tags::PythonFunctionName<SoScalarWave::Tags::Phi<Dim>>>{
+          "error", "psi_keep_zero", "pi_keep_zero", "phi_keep_zero"},
+      yaml_string<Dim>() + "  PrescribeZeroSpeedModes: false\n",
       Index<Dim - 1>{Dim == 1 ? 1 : 5}, box_analytic_soln,
       tuples::TaggedTuple<>{});
 }
 }  // namespace
 
-SPECTRE_TEST_CASE("Unit.SoScalarWave.BoundaryConditions.DirichletAnalytic",
-                  "[Unit][Evolution]") {
+SPECTRE_TEST_CASE(
+    "Unit.SoScalarWave.BoundaryConditions.DirichletCharacteristics",
+    "[Unit][Evolution]") {
   pypp::SetupLocalPythonEnvironment local_python_env{
       "Evolution/Systems/SoScalarWave/BoundaryConditions/"};
-  test<1>();
-  test<2>();
-  test<3>();
+  test_prescribe_zero<1>();
+  test_prescribe_zero<2>();
+  test_prescribe_zero<3>();
+  test_keep_zero<1>();
+  test_keep_zero<2>();
+  test_keep_zero<3>();
 }

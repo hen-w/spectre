@@ -47,4 +47,37 @@ template <size_t Dim>
 struct PsiTimesNormal : db::SimpleTag {
   using type = tnsr::i<DataVector, Dim, Frame::Inertial>;
 };
+
+/// @{
+/// \brief Tags corresponding to the characteristic fields of the second-order
+/// scalar-wave system.
+struct VPsi : db::SimpleTag {
+  using type = Scalar<DataVector>;
+};
+template <size_t Dim>
+struct VZero : db::SimpleTag {
+  using type = tnsr::i<DataVector, Dim, Frame::Inertial>;
+};
+struct VPlus : db::SimpleTag {
+  using type = Scalar<DataVector>;
+};
+struct VMinus : db::SimpleTag {
+  using type = Scalar<DataVector>;
+};
+/// @}
+
+template <size_t Dim>
+struct CharacteristicSpeeds : db::SimpleTag {
+  using type = std::array<DataVector, 4>;
+};
+
+template <size_t Dim>
+struct CharacteristicFields : db::SimpleTag {
+  using type = Variables<tmpl::list<VPsi, VZero<Dim>, VPlus, VMinus>>;
+};
+
+template <size_t Dim>
+struct EvolvedFieldsFromCharacteristicFields : db::SimpleTag {
+  using type = Variables<tmpl::list<Psi, Pi, Phi<Dim>>>;
+};
 }  // namespace SoScalarWave::Tags
