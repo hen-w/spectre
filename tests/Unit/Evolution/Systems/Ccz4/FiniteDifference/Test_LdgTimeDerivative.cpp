@@ -12,11 +12,15 @@
 #include "DataStructures/Tensor/EagerMath/DeterminantAndInverse.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
+#include "Domain/BoundaryConditions/BoundaryCondition.hpp"
 #include "Domain/CoordinateMaps/Affine.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.tpp"
 #include "Domain/CoordinateMaps/ProductMaps.hpp"
 #include "Domain/CoordinateMaps/ProductMaps.tpp"
+#include "Domain/Structure/Direction.hpp"
+#include "Domain/Structure/DirectionMap.hpp"
+#include "Domain/Structure/Element.hpp"
 #include "Evolution/Systems/Ccz4/ATilde.hpp"
 #include "Evolution/Systems/Ccz4/Christoffel.hpp"
 #include "Evolution/Systems/Ccz4/DerivChristoffel.hpp"
@@ -157,6 +161,41 @@ void test_minkowski() {
   auto dt_field_p =
       make_with_value<tnsr::i<DataVector, 3>>(lapse_size, nan_val);
 
+  // Boundary mode dt outputs (zero-initialized)
+  auto dt_u_scalar3_minus =
+      make_with_value<Scalar<DataVector>>(lapse_size, 0.0);
+  auto dt_u_vector2_minus =
+      make_with_value<tnsr::i<DataVector, 3>>(lapse_size, 0.0);
+  auto dt_u_scalar2_minus =
+      make_with_value<Scalar<DataVector>>(lapse_size, 0.0);
+  auto dt_u_tensor_minus =
+      make_with_value<tnsr::ii<DataVector, 3>>(lapse_size, 0.0);
+  auto dt_boundary_conformal_metric =
+      make_with_value<tnsr::ii<DataVector, 3>>(lapse_size, 0.0);
+  auto dt_boundary_conformal_factor =
+      make_with_value<Scalar<DataVector>>(lapse_size, 0.0);
+  auto dt_boundary_lapse = make_with_value<Scalar<DataVector>>(lapse_size, 0.0);
+  auto dt_boundary_shift =
+      make_with_value<tnsr::I<DataVector, 3>>(lapse_size, 0.0);
+
+  // Boundary mode derivative inputs (zero-valued)
+  const auto d_u_scalar3_minus =
+      make_with_value<tnsr::i<DataVector, 3>>(lapse_size, 0.0);
+  const auto d_u_vector2_minus =
+      make_with_value<tnsr::ij<DataVector, 3>>(lapse_size, 0.0);
+  const auto d_u_scalar2_minus =
+      make_with_value<tnsr::i<DataVector, 3>>(lapse_size, 0.0);
+  const auto d_u_tensor_minus =
+      make_with_value<tnsr::ijj<DataVector, 3>>(lapse_size, 0.0);
+  const auto d_boundary_conformal_metric =
+      make_with_value<tnsr::ijj<DataVector, 3>>(lapse_size, 0.0);
+  const auto d_boundary_conformal_factor =
+      make_with_value<tnsr::i<DataVector, 3>>(lapse_size, 0.0);
+  const auto d_boundary_lapse =
+      make_with_value<tnsr::i<DataVector, 3>>(lapse_size, 0.0);
+  const auto d_boundary_shift =
+      make_with_value<tnsr::iJ<DataVector, 3>>(lapse_size, 0.0);
+
   const double kappa_1 = 0.1;
   const double kappa_2 = 0.2;
   const double kappa_3 = 0.3;
@@ -169,17 +208,30 @@ void test_minkowski() {
       make_not_null(&dt_lapse), make_not_null(&dt_shift), make_not_null(&dt_b),
       make_not_null(&dt_field_a), make_not_null(&dt_field_b),
       make_not_null(&dt_field_d), make_not_null(&dt_field_p),
+      make_not_null(&dt_u_scalar3_minus), make_not_null(&dt_u_vector2_minus),
+      make_not_null(&dt_u_scalar2_minus), make_not_null(&dt_u_tensor_minus),
+      make_not_null(&dt_boundary_conformal_metric),
+      make_not_null(&dt_boundary_conformal_factor),
+      make_not_null(&dt_boundary_lapse), make_not_null(&dt_boundary_shift),
       // partial derivatives
       d_conformal_metric, d_conformal_factor, d_a_tilde,
       d_trace_extrinsic_curvature, d_theta, d_gamma_hat, d_lapse, d_shift, d_b,
       d_field_a_raw, d_field_b_raw, d_field_d_raw, d_field_p_raw,
+      d_u_scalar3_minus, d_u_vector2_minus, d_u_scalar2_minus, d_u_tensor_minus,
+      d_boundary_conformal_metric, d_boundary_conformal_factor,
+      d_boundary_lapse, d_boundary_shift,
       // argument_tags (variable values)
       conformal_metric, conformal_factor, a_tilde, trace_extrinsic_curvature,
       theta, gamma_hat, lapse, shift, b, field_a, field_b, field_d, field_p,
       // kappa parameters
       kappa_1, kappa_2, kappa_3,
       // eta, k_0, evolve_lapse_and_shift
-      Scalar<DataVector>(num_pts, 0.0), Scalar<DataVector>(num_pts, 0.0), true);
+      Scalar<DataVector>(num_pts, 0.0), Scalar<DataVector>(num_pts, 0.0), true,
+      Element<SpatialDim>{}, mesh,
+      std::vector<DirectionMap<
+          SpatialDim,
+          std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>{},
+      inv_jacobian);
 
   // Verify all 13 dt variables are zero
   const DataVector zero(num_pts, 0.0);
@@ -409,6 +461,42 @@ void test_kerrschild() {
   auto dt_field_p =
       make_with_value<tnsr::i<DataVector, 3>>(used_for_size, nan_val);
 
+  // Boundary mode dt outputs (zero-initialized)
+  auto dt_u_scalar3_minus =
+      make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
+  auto dt_u_vector2_minus =
+      make_with_value<tnsr::i<DataVector, 3>>(used_for_size, 0.0);
+  auto dt_u_scalar2_minus =
+      make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
+  auto dt_u_tensor_minus =
+      make_with_value<tnsr::ii<DataVector, 3>>(used_for_size, 0.0);
+  auto dt_boundary_conformal_metric =
+      make_with_value<tnsr::ii<DataVector, 3>>(used_for_size, 0.0);
+  auto dt_boundary_conformal_factor =
+      make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
+  auto dt_boundary_lapse =
+      make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
+  auto dt_boundary_shift =
+      make_with_value<tnsr::I<DataVector, 3>>(used_for_size, 0.0);
+
+  // Boundary mode derivative inputs (zero-valued)
+  const auto d_u_scalar3_minus =
+      make_with_value<tnsr::i<DataVector, 3>>(used_for_size, 0.0);
+  const auto d_u_vector2_minus =
+      make_with_value<tnsr::ij<DataVector, 3>>(used_for_size, 0.0);
+  const auto d_u_scalar2_minus =
+      make_with_value<tnsr::i<DataVector, 3>>(used_for_size, 0.0);
+  const auto d_u_tensor_minus =
+      make_with_value<tnsr::ijj<DataVector, 3>>(used_for_size, 0.0);
+  const auto d_boundary_conformal_metric =
+      make_with_value<tnsr::ijj<DataVector, 3>>(used_for_size, 0.0);
+  const auto d_boundary_conformal_factor =
+      make_with_value<tnsr::i<DataVector, 3>>(used_for_size, 0.0);
+  const auto d_boundary_lapse =
+      make_with_value<tnsr::i<DataVector, 3>>(used_for_size, 0.0);
+  const auto d_boundary_shift =
+      make_with_value<tnsr::iJ<DataVector, 3>>(used_for_size, 0.0);
+
   // Call LdgTimeDerivative::apply
   LdgTimeDerivative::apply(
       make_not_null(&dt_conformal_metric), make_not_null(&dt_conformal_factor),
@@ -417,11 +505,18 @@ void test_kerrschild() {
       make_not_null(&dt_lapse), make_not_null(&dt_shift), make_not_null(&dt_b),
       make_not_null(&dt_field_a), make_not_null(&dt_field_b),
       make_not_null(&dt_field_d), make_not_null(&dt_field_p),
+      make_not_null(&dt_u_scalar3_minus), make_not_null(&dt_u_vector2_minus),
+      make_not_null(&dt_u_scalar2_minus), make_not_null(&dt_u_tensor_minus),
+      make_not_null(&dt_boundary_conformal_metric),
+      make_not_null(&dt_boundary_conformal_factor),
+      make_not_null(&dt_boundary_lapse), make_not_null(&dt_boundary_shift),
       // partial derivatives
       d_conformal_metric_spec, d_conformal_factor_spec, d_a_tilde,
       d_trace_extrinsic_curvature, d_theta, d_gamma_hat, d_lapse_spectral,
       d_shift_spec, d_b, d_field_a_raw, d_field_b_raw, d_field_d_raw,
-      d_field_p_raw,
+      d_field_p_raw, d_u_scalar3_minus, d_u_vector2_minus, d_u_scalar2_minus,
+      d_u_tensor_minus, d_boundary_conformal_metric,
+      d_boundary_conformal_factor, d_boundary_lapse, d_boundary_shift,
       // argument_tags (variable values)
       conformal_metric, conformal_factor_scalar, a_tilde,
       trace_extrinsic_curvature, theta, gamma_hat, lapse, shift, b, field_a,
@@ -429,19 +524,45 @@ void test_kerrschild() {
       // kappa parameters
       kappa_1, kappa_2, kappa_3,
       // eta, k_0, evolve_lapse_and_shift
-      eta, k_0, evolve_lapse_and_shift);
+      eta, k_0, evolve_lapse_and_shift, Element<SpatialDim>{}, mesh,
+      std::vector<DirectionMap<
+          SpatialDim,
+          std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>{},
+      inv_jacobian);
 
   // dt_b: expected non-zero value from eq 12i
   const tnsr::I<DataVector, SpatialDim, FrameType> dt_b_expected =
       TestHelpers::Ccz4::fd::detail::KerrSchild::get_dt_b_kerr_expected(
           evolve_shift, eta, shift, d_gamma_hat, b, d_b);
 
+  // dt_field_a: expected non-zero because the production code assumes d_k_0 = 0
+  // but the test uses a spatially-varying k_0 to make dt_lapse = 0.
+  // From LdgTimeDerivative.hpp eq 12j (with d_k_0 = 0):
+  //   dt_A_k = -2*(d_K(k) - 2*d_theta(k)) + B_k^l*A_l + beta^l*d_l(A_k)
+  // Symmetrize d_field_a_raw the same way the production code does.
+  tnsr::ii<DataVector, SpatialDim> d_field_a_sym(num_pts);
+  for (size_t i = 0; i < SpatialDim; ++i) {
+    for (size_t j = i; j < SpatialDim; ++j) {
+      d_field_a_sym.get(i, j) =
+          0.5 * (d_field_a_raw.get(i, j) + d_field_a_raw.get(j, i));
+    }
+  }
+  tnsr::i<DataVector, SpatialDim> dt_field_a_expected(num_pts);
+  for (size_t k = 0; k < SpatialDim; ++k) {
+    dt_field_a_expected.get(k) =
+        -2.0 * (d_trace_extrinsic_curvature.get(k) - 2.0 * d_theta.get(k));
+    for (size_t l = 0; l < SpatialDim; ++l) {
+      dt_field_a_expected.get(k) += field_b.get(k, l) * field_a.get(l) +
+                                    shift.get(l) * d_field_a_sym.get(k, l);
+    }
+  }
+
   // Check results with tolerance
   const Approx custom_approx =
       Approx::custom().epsilon(1.0e-10).scale(*std::max_element(
           evolved_vars.data(), evolved_vars.data() + evolved_vars.size() - 1));
 
-  // Check all dt vars except dt_b are zero
+  // Check all dt vars except dt_b and dt_field_a are zero
   const auto zero = DataVector(num_pts, 0.0);
   for (const auto& component : dt_conformal_metric) {
     CAPTURE("dt_conformal_metric");
@@ -462,9 +583,7 @@ void test_kerrschild() {
   for (const auto& component : dt_shift) {
     CHECK_ITERABLE_CUSTOM_APPROX(component, zero, custom_approx);
   }
-  for (const auto& component : dt_field_a) {
-    CHECK_ITERABLE_CUSTOM_APPROX(component, zero, custom_approx);
-  }
+  CHECK_ITERABLE_CUSTOM_APPROX(dt_field_a, dt_field_a_expected, custom_approx);
   for (const auto& component : dt_field_b) {
     CHECK_ITERABLE_CUSTOM_APPROX(component, zero, custom_approx);
   }

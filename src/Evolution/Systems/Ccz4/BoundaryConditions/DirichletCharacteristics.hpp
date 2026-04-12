@@ -62,21 +62,19 @@ class DirichletCharacteristics final : public BoundaryCondition {
         "If true, prescribe analytic values on OUTGOING modes (and leave "
         "incoming modes at interior values). For debugging only.";
     using type = bool;
-    static type default_value() { return false; }
   };
-  /// \brief Whether to use analytic values for the second-order evolved
-  /// fields (conformal metric, conformal factor, lapse, shift) on the
-  /// exterior ghost state instead of copying from the interior.
-  struct PrescribeAnalyticSecondOrderFields {
+  /// \brief If true, skip boundary-integrated fields and use interior values
+  /// for the second-order fields. If false, use boundary-integrated fields
+  /// evolved via the dg_time_derivative method.
+  struct CopySecondOrderFieldsFromInterior {
     static constexpr Options::String help =
-        "If true, use analytic values for conformal metric, conformal factor, "
-        "lapse, and shift on the exterior ghost state. If false (default), "
-        "copy these from the interior.";
+        "If true, use interior values for conformal metric, conformal factor, "
+        "lapse, and shift (no boundary integration). If false, use "
+        "boundary-integrated second-order fields with two unit normals.";
     using type = bool;
-    static type default_value() { return false; }
   };
   using options = tmpl::list<AnalyticPrescription, PrescribeOutgoing,
-                             PrescribeAnalyticSecondOrderFields>;
+                             CopySecondOrderFieldsFromInterior>;
   static constexpr Options::String help{
       "Dirichlet boundary conditions via characteristic decomposition. "
       "Incoming characteristic modes are set to analytic values."};
@@ -93,8 +91,7 @@ class DirichletCharacteristics final : public BoundaryCondition {
   explicit DirichletCharacteristics(
       std::unique_ptr<evolution::initial_data::InitialData>
           analytic_prescription,
-      bool prescribe_outgoing = false,
-      bool prescribe_analytic_second_order_fields = false);
+      bool prescribe_outgoing, bool copy_second_order_fields_from_interior);
 
   WRAPPED_PUPable_decl_base_template(
       domain::BoundaryConditions::BoundaryCondition, DirichletCharacteristics);
@@ -103,7 +100,7 @@ class DirichletCharacteristics final : public BoundaryCondition {
       domain::BoundaryConditions::BoundaryCondition> override;
 
   static constexpr evolution::BoundaryConditions::Type bc_type =
-      evolution::BoundaryConditions::Type::Ghost;
+      evolution::BoundaryConditions::Type::GhostAndTimeDerivative;
 
   void pup(PUP::er& p) override;
 
@@ -119,7 +116,7 @@ class DirichletCharacteristics final : public BoundaryCondition {
       tmpl::list<::Tags::Time, ::Ccz4::fd::Tags::EvolveLapseAndShift>;
 
   std::optional<std::string> dg_ghost(
-      // 13 not_null exterior outputs (variables_tag_list order):
+      // not_null exterior outputs (variables_tag_list order, 21 total):
       gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> conformal_metric,
       gsl::not_null<Scalar<DataVector>*> conformal_factor,
       gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> a_tilde,
@@ -137,11 +134,16 @@ class DirichletCharacteristics final : public BoundaryCondition {
       gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> u_vector2_minus,
       gsl::not_null<Scalar<DataVector>*> u_scalar2_minus,
       gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> u_tensor_minus,
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+          boundary_conformal_metric,
+      gsl::not_null<Scalar<DataVector>*> boundary_conformal_factor,
+      gsl::not_null<Scalar<DataVector>*> boundary_lapse,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> boundary_shift,
       // Standard DG ghost args:
       const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&
           face_mesh_velocity,
       const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
-      // dg_interior_evolved_variables_tags (all 13 interior vars):
+      // dg_interior_evolved_variables_tags (all interior vars):
       const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_conformal_metric,
       const Scalar<DataVector>& interior_conformal_factor,
       const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_a_tilde,
@@ -159,6 +161,81 @@ class DirichletCharacteristics final : public BoundaryCondition {
       const tnsr::i<DataVector, 3, Frame::Inertial>& interior_u_vector2_minus,
       const Scalar<DataVector>& interior_u_scalar2_minus,
       const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_u_tensor_minus,
+      const tnsr::ii<DataVector, 3, Frame::Inertial>&
+          interior_boundary_conformal_metric,
+      const Scalar<DataVector>& interior_boundary_conformal_factor,
+      const Scalar<DataVector>& interior_boundary_lapse,
+      const tnsr::I<DataVector, 3, Frame::Inertial>& interior_boundary_shift,
+      // dg_interior_temporary_tags:
+      const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
+      // dg_gridless_tags:
+      double time, bool evolve_lapse_and_shift) const;
+
+  std::optional<std::string> dg_time_derivative(
+      // dt correction outputs (variables_tag_list order, 21 total):
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+          dt_conformal_metric_correction,
+      gsl::not_null<Scalar<DataVector>*> dt_conformal_factor_correction,
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+          dt_a_tilde_correction,
+      gsl::not_null<Scalar<DataVector>*>
+          dt_trace_extrinsic_curvature_correction,
+      gsl::not_null<Scalar<DataVector>*> dt_theta_correction,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
+          dt_gamma_hat_correction,
+      gsl::not_null<Scalar<DataVector>*> dt_lapse_correction,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
+          dt_shift_correction,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
+          dt_auxiliary_shift_b_correction,
+      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
+          dt_field_a_correction,
+      gsl::not_null<tnsr::iJ<DataVector, 3, Frame::Inertial>*>
+          dt_field_b_correction,
+      gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*>
+          dt_field_d_correction,
+      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
+          dt_field_p_correction,
+      gsl::not_null<Scalar<DataVector>*> dt_u_scalar3_minus_correction,
+      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
+          dt_u_vector2_minus_correction,
+      gsl::not_null<Scalar<DataVector>*> dt_u_scalar2_minus_correction,
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+          dt_u_tensor_minus_correction,
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+          dt_boundary_conformal_metric_correction,
+      gsl::not_null<Scalar<DataVector>*>
+          dt_boundary_conformal_factor_correction,
+      gsl::not_null<Scalar<DataVector>*> dt_boundary_lapse_correction,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
+          dt_boundary_shift_correction,
+      // Standard DG time derivative args:
+      const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&
+          face_mesh_velocity,
+      const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
+      // dg_interior_evolved_variables_tags:
+      const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_conformal_metric,
+      const Scalar<DataVector>& interior_conformal_factor,
+      const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_a_tilde,
+      const Scalar<DataVector>& interior_trace_extrinsic_curvature,
+      const Scalar<DataVector>& interior_theta,
+      const tnsr::I<DataVector, 3, Frame::Inertial>& interior_gamma_hat,
+      const Scalar<DataVector>& interior_lapse,
+      const tnsr::I<DataVector, 3, Frame::Inertial>& interior_shift,
+      const tnsr::I<DataVector, 3, Frame::Inertial>& interior_auxiliary_shift_b,
+      const tnsr::i<DataVector, 3, Frame::Inertial>& interior_field_a,
+      const tnsr::iJ<DataVector, 3, Frame::Inertial>& interior_field_b,
+      const tnsr::ijj<DataVector, 3, Frame::Inertial>& interior_field_d,
+      const tnsr::i<DataVector, 3, Frame::Inertial>& interior_field_p,
+      const Scalar<DataVector>& interior_u_scalar3_minus,
+      const tnsr::i<DataVector, 3, Frame::Inertial>& interior_u_vector2_minus,
+      const Scalar<DataVector>& interior_u_scalar2_minus,
+      const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_u_tensor_minus,
+      const tnsr::ii<DataVector, 3, Frame::Inertial>&
+          interior_boundary_conformal_metric,
+      const Scalar<DataVector>& interior_boundary_conformal_factor,
+      const Scalar<DataVector>& interior_boundary_lapse,
+      const tnsr::I<DataVector, 3, Frame::Inertial>& interior_boundary_shift,
       // dg_interior_temporary_tags:
       const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
       // dg_gridless_tags:
@@ -183,6 +260,6 @@ class DirichletCharacteristics final : public BoundaryCondition {
  private:
   std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription_;
   bool prescribe_outgoing_{false};
-  bool prescribe_analytic_second_order_fields_{false};
+  bool copy_second_order_fields_from_interior_{true};
 };
 }  // namespace Ccz4::BoundaryConditions

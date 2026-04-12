@@ -507,5 +507,29 @@ template <typename DataType, size_t Dim, typename Frame = Frame::Inertial>
 struct NormalCovector : db::SimpleTag {
   using type = tnsr::i<DataType, Dim, Frame>;
 };
+
+/// \brief Boundary-integrated conformal metric for DirichletCharacteristics BC.
+template <typename DataType, size_t Dim, typename Frame>
+struct BoundaryConformalMetric : db::SimpleTag {
+  using type = tnsr::ii<DataType, Dim, Frame>;
+};
+
+/// \brief Boundary-integrated conformal factor for DirichletCharacteristics BC.
+template <typename DataType>
+struct BoundaryConformalFactor : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+/// \brief Boundary-integrated lapse for DirichletCharacteristics BC.
+template <typename DataType>
+struct BoundaryLapse : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+/// \brief Boundary-integrated shift for DirichletCharacteristics BC.
+template <typename DataType, size_t Dim, typename Frame>
+struct BoundaryShift : db::SimpleTag {
+  using type = tnsr::I<DataType, Dim, Frame>;
+};
 }  // namespace Tags
 }  // namespace Ccz4

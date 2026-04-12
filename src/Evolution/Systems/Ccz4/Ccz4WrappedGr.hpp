@@ -107,7 +107,11 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
       Ccz4::fd::Tags::UScalar3Minus<DataType>,
       Ccz4::fd::Tags::UVector2Minus<DataType, volume_dim, Frame::Inertial>,
       Ccz4::fd::Tags::UScalar2Minus<DataType>,
-      Ccz4::fd::Tags::UTensorMinus<DataType, volume_dim, Frame::Inertial>>;
+      Ccz4::fd::Tags::UTensorMinus<DataType, volume_dim, Frame::Inertial>,
+      Ccz4::Tags::BoundaryConformalMetric<DataType, volume_dim>,
+      Ccz4::Tags::BoundaryConformalFactor<DataType>,
+      Ccz4::Tags::BoundaryLapse<DataType>,
+      Ccz4::Tags::BoundaryShift<DataType, volume_dim>>;
 
   template <typename... Tags>
   tuples::TaggedTuple<Tags...> variables(
@@ -287,6 +291,46 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
         x, 0.0)};
   }
 
+  // Boundary second-order fields — initialized to analytic field values.
+  // These delegate to the corresponding original field's overload, extracting
+  // the underlying tensor data and rewrapping in the boundary tag type.
+  tuples::TaggedTuple<
+      Ccz4::Tags::BoundaryConformalMetric<DataVector, volume_dim>>
+  variables(
+      const tnsr::I<DataVector, volume_dim>& x,
+      tmpl::list<
+          Ccz4::Tags::BoundaryConformalMetric<DataVector, volume_dim>> /*meta*/,
+      const IntermediateVars& intermediate_vars) const {
+    auto cm_tuple = variables(
+        x, tmpl::list<Ccz4::Tags::ConformalMetric<DataVector, volume_dim>>{},
+        intermediate_vars);
+    return {std::move(
+        get<Ccz4::Tags::ConformalMetric<DataVector, volume_dim>>(cm_tuple))};
+  }
+  tuples::TaggedTuple<Ccz4::Tags::BoundaryConformalFactor<DataVector>>
+  variables(
+      const tnsr::I<DataVector, volume_dim>& x,
+      tmpl::list<Ccz4::Tags::BoundaryConformalFactor<DataVector>> /*meta*/,
+      const IntermediateVars& intermediate_vars) const {
+    auto cf_tuple =
+        variables(x, tmpl::list<Ccz4::Tags::ConformalFactor<DataVector>>{},
+                  intermediate_vars);
+    return {std::move(get<Ccz4::Tags::ConformalFactor<DataVector>>(cf_tuple))};
+  }
+  tuples::TaggedTuple<Ccz4::Tags::BoundaryLapse<DataVector>> variables(
+      const tnsr::I<DataVector, volume_dim>& /*x*/,
+      tmpl::list<Ccz4::Tags::BoundaryLapse<DataVector>> /*meta*/,
+      const IntermediateVars& intermediate_vars) const {
+    return {get<gr::Tags::Lapse<DataVector>>(intermediate_vars)};
+  }
+  tuples::TaggedTuple<Ccz4::Tags::BoundaryShift<DataVector, volume_dim>>
+  variables(
+      const tnsr::I<DataVector, volume_dim>& /*x*/,
+      tmpl::list<Ccz4::Tags::BoundaryShift<DataVector, volume_dim>> /*meta*/,
+      const IntermediateVars& intermediate_vars) const {
+    return {get<gr::Tags::Shift<DataVector, volume_dim>>(intermediate_vars)};
+  }
+
   tuples::TaggedTuple<Ccz4::Tags::ConformalMetric<DataVector, volume_dim>>
   variables(
       const tnsr::I<DataVector, volume_dim>& x, const double /*t*/,
@@ -407,6 +451,48 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
                 meta,
             const IntermediateVars& intermediate_vars) const {
     return variables(x, meta, intermediate_vars);
+  }
+
+  // Boundary second-order fields — time-dependent overloads delegate to
+  // time-independent ones (analytic solutions have no explicit time dependence
+  // in these fields beyond what the base solution provides).
+  tuples::TaggedTuple<
+      Ccz4::Tags::BoundaryConformalMetric<DataVector, volume_dim>>
+  variables(
+      const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+      tmpl::list<Ccz4::Tags::BoundaryConformalMetric<DataVector, volume_dim>>
+      /*meta*/,
+      const IntermediateVars& intermediate_vars) const {
+    return variables(
+        x,
+        tmpl::list<
+            Ccz4::Tags::BoundaryConformalMetric<DataVector, volume_dim>>{},
+        intermediate_vars);
+  }
+  tuples::TaggedTuple<Ccz4::Tags::BoundaryConformalFactor<DataVector>>
+  variables(const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+            tmpl::list<Ccz4::Tags::BoundaryConformalFactor<DataVector>>
+            /*meta*/,
+            const IntermediateVars& intermediate_vars) const {
+    return variables(
+        x, tmpl::list<Ccz4::Tags::BoundaryConformalFactor<DataVector>>{},
+        intermediate_vars);
+  }
+  tuples::TaggedTuple<Ccz4::Tags::BoundaryLapse<DataVector>> variables(
+      const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+      tmpl::list<Ccz4::Tags::BoundaryLapse<DataVector>> /*meta*/,
+      const IntermediateVars& intermediate_vars) const {
+    return variables(x, tmpl::list<Ccz4::Tags::BoundaryLapse<DataVector>>{},
+                     intermediate_vars);
+  }
+  tuples::TaggedTuple<Ccz4::Tags::BoundaryShift<DataVector, volume_dim>>
+  variables(
+      const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+      tmpl::list<Ccz4::Tags::BoundaryShift<DataVector, volume_dim>> /*meta*/,
+      const IntermediateVars& intermediate_vars) const {
+    return variables(
+        x, tmpl::list<Ccz4::Tags::BoundaryShift<DataVector, volume_dim>>{},
+        intermediate_vars);
   }
 };
 

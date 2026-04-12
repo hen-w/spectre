@@ -68,6 +68,12 @@ std::optional<std::string> DirichletAnalytic::dg_ghost(
     const gsl::not_null<Scalar<DataVector>*> u_scalar2_minus,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
         u_tensor_minus,
+    const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+        boundary_conformal_metric,
+    const gsl::not_null<Scalar<DataVector>*> boundary_conformal_factor,
+    const gsl::not_null<Scalar<DataVector>*> boundary_lapse,
+    const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
+        boundary_shift,
     const std::optional<
         tnsr::I<DataVector, 3, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, 3, Frame::Inertial>& /*normal_covector*/,
@@ -133,6 +139,12 @@ std::optional<std::string> DirichletAnalytic::dg_ghost(
   for (auto& component : *u_tensor_minus) {
     component = 0.0;
   }
+  *boundary_conformal_metric =
+      get<Tags::ConformalMetric<DataVector, 3>>(boundary_values);
+  *boundary_conformal_factor =
+      get<Tags::ConformalFactor<DataVector>>(boundary_values);
+  *boundary_lapse = get<gr::Tags::Lapse<DataVector>>(boundary_values);
+  *boundary_shift = get<gr::Tags::Shift<DataVector, 3>>(boundary_values);
   return std::nullopt;
 }
 

@@ -75,6 +75,16 @@ struct EvolveLapseAndShift;
 struct ConstrainedEvolution;
 struct KreissOligerEpsilon;
 
+// Boundary-integrated second-order fields (for DirichletCharacteristics BC)
+template <typename DataType, size_t Dim, typename Frame = Frame::Inertial>
+struct BoundaryConformalMetric;
+template <typename DataType>
+struct BoundaryConformalFactor;
+template <typename DataType>
+struct BoundaryLapse;
+template <typename DataType, size_t Dim, typename Frame = Frame::Inertial>
+struct BoundaryShift;
+
 // Temporary expressions for computing above quantities of interest
 template <typename DataType, size_t Dim, typename Frame = Frame::Inertial>
 struct GammaHatMinusContractedConformalChristoffel;

@@ -110,6 +110,13 @@ class TimeDerivativeDirichlet final : public BoundaryCondition {
       gsl::not_null<Scalar<DataVector>*> dt_u_scalar2_minus_correction,
       gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
           dt_u_tensor_minus_correction,
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+          dt_boundary_conformal_metric_correction,
+      gsl::not_null<Scalar<DataVector>*>
+          dt_boundary_conformal_factor_correction,
+      gsl::not_null<Scalar<DataVector>*> dt_boundary_lapse_correction,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
+          dt_boundary_shift_correction,
       // Standard DG time derivative args:
       const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&
           face_mesh_velocity,

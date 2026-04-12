@@ -86,8 +86,13 @@ struct LdgTimeDerivative {
       gsl::not_null<tnsr::i<DataVector, 3>*> dt_u_vector2_minus,
       gsl::not_null<Scalar<DataVector>*> dt_u_scalar2_minus,
       gsl::not_null<tnsr::ii<DataVector, 3>*> dt_u_tensor_minus,
+      //   boundary second-order fields (4):
+      gsl::not_null<tnsr::ii<DataVector, 3>*> dt_boundary_conformal_metric,
+      gsl::not_null<Scalar<DataVector>*> dt_boundary_conformal_factor,
+      gsl::not_null<Scalar<DataVector>*> dt_boundary_lapse,
+      gsl::not_null<tnsr::I<DataVector, 3>*> dt_boundary_shift,
 
-      // Partial derivatives of gradient_variables (17 total):
+      // Partial derivatives of gradient_variables (21 total):
       // ConformalMetric, ConformalFactor, ATilde, K, Theta, GammaHat,
       // Lapse, Shift, b, FieldA, FieldB, FieldD, FieldP,
       // UScalar3Minus, UVector2Minus, UScalar2Minus, UTensorMinus
@@ -109,6 +114,12 @@ struct LdgTimeDerivative {
       const tnsr::ij<DataVector, 3>& /*d_u_vector2_minus*/,
       const tnsr::i<DataVector, 3>& /*d_u_scalar2_minus*/,
       const tnsr::ijj<DataVector, 3>& /*d_u_tensor_minus*/,
+      // Boundary second-order field derivatives (zero, included for DG
+      // infrastructure)
+      const tnsr::ijj<DataVector, 3>& /*d_boundary_conformal_metric*/,
+      const tnsr::i<DataVector, 3>& /*d_boundary_conformal_factor*/,
+      const tnsr::i<DataVector, 3>& /*d_boundary_lapse*/,
+      const tnsr::iJ<DataVector, 3>& /*d_boundary_shift*/,
 
       // argument_tags
       const tnsr::ii<DataVector, 3>& conformal_metric,
@@ -139,6 +150,16 @@ struct LdgTimeDerivative {
     }
     get(*dt_u_scalar2_minus) = 0.0;
     for (auto& component : *dt_u_tensor_minus) {
+      component = 0.0;
+    }
+
+    // Initialize boundary second-order field dt to zero everywhere
+    for (auto& component : *dt_boundary_conformal_metric) {
+      component = 0.0;
+    }
+    get(*dt_boundary_conformal_factor) = 0.0;
+    get(*dt_boundary_lapse) = 0.0;
+    for (auto& component : *dt_boundary_shift) {
       component = 0.0;
     }
 

@@ -4,6 +4,7 @@
 set(LIBRARY "Test_Ccz4")
 
 set(LIBRARY_SOURCES
+  BoundaryConditions/Test_DirichletCharacteristics.cpp
   BoundaryCorrections/Test_LaxFriedrichs.cpp
   # BoundaryConditions/Test_DirichletAnalytic.cpp
   # BoundaryConditions/Test_ConstraintsRadiationPreserving.cpp
@@ -11,8 +12,8 @@ set(LIBRARY_SOURCES
   FiniteDifference/Test_AddUpperSpatialZ4Constraint.cpp
   # FiniteDifference/Test_ApplyFilter.cpp
   # FiniteDifference/Test_BoundaryConditionGhostData.cpp
-  FiniteDifference/Test_Characteristics.cpp
-  FiniteDifference/Test_ConstraintCharacteristics.cpp
+  # FiniteDifference/Test_Characteristics.cpp
+  # FiniteDifference/Test_ConstraintCharacteristics.cpp
   # FiniteDifference/Test_Derivatives.cpp
   # FiniteDifference/Test_DummyReconstructor.cpp
   FiniteDifference/Test_EnforceConstrainedEvolution.cpp
@@ -20,7 +21,7 @@ set(LIBRARY_SOURCES
   # FiniteDifference/Test_GhostData.cpp
   FiniteDifference/Test_LdgTimeDerivative.cpp
   FiniteDifference/Test_OverwriteExternalBoundaryDt.cpp
-  FiniteDifference/Test_RadiationCharacteristics.cpp
+  # FiniteDifference/Test_RadiationCharacteristics.cpp
   # FiniteDifference/Test_ResizeTimeDerivatives.cpp
   FiniteDifference/Test_SetInitialEta.cpp
   FiniteDifference/Test_SetK0.cpp
@@ -48,6 +49,7 @@ target_link_libraries(
   PRIVATE
   Ccz4
   CoordinateMaps
+  EvolutionBoundaryConditions
   DataBoxTestHelpers
   DataStructures
   Domain

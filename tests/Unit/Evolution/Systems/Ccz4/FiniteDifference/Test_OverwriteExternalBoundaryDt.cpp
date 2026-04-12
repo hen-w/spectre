@@ -200,6 +200,34 @@ void test_kerrschild() {
       shift, lapse, d_lapse, slicing_condition, theta,
       trace_extrinsic_curvature);
 
+  // Boundary mode and SO dt outputs for LdgTimeDerivative (zero-initialized)
+  auto vol_dt_u_scalar3_minus =
+      make_with_value<Scalar<DataVector>>(DataVector(num_pts), 0.0);
+  auto vol_dt_u_vector2_minus =
+      make_with_value<tnsr::i<DataVector, 3>>(DataVector(num_pts), 0.0);
+  auto vol_dt_u_scalar2_minus =
+      make_with_value<Scalar<DataVector>>(DataVector(num_pts), 0.0);
+  auto vol_dt_u_tensor_minus =
+      make_with_value<tnsr::ii<DataVector, 3>>(DataVector(num_pts), 0.0);
+  auto vol_dt_boundary_cm =
+      make_with_value<tnsr::ii<DataVector, 3>>(DataVector(num_pts), 0.0);
+  auto vol_dt_boundary_cf =
+      make_with_value<Scalar<DataVector>>(DataVector(num_pts), 0.0);
+  auto vol_dt_boundary_lapse =
+      make_with_value<Scalar<DataVector>>(DataVector(num_pts), 0.0);
+  auto vol_dt_boundary_shift =
+      make_with_value<tnsr::I<DataVector, 3>>(DataVector(num_pts), 0.0);
+
+  // Boundary mode and SO derivative inputs (zero-valued)
+  const auto zero_d_scalar =
+      make_with_value<tnsr::i<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto zero_d_vector =
+      make_with_value<tnsr::ij<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto zero_d_tensor =
+      make_with_value<tnsr::ijj<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto zero_d_shift =
+      make_with_value<tnsr::iJ<DataVector, 3>>(DataVector(num_pts), 0.0);
+
   LdgTimeDerivative::apply(
       make_not_null(&dt_conformal_metric), make_not_null(&dt_conformal_factor),
       make_not_null(&dt_a_tilde), make_not_null(&dt_trace_extrinsic_curvature),
@@ -207,12 +235,24 @@ void test_kerrschild() {
       make_not_null(&dt_lapse), make_not_null(&dt_shift), make_not_null(&dt_b),
       make_not_null(&dt_field_a), make_not_null(&dt_field_b),
       make_not_null(&dt_field_d), make_not_null(&dt_field_p),
-      d_conformal_metric, d_conformal_factor, d_a_tilde,
-      d_trace_extrinsic_curvature, d_theta, d_gamma_hat, d_lapse, d_shift, d_b,
-      d_field_a_raw, d_field_b_raw, d_field_d_raw, d_field_p_raw,
+      make_not_null(&vol_dt_u_scalar3_minus),
+      make_not_null(&vol_dt_u_vector2_minus),
+      make_not_null(&vol_dt_u_scalar2_minus),
+      make_not_null(&vol_dt_u_tensor_minus), make_not_null(&vol_dt_boundary_cm),
+      make_not_null(&vol_dt_boundary_cf), make_not_null(&vol_dt_boundary_lapse),
+      make_not_null(&vol_dt_boundary_shift), d_conformal_metric,
+      d_conformal_factor, d_a_tilde, d_trace_extrinsic_curvature, d_theta,
+      d_gamma_hat, d_lapse, d_shift, d_b, d_field_a_raw, d_field_b_raw,
+      d_field_d_raw, d_field_p_raw, zero_d_scalar, zero_d_vector, zero_d_scalar,
+      zero_d_tensor, zero_d_tensor, zero_d_scalar, zero_d_scalar, zero_d_shift,
       conformal_metric, conformal_factor, a_tilde, trace_extrinsic_curvature,
       theta, gamma_hat, lapse, shift, b_field, field_a, field_b, field_d,
-      field_p, 0.1, 0.2, 0.3, Scalar<DataVector>(num_pts, 0.0), k_0, true);
+      field_p, 0.1, 0.2, 0.3, Scalar<DataVector>(num_pts, 0.0), k_0, true,
+      Element<Dim>{}, mesh,
+      std::vector<DirectionMap<
+          Dim,
+          std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>{},
+      inv_jacobian);
 
   // Save a copy of the interior dt values (everything except the outermost
   // face) so we can verify they are not modified.
@@ -991,6 +1031,42 @@ void test_brick_minkowski() {
   auto& dt_field_p =
       get<::Tags::dt<::Ccz4::Tags::FieldP<DataVector, 3>>>(dt_vars);
 
+  // Boundary mode dt outputs (zero-initialized)
+  auto dt_u_scalar3_minus =
+      make_with_value<Scalar<DataVector>>(DataVector(num_pts), 0.0);
+  auto dt_u_vector2_minus =
+      make_with_value<tnsr::i<DataVector, 3>>(DataVector(num_pts), 0.0);
+  auto dt_u_scalar2_minus =
+      make_with_value<Scalar<DataVector>>(DataVector(num_pts), 0.0);
+  auto dt_u_tensor_minus =
+      make_with_value<tnsr::ii<DataVector, 3>>(DataVector(num_pts), 0.0);
+  auto dt_boundary_conformal_metric =
+      make_with_value<tnsr::ii<DataVector, 3>>(DataVector(num_pts), 0.0);
+  auto dt_boundary_conformal_factor =
+      make_with_value<Scalar<DataVector>>(DataVector(num_pts), 0.0);
+  auto dt_boundary_lapse =
+      make_with_value<Scalar<DataVector>>(DataVector(num_pts), 0.0);
+  auto dt_boundary_shift =
+      make_with_value<tnsr::I<DataVector, 3>>(DataVector(num_pts), 0.0);
+
+  // Boundary mode derivative inputs (zero-valued)
+  const auto d_u_scalar3_minus =
+      make_with_value<tnsr::i<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto d_u_vector2_minus =
+      make_with_value<tnsr::ij<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto d_u_scalar2_minus =
+      make_with_value<tnsr::i<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto d_u_tensor_minus =
+      make_with_value<tnsr::ijj<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto d_boundary_conformal_metric =
+      make_with_value<tnsr::ijj<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto d_boundary_conformal_factor =
+      make_with_value<tnsr::i<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto d_boundary_lapse =
+      make_with_value<tnsr::i<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto d_boundary_shift =
+      make_with_value<tnsr::iJ<DataVector, 3>>(DataVector(num_pts), 0.0);
+
   LdgTimeDerivative::apply(
       make_not_null(&dt_conformal_metric), make_not_null(&dt_conformal_factor),
       make_not_null(&dt_a_tilde), make_not_null(&dt_trace_extrinsic_curvature),
@@ -998,13 +1074,25 @@ void test_brick_minkowski() {
       make_not_null(&dt_lapse), make_not_null(&dt_shift), make_not_null(&dt_b),
       make_not_null(&dt_field_a), make_not_null(&dt_field_b),
       make_not_null(&dt_field_d), make_not_null(&dt_field_p),
+      make_not_null(&dt_u_scalar3_minus), make_not_null(&dt_u_vector2_minus),
+      make_not_null(&dt_u_scalar2_minus), make_not_null(&dt_u_tensor_minus),
+      make_not_null(&dt_boundary_conformal_metric),
+      make_not_null(&dt_boundary_conformal_factor),
+      make_not_null(&dt_boundary_lapse), make_not_null(&dt_boundary_shift),
       d_conformal_metric, d_conformal_factor, d_a_tilde,
       d_trace_extrinsic_curvature, d_theta, d_gamma_hat, d_lapse, d_shift, d_b,
       d_field_a_raw, d_field_b_raw, d_field_d_raw, d_field_p_raw,
-      conformal_metric, conformal_factor, a_tilde, trace_extrinsic_curvature,
-      theta, gamma_hat, lapse, shift, b, field_a, field_b, field_d, field_p,
-      0.1, 0.2, 0.3, Scalar<DataVector>(num_pts, 0.0),
-      Scalar<DataVector>(num_pts, 0.0), true);
+      d_u_scalar3_minus, d_u_vector2_minus, d_u_scalar2_minus, d_u_tensor_minus,
+      d_boundary_conformal_metric, d_boundary_conformal_factor,
+      d_boundary_lapse, d_boundary_shift, conformal_metric, conformal_factor,
+      a_tilde, trace_extrinsic_curvature, theta, gamma_hat, lapse, shift, b,
+      field_a, field_b, field_d, field_p, 0.1, 0.2, 0.3,
+      Scalar<DataVector>(num_pts, 0.0), Scalar<DataVector>(num_pts, 0.0), true,
+      Element<SpatialDim>{}, mesh,
+      std::vector<DirectionMap<
+          SpatialDim,
+          std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>{},
+      inv_jacobian);
 
   // Set up brick Element with upper_xi as external boundary
   const Element<SpatialDim> element =
@@ -1179,6 +1267,42 @@ void test_multi_face_minkowski() {
   auto& dt_field_p =
       get<::Tags::dt<::Ccz4::Tags::FieldP<DataVector, 3>>>(dt_vars);
 
+  // Boundary mode dt outputs (zero-initialized)
+  auto dt_u_scalar3_minus =
+      make_with_value<Scalar<DataVector>>(DataVector(num_pts), 0.0);
+  auto dt_u_vector2_minus =
+      make_with_value<tnsr::i<DataVector, 3>>(DataVector(num_pts), 0.0);
+  auto dt_u_scalar2_minus =
+      make_with_value<Scalar<DataVector>>(DataVector(num_pts), 0.0);
+  auto dt_u_tensor_minus =
+      make_with_value<tnsr::ii<DataVector, 3>>(DataVector(num_pts), 0.0);
+  auto dt_boundary_conformal_metric =
+      make_with_value<tnsr::ii<DataVector, 3>>(DataVector(num_pts), 0.0);
+  auto dt_boundary_conformal_factor =
+      make_with_value<Scalar<DataVector>>(DataVector(num_pts), 0.0);
+  auto dt_boundary_lapse =
+      make_with_value<Scalar<DataVector>>(DataVector(num_pts), 0.0);
+  auto dt_boundary_shift =
+      make_with_value<tnsr::I<DataVector, 3>>(DataVector(num_pts), 0.0);
+
+  // Boundary mode derivative inputs (zero-valued)
+  const auto d_u_scalar3_minus =
+      make_with_value<tnsr::i<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto d_u_vector2_minus =
+      make_with_value<tnsr::ij<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto d_u_scalar2_minus =
+      make_with_value<tnsr::i<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto d_u_tensor_minus =
+      make_with_value<tnsr::ijj<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto d_boundary_conformal_metric =
+      make_with_value<tnsr::ijj<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto d_boundary_conformal_factor =
+      make_with_value<tnsr::i<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto d_boundary_lapse =
+      make_with_value<tnsr::i<DataVector, 3>>(DataVector(num_pts), 0.0);
+  const auto d_boundary_shift =
+      make_with_value<tnsr::iJ<DataVector, 3>>(DataVector(num_pts), 0.0);
+
   LdgTimeDerivative::apply(
       make_not_null(&dt_conformal_metric), make_not_null(&dt_conformal_factor),
       make_not_null(&dt_a_tilde), make_not_null(&dt_trace_extrinsic_curvature),
@@ -1186,13 +1310,25 @@ void test_multi_face_minkowski() {
       make_not_null(&dt_lapse), make_not_null(&dt_shift), make_not_null(&dt_b),
       make_not_null(&dt_field_a), make_not_null(&dt_field_b),
       make_not_null(&dt_field_d), make_not_null(&dt_field_p),
+      make_not_null(&dt_u_scalar3_minus), make_not_null(&dt_u_vector2_minus),
+      make_not_null(&dt_u_scalar2_minus), make_not_null(&dt_u_tensor_minus),
+      make_not_null(&dt_boundary_conformal_metric),
+      make_not_null(&dt_boundary_conformal_factor),
+      make_not_null(&dt_boundary_lapse), make_not_null(&dt_boundary_shift),
       d_conformal_metric, d_conformal_factor, d_a_tilde,
       d_trace_extrinsic_curvature, d_theta, d_gamma_hat, d_lapse, d_shift, d_b,
       d_field_a_raw, d_field_b_raw, d_field_d_raw, d_field_p_raw,
-      conformal_metric, conformal_factor, a_tilde, trace_extrinsic_curvature,
-      theta, gamma_hat, lapse, shift, b, field_a, field_b, field_d, field_p,
-      0.1, 0.2, 0.3, Scalar<DataVector>(num_pts, 0.0),
-      Scalar<DataVector>(num_pts, 0.0), true);
+      d_u_scalar3_minus, d_u_vector2_minus, d_u_scalar2_minus, d_u_tensor_minus,
+      d_boundary_conformal_metric, d_boundary_conformal_factor,
+      d_boundary_lapse, d_boundary_shift, conformal_metric, conformal_factor,
+      a_tilde, trace_extrinsic_curvature, theta, gamma_hat, lapse, shift, b,
+      field_a, field_b, field_d, field_p, 0.1, 0.2, 0.3,
+      Scalar<DataVector>(num_pts, 0.0), Scalar<DataVector>(num_pts, 0.0), true,
+      Element<SpatialDim>{}, mesh,
+      std::vector<DirectionMap<
+          SpatialDim,
+          std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>{},
+      inv_jacobian);
 
   // Set up brick Element with upper_xi AND lower_eta as external boundaries
   const Element<SpatialDim> element =

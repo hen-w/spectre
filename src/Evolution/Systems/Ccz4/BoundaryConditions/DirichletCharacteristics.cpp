@@ -26,6 +26,501 @@
 #include "Utilities/Gsl.hpp"
 #include "Utilities/MakeWithValue.hpp"
 
+namespace {
+// Helper: compute time derivatives of the four second-order fields
+// (conformal_metric, conformal_factor, lapse, shift) using the CCZ4 evolution
+// equations. Replicates the logic from SoTimeDerivative.hpp lines 396-431.
+// Hardcoded constants: c=1.0, lapse_times_slicing_condition=2.0,
+// one_over_relaxation_time=0.0 (relaxation term omitted).
+void compute_dt_second_order_fields(
+    const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+        dt_conformal_metric,
+    const gsl::not_null<Scalar<DataVector>*> dt_conformal_factor,
+    const gsl::not_null<Scalar<DataVector>*> dt_lapse,
+    const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> dt_shift,
+    const tnsr::ii<DataVector, 3, Frame::Inertial>& conformal_metric,
+    const Scalar<DataVector>& conformal_factor,
+    const Scalar<DataVector>& lapse_input,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& shift_input,
+    const tnsr::ii<DataVector, 3, Frame::Inertial>& a_tilde,
+    const Scalar<DataVector>& trace_extrinsic_curvature,
+    const Scalar<DataVector>& theta,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& b,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& field_a,
+    const tnsr::iJ<DataVector, 3, Frame::Inertial>& field_b,
+    const tnsr::ijj<DataVector, 3, Frame::Inertial>& field_d,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& field_p,
+    const Scalar<DataVector>& k_0, const double f, const bool shifting_shift) {
+  static constexpr double one_third = 1.0 / 3.0;
+  // c = 1.0, lapse_times_slicing_condition = 2.0
+  static constexpr double c = 1.0;
+  static constexpr double lapse_times_slicing_cond = 2.0;
+
+  // Intermediates
+  Scalar<DataVector> contracted_field_b{};
+  ::tenex::evaluate(make_not_null(&contracted_field_b), field_b(ti::k, ti::K));
+
+  tnsr::ii<DataVector, 3, Frame::Inertial> conformal_metric_times_field_b{};
+  ::tenex::evaluate<ti::i, ti::j>(
+      make_not_null(&conformal_metric_times_field_b),
+      conformal_metric(ti::k, ti::i) * field_b(ti::j, ti::K));
+
+  // trace_a_tilde = 0 (SO-CCZ4 identity, a_tilde is trace-free)
+  // So a_tilde_minus_one_third_cm_trace = a_tilde
+
+  // k_minus_k0_minus_2_theta_c = K - k_0 - 2*c*theta
+  Scalar<DataVector> k_minus_k0_minus_2_theta_c{};
+  ::tenex::evaluate(make_not_null(&k_minus_k0_minus_2_theta_c),
+                    trace_extrinsic_curvature() - k_0() - 2.0 * c * theta());
+
+  // inv_tau_times_conformal_metric = 0 (one_over_relaxation_time = 0)
+  // det_conformal_metric term vanishes
+
+  // eq 12a: dt conformal metric (with tau^{-1}=0)
+  ::tenex::evaluate<ti::i, ti::j>(
+      dt_conformal_metric,
+      2.0 * shift_input(ti::K) * field_d(ti::k, ti::i, ti::j) +
+          conformal_metric_times_field_b(ti::i, ti::j) +
+          conformal_metric_times_field_b(ti::j, ti::i) -
+          2.0 * one_third * conformal_metric(ti::i, ti::j) *
+              contracted_field_b() -
+          2.0 * lapse_input() * a_tilde(ti::i, ti::j));
+
+  // dt lapse
+  ::tenex::evaluate<>(
+      dt_lapse, (shift_input(ti::K) * field_a(ti::k) -
+                 lapse_times_slicing_cond * k_minus_k0_minus_2_theta_c()) *
+                    lapse_input());
+
+  // dt shift
+  ::tenex::evaluate<ti::I>(dt_shift, f * b(ti::I));
+  if (shifting_shift) {
+    ::tenex::update<ti::I>(
+        dt_shift,
+        (*dt_shift)(ti::I) + shift_input(ti::K) * field_b(ti::k, ti::I));
+  }
+
+  // dt conformal factor
+  ::tenex::evaluate(dt_conformal_factor,
+                    (shift_input(ti::K) * field_p(ti::k) +
+                     one_third * (lapse_input() * trace_extrinsic_curvature() -
+                                  contracted_field_b())) *
+                        conformal_factor());
+}
+
+// Helper: perform characteristic mode mixing. Replaces incoming (or outgoing)
+// modes in char_fields with the corresponding modes from ghost_char_fields.
+template <typename CharFieldsType>
+void mix_characteristic_modes(CharFieldsType& char_fields,
+                              const CharFieldsType& ghost_char_fields,
+                              const std::array<DataVector, 16>& char_speeds,
+                              const bool prescribe_outgoing,
+                              const size_t num_pts) {
+  using namespace ::Ccz4::fd::Tags;
+  static constexpr size_t Dim = 3;
+
+  auto& u_tnsr_plus =
+      get<UTensorPlus<DataVector, Dim, Frame::Inertial>>(char_fields);
+  auto& u_tnsr_minus =
+      get<UTensorMinus<DataVector, Dim, Frame::Inertial>>(char_fields);
+  auto& u_vector1_zero =
+      get<UVector1Zero<DataVector, Dim, Frame::Inertial>>(char_fields);
+  auto& u_vector2_plus =
+      get<UVector2Plus<DataVector, Dim, Frame::Inertial>>(char_fields);
+  auto& u_vector2_minus =
+      get<UVector2Minus<DataVector, Dim, Frame::Inertial>>(char_fields);
+  auto& u_vector3_plus =
+      get<UVector3Plus<DataVector, Dim, Frame::Inertial>>(char_fields);
+  auto& u_vector3_minus =
+      get<UVector3Minus<DataVector, Dim, Frame::Inertial>>(char_fields);
+  auto& u_scalar1_zero = get<UScalar1Zero<DataVector>>(char_fields);
+  auto& u_scalar2_plus = get<UScalar2Plus<DataVector>>(char_fields);
+  auto& u_scalar2_minus = get<UScalar2Minus<DataVector>>(char_fields);
+  auto& u_scalar3_plus = get<UScalar3Plus<DataVector>>(char_fields);
+  auto& u_scalar3_minus = get<UScalar3Minus<DataVector>>(char_fields);
+  auto& u_scalar4_plus = get<UScalar4Plus<DataVector>>(char_fields);
+  auto& u_scalar4_minus = get<UScalar4Minus<DataVector>>(char_fields);
+  auto& u_scalar5_plus = get<UScalar5Plus<DataVector>>(char_fields);
+  auto& u_scalar5_minus = get<UScalar5Minus<DataVector>>(char_fields);
+
+  const auto& g_u_tnsr_plus =
+      get<UTensorPlus<DataVector, Dim, Frame::Inertial>>(ghost_char_fields);
+  const auto& g_u_tnsr_minus =
+      get<UTensorMinus<DataVector, Dim, Frame::Inertial>>(ghost_char_fields);
+  const auto& g_u_vector1_zero =
+      get<UVector1Zero<DataVector, Dim, Frame::Inertial>>(ghost_char_fields);
+  const auto& g_u_vector2_plus =
+      get<UVector2Plus<DataVector, Dim, Frame::Inertial>>(ghost_char_fields);
+  const auto& g_u_vector2_minus =
+      get<UVector2Minus<DataVector, Dim, Frame::Inertial>>(ghost_char_fields);
+  const auto& g_u_vector3_plus =
+      get<UVector3Plus<DataVector, Dim, Frame::Inertial>>(ghost_char_fields);
+  const auto& g_u_vector3_minus =
+      get<UVector3Minus<DataVector, Dim, Frame::Inertial>>(ghost_char_fields);
+  const auto& g_u_scalar1_zero =
+      get<UScalar1Zero<DataVector>>(ghost_char_fields);
+  const auto& g_u_scalar2_plus =
+      get<UScalar2Plus<DataVector>>(ghost_char_fields);
+  const auto& g_u_scalar2_minus =
+      get<UScalar2Minus<DataVector>>(ghost_char_fields);
+  const auto& g_u_scalar3_plus =
+      get<UScalar3Plus<DataVector>>(ghost_char_fields);
+  const auto& g_u_scalar3_minus =
+      get<UScalar3Minus<DataVector>>(ghost_char_fields);
+  const auto& g_u_scalar4_plus =
+      get<UScalar4Plus<DataVector>>(ghost_char_fields);
+  const auto& g_u_scalar4_minus =
+      get<UScalar4Minus<DataVector>>(ghost_char_fields);
+  const auto& g_u_scalar5_plus =
+      get<UScalar5Plus<DataVector>>(ghost_char_fields);
+  const auto& g_u_scalar5_minus =
+      get<UScalar5Minus<DataVector>>(ghost_char_fields);
+
+  if (not prescribe_outgoing) {
+    // Replace INCOMING modes with ghost values
+    u_tnsr_minus = g_u_tnsr_minus;
+    for (size_t s = 0; s < num_pts; ++s) {
+      if (char_speeds[2][s] < 0.0) {
+        for (size_t i = 0; i < Dim; ++i) {
+          u_vector1_zero.get(i)[s] = g_u_vector1_zero.get(i)[s];
+        }
+      }
+    }
+    u_vector2_minus = g_u_vector2_minus;
+    u_vector3_minus = g_u_vector3_minus;
+    for (size_t s = 0; s < num_pts; ++s) {
+      if (char_speeds[7][s] < 0.0) {
+        get(u_scalar1_zero)[s] = get(g_u_scalar1_zero)[s];
+      }
+    }
+    u_scalar2_minus = g_u_scalar2_minus;
+    u_scalar3_minus = g_u_scalar3_minus;
+    u_scalar4_minus = g_u_scalar4_minus;
+    u_scalar5_minus = g_u_scalar5_minus;
+  } else {
+    // Replace OUTGOING modes with ghost values
+    u_tnsr_plus = g_u_tnsr_plus;
+    for (size_t s = 0; s < num_pts; ++s) {
+      if (char_speeds[2][s] >= 0.0) {
+        for (size_t i = 0; i < Dim; ++i) {
+          u_vector1_zero.get(i)[s] = g_u_vector1_zero.get(i)[s];
+        }
+      }
+    }
+    u_vector2_plus = g_u_vector2_plus;
+    u_vector3_plus = g_u_vector3_plus;
+    for (size_t s = 0; s < num_pts; ++s) {
+      if (char_speeds[7][s] >= 0.0) {
+        get(u_scalar1_zero)[s] = get(g_u_scalar1_zero)[s];
+      }
+    }
+    u_scalar2_plus = g_u_scalar2_plus;
+    u_scalar3_plus = g_u_scalar3_plus;
+    u_scalar4_plus = g_u_scalar4_plus;
+    u_scalar5_plus = g_u_scalar5_plus;
+  }
+}
+// Result of the characteristic decomposition + mode mixing + inverse transform
+// + auxiliary reconstruction pipeline.
+struct CharMixedState {
+  std::array<DataVector, 16> char_speeds;
+  // Evolved vars + normal derivatives from inverse char transform
+  ::Ccz4::fd::Tags::EvolvedSpaceFromCharacteristicFields<
+      DataVector, 3, Frame::Inertial>::type evolved_space;
+  // Reconstructed auxiliary fields
+  tnsr::i<DataVector, 3, Frame::Inertial> field_a;
+  tnsr::iJ<DataVector, 3, Frame::Inertial> field_b;
+  tnsr::ijj<DataVector, 3, Frame::Inertial> field_d;
+  tnsr::i<DataVector, 3, Frame::Inertial> field_p;
+};
+
+// Performs the full characteristic mode-mixing pipeline shared by dg_ghost
+// and dg_time_derivative:
+// 1. Reconstructs interior spatial derivatives from interior auxiliary fields
+// 2. Computes interior unit normal from normal_covector + interior metric
+// 3. Computes interior char speeds and char fields
+// 4. Evaluates analytic solution
+// 5. Reconstructs ghost spatial derivatives (coeff four fields * analytic aux)
+// 6. Computes ghost char fields
+// 7. Mode mixes (incoming from ghost, outgoing from interior)
+// 8. Inverse char transform (ghost unit normal + coeff four fields)
+// 9. Reconstructs auxiliary fields from normal derivatives
+CharMixedState characteristic_decomposition_pipeline(
+    const evolution::initial_data::InitialData& analytic_prescription,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
+    const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_conformal_metric,
+    const Scalar<DataVector>& interior_conformal_factor,
+    const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_a_tilde,
+    const Scalar<DataVector>& interior_trace_extrinsic_curvature,
+    const Scalar<DataVector>& interior_theta,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& interior_gamma_hat,
+    const Scalar<DataVector>& interior_lapse,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& interior_shift,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& interior_auxiliary_shift_b,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& interior_field_a,
+    const tnsr::iJ<DataVector, 3, Frame::Inertial>& interior_field_b,
+    const tnsr::ijj<DataVector, 3, Frame::Inertial>& interior_field_d,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& interior_field_p,
+    const tnsr::ii<DataVector, 3, Frame::Inertial>& coeff_conformal_metric,
+    const Scalar<DataVector>& coeff_conformal_factor,
+    const Scalar<DataVector>& coeff_lapse,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& coeff_shift,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& ghost_unit_normal_one_form,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& ghost_unit_normal_vector,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& coords, const double time,
+    const double f, const bool prescribe_outgoing) {
+  static constexpr size_t Dim = 3;
+
+  // Step 1: Reconstruct interior spatial derivatives from auxiliary fields
+  tnsr::ijj<DataVector, Dim, Frame::Inertial> d_conformal_metric{};
+  ::tenex::evaluate<ti::k, ti::i, ti::j>(
+      make_not_null(&d_conformal_metric),
+      2.0 * interior_field_d(ti::k, ti::i, ti::j));
+
+  tnsr::i<DataVector, Dim, Frame::Inertial> d_conformal_factor{};
+  ::tenex::evaluate<ti::i>(
+      make_not_null(&d_conformal_factor),
+      interior_conformal_factor() * interior_field_p(ti::i));
+
+  tnsr::i<DataVector, Dim, Frame::Inertial> d_lapse{};
+  ::tenex::evaluate<ti::i>(make_not_null(&d_lapse),
+                           interior_lapse() * interior_field_a(ti::i));
+
+  tnsr::iJ<DataVector, Dim, Frame::Inertial> d_shift{};
+  ::tenex::evaluate<ti::i, ti::J>(make_not_null(&d_shift),
+                                  interior_field_b(ti::i, ti::J));
+
+  // Step 2: Compute interior unit normal
+  const auto [det_cm, inv_cm] =
+      determinant_and_inverse(interior_conformal_metric);
+
+  tnsr::II<DataVector, Dim, Frame::Inertial> inv_spatial_metric{};
+  ::tenex::evaluate<ti::I, ti::J>(make_not_null(&inv_spatial_metric),
+                                  interior_conformal_factor() *
+                                      interior_conformal_factor() *
+                                      inv_cm(ti::I, ti::J));
+
+  const Scalar<DataVector> mag_sq =
+      dot_product(normal_covector, normal_covector, inv_spatial_metric);
+  const DataVector inv_mag = 1.0 / sqrt(get(mag_sq));
+
+  const size_t num_pts = get(interior_conformal_factor).size();
+  tnsr::i<DataVector, Dim, Frame::Inertial> interior_unit_normal_one_form(
+      num_pts);
+  for (size_t i = 0; i < Dim; ++i) {
+    interior_unit_normal_one_form.get(i) = normal_covector.get(i) * inv_mag;
+  }
+
+  // Step 3: Char speeds and interior char fields
+  auto char_speeds = ::Ccz4::fd::characteristic_speeds(
+      interior_lapse, interior_shift, interior_conformal_factor, f,
+      interior_unit_normal_one_form);
+
+  auto char_fields = ::Ccz4::fd::characteristic_fields(
+      interior_unit_normal_one_form, interior_conformal_metric,
+      interior_conformal_factor, interior_lapse, interior_shift,
+      interior_trace_extrinsic_curvature, interior_a_tilde, interior_theta,
+      interior_gamma_hat, interior_auxiliary_shift_b, d_conformal_metric,
+      d_conformal_factor, d_lapse, d_shift, f);
+
+  // Step 4: Evaluate analytic solution
+  using all_tags = tmpl::list<
+      Ccz4::Tags::ConformalMetric<DataVector, 3>,
+      Ccz4::Tags::ConformalFactor<DataVector>,
+      Ccz4::Tags::ATilde<DataVector, 3>,
+      gr::Tags::TraceExtrinsicCurvature<DataVector>,
+      Ccz4::Tags::Theta<DataVector>, Ccz4::Tags::GammaHat<DataVector, 3>,
+      gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
+      Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>,
+      Ccz4::Tags::FieldA<DataVector, 3>, Ccz4::Tags::FieldB<DataVector, 3>,
+      Ccz4::Tags::FieldD<DataVector, 3>, Ccz4::Tags::FieldP<DataVector, 3>>;
+  auto analytic_values = call_with_dynamic_type<
+      tuples::TaggedTuple<
+          Ccz4::Tags::ConformalMetric<DataVector, 3>,
+          Ccz4::Tags::ConformalFactor<DataVector>,
+          Ccz4::Tags::ATilde<DataVector, 3>,
+          gr::Tags::TraceExtrinsicCurvature<DataVector>,
+          Ccz4::Tags::Theta<DataVector>, Ccz4::Tags::GammaHat<DataVector, 3>,
+          gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
+          Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>,
+          Ccz4::Tags::FieldA<DataVector, 3>, Ccz4::Tags::FieldB<DataVector, 3>,
+          Ccz4::Tags::FieldD<DataVector, 3>, Ccz4::Tags::FieldP<DataVector, 3>>,
+      Ccz4::Solutions::all_solutions>(
+      &analytic_prescription, [&coords, &time](const auto* const initial_data) {
+        if constexpr (is_analytic_solution_v<
+                          std::decay_t<decltype(*initial_data)>>) {
+          return initial_data->variables(coords, time, all_tags{});
+        } else if constexpr (evolution::is_numeric_initial_data_v<
+                                 std::decay_t<decltype(*initial_data)>>) {
+          ERROR(
+              "Cannot currently use numeric initial data as an analytic "
+              "prescription for boundary conditions.");
+        } else {
+          (void)time;
+          return initial_data->variables(coords, all_tags{});
+        }
+      });
+
+  const auto& analytic_a_tilde =
+      get<Ccz4::Tags::ATilde<DataVector, 3>>(analytic_values);
+  const auto& analytic_trace_K =
+      get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(analytic_values);
+  const auto& analytic_theta =
+      get<Ccz4::Tags::Theta<DataVector>>(analytic_values);
+  const auto& analytic_gamma_hat =
+      get<Ccz4::Tags::GammaHat<DataVector, 3>>(analytic_values);
+  const auto& analytic_b =
+      get<Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(analytic_values);
+  const auto& analytic_field_a =
+      get<Ccz4::Tags::FieldA<DataVector, 3>>(analytic_values);
+  const auto& analytic_field_b =
+      get<Ccz4::Tags::FieldB<DataVector, 3>>(analytic_values);
+  const auto& analytic_field_d =
+      get<Ccz4::Tags::FieldD<DataVector, 3>>(analytic_values);
+  const auto& analytic_field_p =
+      get<Ccz4::Tags::FieldP<DataVector, 3>>(analytic_values);
+
+  // Step 5: Ghost spatial derivatives (coeff four fields * analytic aux)
+  tnsr::ijj<DataVector, Dim, Frame::Inertial> ghost_d_cm{};
+  ::tenex::evaluate<ti::k, ti::i, ti::j>(
+      make_not_null(&ghost_d_cm), 2.0 * analytic_field_d(ti::k, ti::i, ti::j));
+
+  tnsr::i<DataVector, Dim, Frame::Inertial> ghost_d_cf{};
+  ::tenex::evaluate<ti::i>(make_not_null(&ghost_d_cf),
+                           coeff_conformal_factor() * analytic_field_p(ti::i));
+
+  tnsr::i<DataVector, Dim, Frame::Inertial> ghost_d_lapse{};
+  ::tenex::evaluate<ti::i>(make_not_null(&ghost_d_lapse),
+                           coeff_lapse() * analytic_field_a(ti::i));
+
+  tnsr::iJ<DataVector, Dim, Frame::Inertial> ghost_d_shift{};
+  ::tenex::evaluate<ti::i, ti::J>(make_not_null(&ghost_d_shift),
+                                  analytic_field_b(ti::i, ti::J));
+
+  // Step 6: Ghost char fields + mode mixing
+  const auto ghost_char_fields = ::Ccz4::fd::characteristic_fields(
+      ghost_unit_normal_one_form, coeff_conformal_metric,
+      coeff_conformal_factor, coeff_lapse, coeff_shift, analytic_trace_K,
+      analytic_a_tilde, analytic_theta, analytic_gamma_hat, analytic_b,
+      ghost_d_cm, ghost_d_cf, ghost_d_lapse, ghost_d_shift, f);
+
+  mix_characteristic_modes(char_fields, ghost_char_fields, char_speeds,
+                           prescribe_outgoing, num_pts);
+
+  // Step 7: Inverse char transform
+  const auto& u_tnsr_plus =
+      get<::Ccz4::fd::Tags::UTensorPlus<DataVector, Dim, Frame::Inertial>>(
+          char_fields);
+  const auto& u_tnsr_minus =
+      get<::Ccz4::fd::Tags::UTensorMinus<DataVector, Dim, Frame::Inertial>>(
+          char_fields);
+  const auto& u_vector1_zero =
+      get<::Ccz4::fd::Tags::UVector1Zero<DataVector, Dim, Frame::Inertial>>(
+          char_fields);
+  const auto& u_vector2_plus =
+      get<::Ccz4::fd::Tags::UVector2Plus<DataVector, Dim, Frame::Inertial>>(
+          char_fields);
+  const auto& u_vector2_minus =
+      get<::Ccz4::fd::Tags::UVector2Minus<DataVector, Dim, Frame::Inertial>>(
+          char_fields);
+  const auto& u_vector3_plus =
+      get<::Ccz4::fd::Tags::UVector3Plus<DataVector, Dim, Frame::Inertial>>(
+          char_fields);
+  const auto& u_vector3_minus =
+      get<::Ccz4::fd::Tags::UVector3Minus<DataVector, Dim, Frame::Inertial>>(
+          char_fields);
+  const auto& u_scalar1_zero =
+      get<::Ccz4::fd::Tags::UScalar1Zero<DataVector>>(char_fields);
+  const auto& u_scalar2_plus =
+      get<::Ccz4::fd::Tags::UScalar2Plus<DataVector>>(char_fields);
+  const auto& u_scalar2_minus =
+      get<::Ccz4::fd::Tags::UScalar2Minus<DataVector>>(char_fields);
+  const auto& u_scalar3_plus =
+      get<::Ccz4::fd::Tags::UScalar3Plus<DataVector>>(char_fields);
+  const auto& u_scalar3_minus =
+      get<::Ccz4::fd::Tags::UScalar3Minus<DataVector>>(char_fields);
+  const auto& u_scalar4_plus =
+      get<::Ccz4::fd::Tags::UScalar4Plus<DataVector>>(char_fields);
+  const auto& u_scalar4_minus =
+      get<::Ccz4::fd::Tags::UScalar4Minus<DataVector>>(char_fields);
+  const auto& u_scalar5_plus =
+      get<::Ccz4::fd::Tags::UScalar5Plus<DataVector>>(char_fields);
+  const auto& u_scalar5_minus =
+      get<::Ccz4::fd::Tags::UScalar5Minus<DataVector>>(char_fields);
+
+  auto evolved_space = ::Ccz4::fd::evolved_space_from_characteristic_fields(
+      u_tnsr_plus, u_tnsr_minus, u_vector1_zero, u_vector2_plus,
+      u_vector2_minus, u_vector3_plus, u_vector3_minus, u_scalar1_zero,
+      u_scalar2_plus, u_scalar2_minus, u_scalar3_plus, u_scalar3_minus,
+      u_scalar4_plus, u_scalar4_minus, u_scalar5_plus, u_scalar5_minus,
+      ghost_unit_normal_one_form, coeff_conformal_metric,
+      coeff_conformal_factor, coeff_lapse, coeff_shift, f);
+
+  // Step 8: Auxiliary field reconstruction from normal derivatives
+  using DnCM =
+      ::Ccz4::fd::Tags::DnConformalMetric<DataVector, Dim, Frame::Inertial>;
+  using DnL = ::Ccz4::fd::Tags::DnLapse<DataVector>;
+  using DnS = ::Ccz4::fd::Tags::DnShift<DataVector, Dim, Frame::Inertial>;
+  using DnCF = ::Ccz4::fd::Tags::DnConformalFactor<DataVector>;
+
+  const auto& dn_cm = get<DnCM>(evolved_space);
+  const auto& dn_lapse = get<DnL>(evolved_space);
+  const auto& dn_shift = get<DnS>(evolved_space);
+  const auto& dn_cf = get<DnCF>(evolved_space);
+
+  Scalar<DataVector> n_dot_d_lapse{};
+  ::tenex::evaluate(make_not_null(&n_dot_d_lapse),
+                    ghost_unit_normal_vector(ti::I) * d_lapse(ti::i));
+
+  Scalar<DataVector> n_dot_d_cf{};
+  ::tenex::evaluate(
+      make_not_null(&n_dot_d_cf),
+      ghost_unit_normal_vector(ti::I) * d_conformal_factor(ti::i));
+
+  tnsr::i<DataVector, Dim, Frame::Inertial> result_field_a{};
+  ::tenex::evaluate<ti::i>(
+      make_not_null(&result_field_a),
+      (d_lapse(ti::i) - ghost_unit_normal_one_form(ti::i) * n_dot_d_lapse() +
+       ghost_unit_normal_one_form(ti::i) * dn_lapse()) /
+          coeff_lapse());
+
+  tnsr::i<DataVector, Dim, Frame::Inertial> result_field_p{};
+  ::tenex::evaluate<ti::i>(make_not_null(&result_field_p),
+                           (d_conformal_factor(ti::i) -
+                            ghost_unit_normal_one_form(ti::i) * n_dot_d_cf() +
+                            ghost_unit_normal_one_form(ti::i) * dn_cf()) /
+                               coeff_conformal_factor());
+
+  tnsr::ii<DataVector, Dim, Frame::Inertial> n_dot_d_cm{};
+  ::tenex::evaluate<ti::j, ti::k>(make_not_null(&n_dot_d_cm),
+                                  ghost_unit_normal_vector(ti::M) *
+                                      d_conformal_metric(ti::m, ti::j, ti::k));
+
+  tnsr::ijj<DataVector, Dim, Frame::Inertial> result_field_d{};
+  ::tenex::evaluate<ti::i, ti::j, ti::k>(
+      make_not_null(&result_field_d),
+      0.5 * (d_conformal_metric(ti::i, ti::j, ti::k) -
+             ghost_unit_normal_one_form(ti::i) * n_dot_d_cm(ti::j, ti::k) +
+             ghost_unit_normal_one_form(ti::i) * dn_cm(ti::j, ti::k)));
+
+  tnsr::I<DataVector, Dim, Frame::Inertial> n_dot_d_shift{};
+  ::tenex::evaluate<ti::J>(
+      make_not_null(&n_dot_d_shift),
+      ghost_unit_normal_vector(ti::M) * d_shift(ti::m, ti::J));
+
+  tnsr::iJ<DataVector, Dim, Frame::Inertial> result_field_b{};
+  ::tenex::evaluate<ti::i, ti::J>(
+      make_not_null(&result_field_b),
+      d_shift(ti::i, ti::J) -
+          ghost_unit_normal_one_form(ti::i) * n_dot_d_shift(ti::J) +
+          ghost_unit_normal_one_form(ti::i) * dn_shift(ti::J));
+
+  return {std::move(char_speeds),    std::move(evolved_space),
+          std::move(result_field_a), std::move(result_field_b),
+          std::move(result_field_d), std::move(result_field_p)};
+}
+}  // namespace
+
 namespace Ccz4::BoundaryConditions {
 
 // LCOV_EXCL_START
@@ -37,8 +532,8 @@ DirichletCharacteristics::DirichletCharacteristics(
     : BoundaryCondition{dynamic_cast<const BoundaryCondition&>(rhs)},
       analytic_prescription_(rhs.analytic_prescription_->get_clone()),
       prescribe_outgoing_(rhs.prescribe_outgoing_),
-      prescribe_analytic_second_order_fields_(
-          rhs.prescribe_analytic_second_order_fields_) {}
+      copy_second_order_fields_from_interior_(
+          rhs.copy_second_order_fields_from_interior_) {}
 
 DirichletCharacteristics& DirichletCharacteristics::operator=(
     const DirichletCharacteristics& rhs) {
@@ -47,18 +542,18 @@ DirichletCharacteristics& DirichletCharacteristics::operator=(
   }
   analytic_prescription_ = rhs.analytic_prescription_->get_clone();
   prescribe_outgoing_ = rhs.prescribe_outgoing_;
-  prescribe_analytic_second_order_fields_ =
-      rhs.prescribe_analytic_second_order_fields_;
+  copy_second_order_fields_from_interior_ =
+      rhs.copy_second_order_fields_from_interior_;
   return *this;
 }
 
 DirichletCharacteristics::DirichletCharacteristics(
     std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription,
-    bool prescribe_outgoing, bool prescribe_analytic_second_order_fields)
+    bool prescribe_outgoing, bool copy_second_order_fields_from_interior)
     : analytic_prescription_(std::move(analytic_prescription)),
       prescribe_outgoing_(prescribe_outgoing),
-      prescribe_analytic_second_order_fields_(
-          prescribe_analytic_second_order_fields) {}
+      copy_second_order_fields_from_interior_(
+          copy_second_order_fields_from_interior) {}
 
 std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>
 DirichletCharacteristics::get_clone() const {
@@ -69,7 +564,7 @@ void DirichletCharacteristics::pup(PUP::er& p) {
   BoundaryCondition::pup(p);
   p | analytic_prescription_;
   p | prescribe_outgoing_;
-  p | prescribe_analytic_second_order_fields_;
+  p | copy_second_order_fields_from_interior_;
 }
 // NOLINTNEXTLINE
 PUP::able::PUP_ID DirichletCharacteristics::my_PUP_ID = 0;
@@ -96,6 +591,12 @@ std::optional<std::string> DirichletCharacteristics::dg_ghost(
     const gsl::not_null<Scalar<DataVector>*> bm_u_scalar2_minus,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
         bm_u_tensor_minus,
+    const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+        boundary_conformal_metric,
+    const gsl::not_null<Scalar<DataVector>*> boundary_conformal_factor,
+    const gsl::not_null<Scalar<DataVector>*> boundary_lapse,
+    const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
+        boundary_shift,
     const std::optional<
         tnsr::I<DataVector, 3, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
@@ -116,9 +617,13 @@ std::optional<std::string> DirichletCharacteristics::dg_ghost(
     const tnsr::i<DataVector, 3, Frame::Inertial>& /*interior_u_vector2_minus*/,
     const Scalar<DataVector>& /*interior_u_scalar2_minus*/,
     const tnsr::ii<DataVector, 3, Frame::Inertial>& /*interior_u_tensor_minus*/,
-    const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
-    [[maybe_unused]] const double time,
-    [[maybe_unused]] const bool evolve_lapse_and_shift) const {
+    const tnsr::ii<DataVector, 3, Frame::Inertial>&
+        interior_boundary_conformal_metric,
+    const Scalar<DataVector>& interior_boundary_conformal_factor,
+    const Scalar<DataVector>& interior_boundary_lapse,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& interior_boundary_shift,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& coords, const double time,
+    const bool evolve_lapse_and_shift) const {
   static constexpr size_t Dim = 3;
   static constexpr double f = ::Ccz4::fd::System::f;
 
@@ -126,463 +631,117 @@ std::optional<std::string> DirichletCharacteristics::dg_ghost(
          "DirichletCharacteristics BC is not implemented"
          " when lapse and shift are not evolved, as the SoCcz4 system"
          " is only weakly hyperbolic in that case");
-
   const size_t num_pts = get(interior_conformal_factor).size();
 
-  // ============================================================
-  // Phase A: Copy interior metric/gauge to exterior
-  //          (or analytic, if prescribe_analytic_second_order_fields_)
-  //          Deferred to after Phase E1 so analytic values are available.
-  // ============================================================
+  // Determine which four fields to use as characteristic coefficients and
+  // for the ghost state's metric/gauge sector.
+  // When copy_second_order_fields_from_interior_: use interior values.
+  // Otherwise: use boundary-integrated values.
+  const auto& coeff_conformal_metric = copy_second_order_fields_from_interior_
+                                           ? interior_conformal_metric
+                                           : interior_boundary_conformal_metric;
+  const auto& coeff_conformal_factor = copy_second_order_fields_from_interior_
+                                           ? interior_conformal_factor
+                                           : interior_boundary_conformal_factor;
+  const auto& coeff_lapse = copy_second_order_fields_from_interior_
+                                ? interior_lapse
+                                : interior_boundary_lapse;
+  const auto& coeff_shift = copy_second_order_fields_from_interior_
+                                ? interior_shift
+                                : interior_boundary_shift;
 
-  // ============================================================
-  // Phase B: Reconstruct spatial derivatives from interior auxiliary fields
-  // ============================================================
-  // d_conformal_metric_ijk = 2 * field_d_ijk
-  tnsr::ijj<DataVector, Dim, Frame::Inertial> d_conformal_metric{};
-  ::tenex::evaluate<ti::k, ti::i, ti::j>(
-      make_not_null(&d_conformal_metric),
-      2.0 * interior_field_d(ti::k, ti::i, ti::j));
+  // Compute ghost-side unit normal from coeff four fields.
+  // When copy_second_order_fields_from_interior_: coeff = interior, so this
+  // equals the interior unit normal. Otherwise uses boundary-integrated metric.
+  const auto [det_coeff_cm, inv_coeff_cm] =
+      determinant_and_inverse(coeff_conformal_metric);
 
-  // d_conformal_factor_i = conformal_factor * field_p_i
-  tnsr::i<DataVector, Dim, Frame::Inertial> d_conformal_factor{};
-  ::tenex::evaluate<ti::i>(
-      make_not_null(&d_conformal_factor),
-      interior_conformal_factor() * interior_field_p(ti::i));
+  tnsr::II<DataVector, Dim, Frame::Inertial> inv_coeff_spatial_metric{};
+  ::tenex::evaluate<ti::I, ti::J>(make_not_null(&inv_coeff_spatial_metric),
+                                  coeff_conformal_factor() *
+                                      coeff_conformal_factor() *
+                                      inv_coeff_cm(ti::I, ti::J));
 
-  // d_lapse_i = lapse * field_a_i
-  tnsr::i<DataVector, Dim, Frame::Inertial> d_lapse{};
-  ::tenex::evaluate<ti::i>(make_not_null(&d_lapse),
-                           interior_lapse() * interior_field_a(ti::i));
+  const Scalar<DataVector> coeff_mag_sq =
+      dot_product(normal_covector, normal_covector, inv_coeff_spatial_metric);
+  const DataVector coeff_inv_mag = 1.0 / sqrt(get(coeff_mag_sq));
 
-  // d_shift_iJ = field_b_iJ
-  tnsr::iJ<DataVector, Dim, Frame::Inertial> d_shift{};
-  ::tenex::evaluate<ti::i, ti::J>(make_not_null(&d_shift),
-                                  interior_field_b(ti::i, ti::J));
-
-  // ============================================================
-  // Phase C: Compute unit normal one-form
-  // ============================================================
-  const auto [det_conformal_metric, inv_conformal_metric] =
-      determinant_and_inverse(interior_conformal_metric);
-
-  // inverse physical spatial metric: gamma^ij = phi^2 * tilde_gamma^ij
-  tnsr::II<DataVector, Dim, Frame::Inertial> inv_spatial_metric{};
-  ::tenex::evaluate<ti::I, ti::J>(make_not_null(&inv_spatial_metric),
-                                  interior_conformal_factor() *
-                                      interior_conformal_factor() *
-                                      inv_conformal_metric(ti::I, ti::J));
-
-  // magnitude^2 = gamma^ij * normal_covector_i * normal_covector_j
-  const Scalar<DataVector> magnitude_sq =
-      dot_product(normal_covector, normal_covector, inv_spatial_metric);
-  const DataVector inv_magnitude = 1.0 / sqrt(get(magnitude_sq));
-
-  // unit_normal_one_form_i = normal_covector_i / sqrt(magnitude^2)
-  tnsr::i<DataVector, Dim, Frame::Inertial> unit_normal_one_form(num_pts);
+  tnsr::i<DataVector, Dim, Frame::Inertial> ghost_unit_normal_one_form(num_pts);
   for (size_t i = 0; i < Dim; ++i) {
-    unit_normal_one_form.get(i) = normal_covector.get(i) * inv_magnitude;
+    ghost_unit_normal_one_form.get(i) = normal_covector.get(i) * coeff_inv_mag;
   }
 
-  // unit_normal_vector^i = gamma^ij * unit_normal_one_form_j
-  tnsr::I<DataVector, Dim, Frame::Inertial> unit_normal_vector{};
-  ::tenex::evaluate<ti::I>(
-      make_not_null(&unit_normal_vector),
-      inv_spatial_metric(ti::I, ti::J) * unit_normal_one_form(ti::j));
+  tnsr::I<DataVector, Dim, Frame::Inertial> ghost_unit_normal_vector{};
+  ::tenex::evaluate<ti::I>(make_not_null(&ghost_unit_normal_vector),
+                           inv_coeff_spatial_metric(ti::I, ti::J) *
+                               ghost_unit_normal_one_form(ti::j));
 
-  // ============================================================
-  // Phase D: Compute interior characteristic speeds and fields
-  // ============================================================
-  const auto char_speeds = ::Ccz4::fd::characteristic_speeds(
-      interior_lapse, interior_shift, interior_conformal_factor, f,
-      unit_normal_one_form);
+  // Run the full characteristic decomposition pipeline
+  auto result = characteristic_decomposition_pipeline(
+      *analytic_prescription_, normal_covector, interior_conformal_metric,
+      interior_conformal_factor, interior_a_tilde,
+      interior_trace_extrinsic_curvature, interior_theta, interior_gamma_hat,
+      interior_lapse, interior_shift, interior_auxiliary_shift_b,
+      interior_field_a, interior_field_b, interior_field_d, interior_field_p,
+      coeff_conformal_metric, coeff_conformal_factor, coeff_lapse, coeff_shift,
+      ghost_unit_normal_one_form, ghost_unit_normal_vector, coords, time, f,
+      prescribe_outgoing_);
 
-  auto char_fields = ::Ccz4::fd::characteristic_fields(
-      unit_normal_one_form, interior_conformal_metric,
-      interior_conformal_factor, interior_lapse, interior_shift,
-      interior_trace_extrinsic_curvature, interior_a_tilde, interior_theta,
-      interior_gamma_hat, interior_auxiliary_shift_b, d_conformal_metric,
-      d_conformal_factor, d_lapse, d_shift, f);
-
-  // ============================================================
-  // Phase D2: Validate characteristic speeds
-  // ============================================================
-  // For asymptotically Minkowski spacetimes, certain speeds must have
-  // definite signs. Check at each face point.
+  // Validate characteristic speed signs
   for (size_t s = 0; s < num_pts; ++s) {
-    if (char_speeds[0][s] < 0.0 || char_speeds[1][s] >= 0.0 ||
-        char_speeds[5][s] < 0.0 || char_speeds[6][s] >= 0.0 ||
-        char_speeds[12][s] < 0.0 || char_speeds[13][s] >= 0.0 ||
-        char_speeds[14][s] < 0.0 || char_speeds[15][s] >= 0.0) {
+    if (result.char_speeds[0][s] < 0.0 || result.char_speeds[1][s] >= 0.0 ||
+        result.char_speeds[5][s] < 0.0 || result.char_speeds[6][s] >= 0.0 ||
+        result.char_speeds[12][s] < 0.0 || result.char_speeds[13][s] >= 0.0 ||
+        result.char_speeds[14][s] < 0.0 || result.char_speeds[15][s] >= 0.0) {
       ERROR(
           "DirichletCharacteristics dg_ghost: characteristic speed sign "
           "violation at face point "
           << s << ".\n"
           << "  char_speeds[0]  (UTensorPlus,  expect>=0): "
-          << char_speeds[0][s] << "\n"
+          << result.char_speeds[0][s] << "\n"
           << "  char_speeds[1]  (UTensorMinus,  expect<0): "
-          << char_speeds[1][s] << "\n"
+          << result.char_speeds[1][s] << "\n"
           << "  char_speeds[5]  (UVector3Plus,  expect>=0): "
-          << char_speeds[5][s] << "\n"
+          << result.char_speeds[5][s] << "\n"
           << "  char_speeds[6]  (UVector3Minus, expect<0): "
-          << char_speeds[6][s] << "\n"
+          << result.char_speeds[6][s] << "\n"
           << "  char_speeds[12] (UScalar4Plus,  expect>=0): "
-          << char_speeds[12][s] << "\n"
+          << result.char_speeds[12][s] << "\n"
           << "  char_speeds[13] (UScalar4Minus, expect<0): "
-          << char_speeds[13][s] << "\n"
+          << result.char_speeds[13][s] << "\n"
           << "  char_speeds[14] (UScalar5Plus,  expect>=0): "
-          << char_speeds[14][s] << "\n"
+          << result.char_speeds[14][s] << "\n"
           << "  char_speeds[15] (UScalar5Minus, expect<0): "
-          << char_speeds[15][s]);
+          << result.char_speeds[15][s]);
     }
   }
 
-  // ============================================================
-  // Phase E: Replace incoming characteristic modes with analytic values
-  // ============================================================
+  // Write exterior ghost state
+  // Ghost four fields = coeff four fields
+  *conformal_metric = coeff_conformal_metric;
+  *conformal_factor = coeff_conformal_factor;
+  *lapse = coeff_lapse;
+  *shift = coeff_shift;
 
-  // E1: Evaluate analytic solution at (coords, time) to get all 13 fields
-  using all_tags =
-      tmpl::list<Tags::ConformalMetric<DataVector, 3>,
-                 Tags::ConformalFactor<DataVector>, Tags::ATilde<DataVector, 3>,
-                 gr::Tags::TraceExtrinsicCurvature<DataVector>,
-                 Tags::Theta<DataVector>, Tags::GammaHat<DataVector, 3>,
-                 gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
-                 Tags::AuxiliaryShiftB<DataVector, 3>,
-                 Tags::FieldA<DataVector, 3>, Tags::FieldB<DataVector, 3>,
-                 Tags::FieldD<DataVector, 3>, Tags::FieldP<DataVector, 3>>;
-  auto analytic_values = call_with_dynamic_type<
-      tuples::TaggedTuple<
-          Tags::ConformalMetric<DataVector, 3>,
-          Tags::ConformalFactor<DataVector>, Tags::ATilde<DataVector, 3>,
-          gr::Tags::TraceExtrinsicCurvature<DataVector>,
-          Tags::Theta<DataVector>, Tags::GammaHat<DataVector, 3>,
-          gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
-          Tags::AuxiliaryShiftB<DataVector, 3>, Tags::FieldA<DataVector, 3>,
-          Tags::FieldB<DataVector, 3>, Tags::FieldD<DataVector, 3>,
-          Tags::FieldP<DataVector, 3>>,
-      Ccz4::Solutions::all_solutions>(
-      analytic_prescription_.get(),
-      [&coords, &time](const auto* const initial_data) {
-        if constexpr (is_analytic_solution_v<
-                          std::decay_t<decltype(*initial_data)>>) {
-          return initial_data->variables(coords, time, all_tags{});
-        } else if constexpr (evolution::is_numeric_initial_data_v<
-                                 std::decay_t<decltype(*initial_data)>>) {
-          ERROR(
-              "Cannot currently use numeric initial data as an analytic "
-              "prescription for boundary conditions.");
-        } else {
-          (void)time;
-          return initial_data->variables(coords, all_tags{});
-        }
-      });
-
-  const auto& analytic_conformal_metric =
-      get<Tags::ConformalMetric<DataVector, 3>>(analytic_values);
-  const auto& analytic_conformal_factor =
-      get<Tags::ConformalFactor<DataVector>>(analytic_values);
-  const auto& analytic_a_tilde =
-      get<Tags::ATilde<DataVector, 3>>(analytic_values);
-  const auto& analytic_trace_extrinsic_curvature =
-      get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(analytic_values);
-  const auto& analytic_theta = get<Tags::Theta<DataVector>>(analytic_values);
-  const auto& analytic_gamma_hat =
-      get<Tags::GammaHat<DataVector, 3>>(analytic_values);
-  const auto& analytic_lapse =
-      get<gr::Tags::Lapse<DataVector>>(analytic_values);
-  const auto& analytic_shift =
-      get<gr::Tags::Shift<DataVector, 3>>(analytic_values);
-  const auto& analytic_auxiliary_shift_b =
-      get<Tags::AuxiliaryShiftB<DataVector, 3>>(analytic_values);
-  const auto& analytic_field_a =
-      get<Tags::FieldA<DataVector, 3>>(analytic_values);
-  const auto& analytic_field_b =
-      get<Tags::FieldB<DataVector, 3>>(analytic_values);
-  const auto& analytic_field_d =
-      get<Tags::FieldD<DataVector, 3>>(analytic_values);
-  const auto& analytic_field_p =
-      get<Tags::FieldP<DataVector, 3>>(analytic_values);
-
-  // Phase A (deferred): Set exterior metric/gauge fields
-  if (prescribe_analytic_second_order_fields_) {
-    *conformal_metric = analytic_conformal_metric;
-    *conformal_factor = analytic_conformal_factor;
-    *lapse = analytic_lapse;
-    *shift = analytic_shift;
-  } else {
-    *conformal_metric = interior_conformal_metric;
-    *conformal_factor = interior_conformal_factor;
-    *lapse = interior_lapse;
-    *shift = interior_shift;
-  }
-
-  // E2: Reconstruct analytic spatial derivatives from analytic auxiliary fields
-  tnsr::ijj<DataVector, Dim, Frame::Inertial> analytic_d_conformal_metric{};
-  ::tenex::evaluate<ti::k, ti::i, ti::j>(
-      make_not_null(&analytic_d_conformal_metric),
-      2.0 * analytic_field_d(ti::k, ti::i, ti::j));
-
-  tnsr::i<DataVector, Dim, Frame::Inertial> analytic_d_conformal_factor{};
-  ::tenex::evaluate<ti::i>(
-      make_not_null(&analytic_d_conformal_factor),
-      analytic_conformal_factor() * analytic_field_p(ti::i));
-
-  tnsr::i<DataVector, Dim, Frame::Inertial> analytic_d_lapse{};
-  ::tenex::evaluate<ti::i>(make_not_null(&analytic_d_lapse),
-                           analytic_lapse() * analytic_field_a(ti::i));
-
-  tnsr::iJ<DataVector, Dim, Frame::Inertial> analytic_d_shift{};
-  ::tenex::evaluate<ti::i, ti::J>(make_not_null(&analytic_d_shift),
-                                  analytic_field_b(ti::i, ti::J));
-
-  // E3: Compute analytic characteristic fields using same unit normal
-  const auto analytic_char_fields = ::Ccz4::fd::characteristic_fields(
-      unit_normal_one_form, analytic_conformal_metric,
-      analytic_conformal_factor, analytic_lapse, analytic_shift,
-      analytic_trace_extrinsic_curvature, analytic_a_tilde, analytic_theta,
-      analytic_gamma_hat, analytic_auxiliary_shift_b,
-      analytic_d_conformal_metric, analytic_d_conformal_factor,
-      analytic_d_lapse, analytic_d_shift, f);
-
-  // E4: Replace incoming (or outgoing, if prescribe_outgoing_) modes with
-  // analytic values.
-  using namespace ::Ccz4::fd::Tags;
-
-  // Access interior characteristic fields (mutable)
-  auto& u_tnsr_plus =
-      get<UTensorPlus<DataVector, Dim, Frame::Inertial>>(char_fields);
-  auto& u_tnsr_minus =
-      get<UTensorMinus<DataVector, Dim, Frame::Inertial>>(char_fields);
-  auto& u_vector1_zero =
-      get<UVector1Zero<DataVector, Dim, Frame::Inertial>>(char_fields);
-  auto& u_vector2_plus =
-      get<UVector2Plus<DataVector, Dim, Frame::Inertial>>(char_fields);
-  auto& u_vector2_minus =
-      get<UVector2Minus<DataVector, Dim, Frame::Inertial>>(char_fields);
-  auto& u_vector3_plus =
-      get<UVector3Plus<DataVector, Dim, Frame::Inertial>>(char_fields);
-  auto& u_vector3_minus =
-      get<UVector3Minus<DataVector, Dim, Frame::Inertial>>(char_fields);
-  auto& u_scalar1_zero = get<UScalar1Zero<DataVector>>(char_fields);
-  auto& u_scalar2_plus = get<UScalar2Plus<DataVector>>(char_fields);
-  auto& u_scalar2_minus = get<UScalar2Minus<DataVector>>(char_fields);
-  auto& u_scalar3_plus = get<UScalar3Plus<DataVector>>(char_fields);
-  auto& u_scalar3_minus = get<UScalar3Minus<DataVector>>(char_fields);
-  auto& u_scalar4_plus = get<UScalar4Plus<DataVector>>(char_fields);
-  auto& u_scalar4_minus = get<UScalar4Minus<DataVector>>(char_fields);
-  auto& u_scalar5_plus = get<UScalar5Plus<DataVector>>(char_fields);
-  auto& u_scalar5_minus = get<UScalar5Minus<DataVector>>(char_fields);
-
-  // Access analytic characteristic fields (const)
-  const auto& analytic_u_tnsr_plus =
-      get<UTensorPlus<DataVector, Dim, Frame::Inertial>>(analytic_char_fields);
-  const auto& analytic_u_tnsr_minus =
-      get<UTensorMinus<DataVector, Dim, Frame::Inertial>>(analytic_char_fields);
-  const auto& analytic_u_vector1_zero =
-      get<UVector1Zero<DataVector, Dim, Frame::Inertial>>(analytic_char_fields);
-  const auto& analytic_u_vector2_plus =
-      get<UVector2Plus<DataVector, Dim, Frame::Inertial>>(analytic_char_fields);
-  const auto& analytic_u_vector2_minus =
-      get<UVector2Minus<DataVector, Dim, Frame::Inertial>>(
-          analytic_char_fields);
-  const auto& analytic_u_vector3_plus =
-      get<UVector3Plus<DataVector, Dim, Frame::Inertial>>(analytic_char_fields);
-  const auto& analytic_u_vector3_minus =
-      get<UVector3Minus<DataVector, Dim, Frame::Inertial>>(
-          analytic_char_fields);
-  const auto& analytic_u_scalar1_zero =
-      get<UScalar1Zero<DataVector>>(analytic_char_fields);
-  const auto& analytic_u_scalar2_plus =
-      get<UScalar2Plus<DataVector>>(analytic_char_fields);
-  const auto& analytic_u_scalar2_minus =
-      get<UScalar2Minus<DataVector>>(analytic_char_fields);
-  const auto& analytic_u_scalar3_plus =
-      get<UScalar3Plus<DataVector>>(analytic_char_fields);
-  const auto& analytic_u_scalar3_minus =
-      get<UScalar3Minus<DataVector>>(analytic_char_fields);
-  const auto& analytic_u_scalar4_plus =
-      get<UScalar4Plus<DataVector>>(analytic_char_fields);
-  const auto& analytic_u_scalar4_minus =
-      get<UScalar4Minus<DataVector>>(analytic_char_fields);
-  const auto& analytic_u_scalar5_plus =
-      get<UScalar5Plus<DataVector>>(analytic_char_fields);
-  const auto& analytic_u_scalar5_minus =
-      get<UScalar5Minus<DataVector>>(analytic_char_fields);
-
-  if (not prescribe_outgoing_) {
-    // Normal mode: replace INCOMING modes with analytic values
-
-    // UTensorMinus (speed[1], always incoming for outward boundaries)
-    u_tnsr_minus = analytic_u_tnsr_minus;
-
-    // UVector1Zero (speed[2] = -beta^n, conditionally incoming)
-    for (size_t s = 0; s < num_pts; ++s) {
-      if (char_speeds[2][s] < 0.0) {
-        for (size_t i = 0; i < Dim; ++i) {
-          u_vector1_zero.get(i)[s] = analytic_u_vector1_zero.get(i)[s];
-        }
-      }
-    }
-
-    // UVector2Minus (speed[4], always incoming)
-    u_vector2_minus = analytic_u_vector2_minus;
-
-    // UVector3Minus (speed[6], always incoming)
-    u_vector3_minus = analytic_u_vector3_minus;
-
-    // UScalar1Zero (speed[7] = -beta^n, conditionally incoming)
-    for (size_t s = 0; s < num_pts; ++s) {
-      if (char_speeds[7][s] < 0.0) {
-        get(u_scalar1_zero)[s] = get(analytic_u_scalar1_zero)[s];
-      }
-    }
-
-    // UScalar2Minus (speed[9], always incoming)
-    u_scalar2_minus = analytic_u_scalar2_minus;
-
-    // UScalar3Minus (speed[11], always incoming)
-    u_scalar3_minus = analytic_u_scalar3_minus;
-
-    // UScalar4Minus (speed[13], always incoming)
-    u_scalar4_minus = analytic_u_scalar4_minus;
-
-    // UScalar5Minus (speed[15], always incoming)
-    u_scalar5_minus = analytic_u_scalar5_minus;
-  } else {
-    // Kill-switch mode: replace OUTGOING modes with analytic values
-
-    // UTensorPlus (speed[0], always outgoing for outward boundaries)
-    u_tnsr_plus = analytic_u_tnsr_plus;
-
-    // UVector1Zero (speed[2] = -beta^n, outgoing when speed >= 0)
-    for (size_t s = 0; s < num_pts; ++s) {
-      if (char_speeds[2][s] >= 0.0) {
-        for (size_t i = 0; i < Dim; ++i) {
-          u_vector1_zero.get(i)[s] = analytic_u_vector1_zero.get(i)[s];
-        }
-      }
-    }
-
-    // UVector2Plus (speed[3], always outgoing)
-    u_vector2_plus = analytic_u_vector2_plus;
-
-    // UVector3Plus (speed[5], always outgoing)
-    u_vector3_plus = analytic_u_vector3_plus;
-
-    // UScalar1Zero (speed[7] = -beta^n, outgoing when speed >= 0)
-    for (size_t s = 0; s < num_pts; ++s) {
-      if (char_speeds[7][s] >= 0.0) {
-        get(u_scalar1_zero)[s] = get(analytic_u_scalar1_zero)[s];
-      }
-    }
-
-    // UScalar2Plus (speed[8], always outgoing)
-    u_scalar2_plus = analytic_u_scalar2_plus;
-
-    // UScalar3Plus (speed[10], always outgoing)
-    u_scalar3_plus = analytic_u_scalar3_plus;
-
-    // UScalar4Plus (speed[12], always outgoing)
-    u_scalar4_plus = analytic_u_scalar4_plus;
-
-    // UScalar5Plus (speed[14], always outgoing)
-    u_scalar5_plus = analytic_u_scalar5_plus;
-  }
-
-  // ============================================================
-  // Phase F: Inverse characteristic transform
-  // ============================================================
-  const auto evolved_space =
-      ::Ccz4::fd::evolved_space_from_characteristic_fields(
-          u_tnsr_plus, u_tnsr_minus, u_vector1_zero, u_vector2_plus,
-          u_vector2_minus, u_vector3_plus, u_vector3_minus, u_scalar1_zero,
-          u_scalar2_plus, u_scalar2_minus, u_scalar3_plus, u_scalar3_minus,
-          u_scalar4_plus, u_scalar4_minus, u_scalar5_plus, u_scalar5_minus,
-          unit_normal_one_form, interior_conformal_metric,
-          interior_conformal_factor, interior_lapse, interior_shift, f);
-
-  // ============================================================
-  // Phase G: Write exterior state
-  // ============================================================
-  using DnCM =
-      ::Ccz4::fd::Tags::DnConformalMetric<DataVector, Dim, Frame::Inertial>;
-  using DnL = ::Ccz4::fd::Tags::DnLapse<DataVector>;
-  using DnS = ::Ccz4::fd::Tags::DnShift<DataVector, Dim, Frame::Inertial>;
-  using DnCF = ::Ccz4::fd::Tags::DnConformalFactor<DataVector>;
-
-  // Directly from inverse transform (evolved variables with independent BC):
+  // Evolved variables from inverse transform
   *a_tilde = get<::Ccz4::Tags::ATilde<DataVector, Dim, Frame::Inertial>>(
-      evolved_space);
+      result.evolved_space);
   *trace_extrinsic_curvature =
-      get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(evolved_space);
-  *theta = get<::Ccz4::Tags::Theta<DataVector>>(evolved_space);
+      get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(result.evolved_space);
+  *theta = get<::Ccz4::Tags::Theta<DataVector>>(result.evolved_space);
   *gamma_hat = get<::Ccz4::Tags::GammaHat<DataVector, Dim, Frame::Inertial>>(
-      evolved_space);
+      result.evolved_space);
   *auxiliary_shift_b =
       get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, Dim, Frame::Inertial>>(
-          evolved_space);
+          result.evolved_space);
 
-  // Normal derivatives from inverse transform
-  const auto& dn_conformal_metric = get<DnCM>(evolved_space);
-  const auto& dn_lapse = get<DnL>(evolved_space);
-  const auto& dn_shift = get<DnS>(evolved_space);
-  const auto& dn_conformal_factor = get<DnCF>(evolved_space);
+  // Auxiliary fields from reconstruction
+  *field_a = std::move(result.field_a);
+  *field_b = std::move(result.field_b);
+  *field_d = std::move(result.field_d);
+  *field_p = std::move(result.field_p);
 
-  // Reconstruct auxiliary fields from normal derivatives.
-  // The full spatial derivative on the exterior is:
-  //   d_i u_ext = q^k_i d_k u_int + n_i * dn_u_ext
-  // Equivalently:
-  //   d_i u_ext = d_i u_int - n_i*(n^k d_k u_int) + n_i * dn_u_ext
-
-  // n^k d_lapse_k (scalar contraction)
-  Scalar<DataVector> n_dot_d_lapse{};
-  ::tenex::evaluate(make_not_null(&n_dot_d_lapse),
-                    unit_normal_vector(ti::I) * d_lapse(ti::i));
-
-  // n^k d_cf_k (scalar contraction)
-  Scalar<DataVector> n_dot_d_cf{};
-  ::tenex::evaluate(make_not_null(&n_dot_d_cf),
-                    unit_normal_vector(ti::I) * d_conformal_factor(ti::i));
-
-  // field_a_i_ext = (d_lapse_i - n_i*n^k*d_lapse_k + n_i*dn_lapse) / lapse
-  ::tenex::evaluate<ti::i>(
-      field_a, (d_lapse(ti::i) - unit_normal_one_form(ti::i) * n_dot_d_lapse() +
-                unit_normal_one_form(ti::i) * dn_lapse()) /
-                   interior_lapse());
-
-  // field_p_i_ext = (d_cf_i - n_i*n^k*d_cf_k + n_i*dn_cf) / phi
-  ::tenex::evaluate<ti::i>(
-      field_p,
-      (d_conformal_factor(ti::i) - unit_normal_one_form(ti::i) * n_dot_d_cf() +
-       unit_normal_one_form(ti::i) * dn_conformal_factor()) /
-          interior_conformal_factor());
-
-  // n^m d_conformal_metric_mjk
-  tnsr::ii<DataVector, Dim, Frame::Inertial> n_dot_d_cm{};
-  ::tenex::evaluate<ti::j, ti::k>(
-      make_not_null(&n_dot_d_cm),
-      unit_normal_vector(ti::M) * d_conformal_metric(ti::m, ti::j, ti::k));
-
-  // field_d_ijk_ext = 0.5*(d_cm_ijk - n_i*n^m*d_cm_mjk + n_i*dn_cm_jk)
-  ::tenex::evaluate<ti::i, ti::j, ti::k>(
-      field_d,
-      0.5 * (d_conformal_metric(ti::i, ti::j, ti::k) -
-             unit_normal_one_form(ti::i) * n_dot_d_cm(ti::j, ti::k) +
-             unit_normal_one_form(ti::i) * dn_conformal_metric(ti::j, ti::k)));
-
-  // n^m d_shift_mJ
-  tnsr::I<DataVector, Dim, Frame::Inertial> n_dot_d_shift{};
-  ::tenex::evaluate<ti::J>(make_not_null(&n_dot_d_shift),
-                           unit_normal_vector(ti::M) * d_shift(ti::m, ti::J));
-
-  // field_b_iJ_ext = d_shift_iJ - n_i*n^m*d_shift_mJ + n_i*dn_shift_J
-  ::tenex::evaluate<ti::i, ti::J>(
-      field_b, d_shift(ti::i, ti::J) -
-                   unit_normal_one_form(ti::i) * n_dot_d_shift(ti::J) +
-                   unit_normal_one_form(ti::i) * dn_shift(ti::J));
-
-  // Boundary mode exterior values: zero (corrections are zero for these tags)
+  // Boundary mode exterior values: zero
   *bm_u_scalar3_minus =
       make_with_value<Scalar<DataVector>>(get(interior_conformal_factor), 0.0);
   for (auto& component : *bm_u_vector2_minus) {
@@ -593,6 +752,208 @@ std::optional<std::string> DirichletCharacteristics::dg_ghost(
   for (auto& component : *bm_u_tensor_minus) {
     component = 0.0;
   }
+
+  // Boundary second-order field exterior values: zero jump
+  *boundary_conformal_metric = interior_boundary_conformal_metric;
+  *boundary_conformal_factor = interior_boundary_conformal_factor;
+  *boundary_lapse = interior_boundary_lapse;
+  *boundary_shift = interior_boundary_shift;
+
+  return {};
+}
+
+std::optional<std::string> DirichletCharacteristics::dg_time_derivative(
+    const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+        dt_conformal_metric_correction,
+    const gsl::not_null<Scalar<DataVector>*> dt_conformal_factor_correction,
+    const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+        dt_a_tilde_correction,
+    const gsl::not_null<Scalar<DataVector>*>
+        dt_trace_extrinsic_curvature_correction,
+    const gsl::not_null<Scalar<DataVector>*> dt_theta_correction,
+    const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
+        dt_gamma_hat_correction,
+    const gsl::not_null<Scalar<DataVector>*> dt_lapse_correction,
+    const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
+        dt_shift_correction,
+    const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
+        dt_auxiliary_shift_b_correction,
+    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
+        dt_field_a_correction,
+    const gsl::not_null<tnsr::iJ<DataVector, 3, Frame::Inertial>*>
+        dt_field_b_correction,
+    const gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*>
+        dt_field_d_correction,
+    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
+        dt_field_p_correction,
+    const gsl::not_null<Scalar<DataVector>*> dt_u_scalar3_minus_correction,
+    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
+        dt_u_vector2_minus_correction,
+    const gsl::not_null<Scalar<DataVector>*> dt_u_scalar2_minus_correction,
+    const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+        dt_u_tensor_minus_correction,
+    const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+        dt_boundary_conformal_metric_correction,
+    const gsl::not_null<Scalar<DataVector>*>
+        dt_boundary_conformal_factor_correction,
+    const gsl::not_null<Scalar<DataVector>*> dt_boundary_lapse_correction,
+    const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
+        dt_boundary_shift_correction,
+    const std::optional<
+        tnsr::I<DataVector, 3, Frame::Inertial>>& /*face_mesh_velocity*/,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
+    const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_conformal_metric,
+    const Scalar<DataVector>& interior_conformal_factor,
+    const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_a_tilde,
+    const Scalar<DataVector>& interior_trace_extrinsic_curvature,
+    const Scalar<DataVector>& interior_theta,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& interior_gamma_hat,
+    const Scalar<DataVector>& interior_lapse,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& interior_shift,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& interior_auxiliary_shift_b,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& interior_field_a,
+    const tnsr::iJ<DataVector, 3, Frame::Inertial>& interior_field_b,
+    const tnsr::ijj<DataVector, 3, Frame::Inertial>& interior_field_d,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& interior_field_p,
+    const Scalar<DataVector>& /*interior_u_scalar3_minus*/,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& /*interior_u_vector2_minus*/,
+    const Scalar<DataVector>& /*interior_u_scalar2_minus*/,
+    const tnsr::ii<DataVector, 3, Frame::Inertial>& /*interior_u_tensor_minus*/,
+    const tnsr::ii<DataVector, 3, Frame::Inertial>&
+        interior_boundary_conformal_metric,
+    const Scalar<DataVector>& interior_boundary_conformal_factor,
+    const Scalar<DataVector>& interior_boundary_lapse,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& interior_boundary_shift,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& coords, const double time,
+    const bool evolve_lapse_and_shift) const {
+  static constexpr size_t Dim = 3;
+  static constexpr double f_val = ::Ccz4::fd::System::f;
+  static constexpr bool shifting_shift = ::Ccz4::fd::System::shifting_shift;
+
+  ASSERT(evolve_lapse_and_shift,
+         "DirichletCharacteristics BC is not implemented"
+         " when lapse and shift are not evolved");
+
+  // Zero all 17 original evolved + auxiliary dt corrections
+  for (auto& component : *dt_conformal_metric_correction) {
+    component = 0.0;
+  }
+  get(*dt_conformal_factor_correction) = 0.0;
+  for (auto& component : *dt_a_tilde_correction) {
+    component = 0.0;
+  }
+  get(*dt_trace_extrinsic_curvature_correction) = 0.0;
+  get(*dt_theta_correction) = 0.0;
+  for (auto& component : *dt_gamma_hat_correction) {
+    component = 0.0;
+  }
+  get(*dt_lapse_correction) = 0.0;
+  for (auto& component : *dt_shift_correction) {
+    component = 0.0;
+  }
+  for (auto& component : *dt_auxiliary_shift_b_correction) {
+    component = 0.0;
+  }
+  for (auto& component : *dt_field_a_correction) {
+    component = 0.0;
+  }
+  for (auto& component : *dt_field_b_correction) {
+    component = 0.0;
+  }
+  for (auto& component : *dt_field_d_correction) {
+    component = 0.0;
+  }
+  for (auto& component : *dt_field_p_correction) {
+    component = 0.0;
+  }
+  // Zero boundary mode dt corrections
+  get(*dt_u_scalar3_minus_correction) = 0.0;
+  for (auto& component : *dt_u_vector2_minus_correction) {
+    component = 0.0;
+  }
+  get(*dt_u_scalar2_minus_correction) = 0.0;
+  for (auto& component : *dt_u_tensor_minus_correction) {
+    component = 0.0;
+  }
+
+  if (copy_second_order_fields_from_interior_) {
+    // No boundary-integrated evolution: zero all boundary dt corrections
+    for (auto& component : *dt_boundary_conformal_metric_correction) {
+      component = 0.0;
+    }
+    get(*dt_boundary_conformal_factor_correction) = 0.0;
+    get(*dt_boundary_lapse_correction) = 0.0;
+    for (auto& component : *dt_boundary_shift_correction) {
+      component = 0.0;
+    }
+    return {};
+  }
+
+  // Boundary-integrated evolution: redo characteristic decomposition with
+  // boundary-integrated four fields as coefficients, then compute dt.
+
+  // Compute boundary unit normal from boundary-integrated metric
+  const auto [det_bnd_cm, inv_bnd_cm] =
+      determinant_and_inverse(interior_boundary_conformal_metric);
+
+  tnsr::II<DataVector, Dim, Frame::Inertial> inv_bnd_spatial_metric{};
+  ::tenex::evaluate<ti::I, ti::J>(make_not_null(&inv_bnd_spatial_metric),
+                                  interior_boundary_conformal_factor() *
+                                      interior_boundary_conformal_factor() *
+                                      inv_bnd_cm(ti::I, ti::J));
+
+  const size_t num_pts = get(interior_conformal_factor).size();
+  const Scalar<DataVector> bnd_mag_sq =
+      dot_product(normal_covector, normal_covector, inv_bnd_spatial_metric);
+  const DataVector bnd_inv_mag = 1.0 / sqrt(get(bnd_mag_sq));
+
+  tnsr::i<DataVector, Dim, Frame::Inertial> boundary_unit_normal_one_form(
+      num_pts);
+  for (size_t i = 0; i < Dim; ++i) {
+    boundary_unit_normal_one_form.get(i) = normal_covector.get(i) * bnd_inv_mag;
+  }
+
+  tnsr::I<DataVector, Dim, Frame::Inertial> boundary_unit_normal_vector{};
+  ::tenex::evaluate<ti::I>(make_not_null(&boundary_unit_normal_vector),
+                           inv_bnd_spatial_metric(ti::I, ti::J) *
+                               boundary_unit_normal_one_form(ti::j));
+
+  // Run the full characteristic decomposition pipeline
+  auto result = characteristic_decomposition_pipeline(
+      *analytic_prescription_, normal_covector, interior_conformal_metric,
+      interior_conformal_factor, interior_a_tilde,
+      interior_trace_extrinsic_curvature, interior_theta, interior_gamma_hat,
+      interior_lapse, interior_shift, interior_auxiliary_shift_b,
+      interior_field_a, interior_field_b, interior_field_d, interior_field_p,
+      interior_boundary_conformal_metric, interior_boundary_conformal_factor,
+      interior_boundary_lapse, interior_boundary_shift,
+      boundary_unit_normal_one_form, boundary_unit_normal_vector, coords, time,
+      f_val, prescribe_outgoing_);
+
+  // Extract char-mixed evolved variables
+  const auto& mixed_a_tilde =
+      get<::Ccz4::Tags::ATilde<DataVector, Dim, Frame::Inertial>>(
+          result.evolved_space);
+  const auto& mixed_K =
+      get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(result.evolved_space);
+  const auto& mixed_theta =
+      get<::Ccz4::Tags::Theta<DataVector>>(result.evolved_space);
+  const auto& mixed_b =
+      get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, Dim, Frame::Inertial>>(
+          result.evolved_space);
+
+  // Compute dt of second-order fields using char-mixed state.
+  // K0 = 0 hardcoded (see SetK0.hpp: always set to zero in SO-CCZ4).
+  const auto k_0 = make_with_value<Scalar<DataVector>>(
+      get(interior_boundary_conformal_factor), 0.0);
+  compute_dt_second_order_fields(
+      dt_boundary_conformal_metric_correction,
+      dt_boundary_conformal_factor_correction, dt_boundary_lapse_correction,
+      dt_boundary_shift_correction, interior_boundary_conformal_metric,
+      interior_boundary_conformal_factor, interior_boundary_lapse,
+      interior_boundary_shift, mixed_a_tilde, mixed_K, mixed_theta, mixed_b,
+      result.field_a, result.field_b, result.field_d, result.field_p, k_0,
+      f_val, shifting_shift);
 
   return {};
 }

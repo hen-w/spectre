@@ -95,6 +95,12 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
     const gsl::not_null<Scalar<DataVector>*> u_scalar2_minus,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
         u_tensor_minus,
+    const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+        boundary_conformal_metric,
+    const gsl::not_null<Scalar<DataVector>*> boundary_conformal_factor,
+    const gsl::not_null<Scalar<DataVector>*> boundary_lapse,
+    const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
+        boundary_shift,
     const std::optional<
         tnsr::I<DataVector, 3, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
@@ -115,6 +121,11 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
     const tnsr::i<DataVector, 3, Frame::Inertial>& interior_u_vector2_minus,
     const Scalar<DataVector>& interior_u_scalar2_minus,
     const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_u_tensor_minus,
+    const tnsr::ii<DataVector, 3, Frame::Inertial>&
+        interior_boundary_conformal_metric,
+    const Scalar<DataVector>& interior_boundary_conformal_factor,
+    const Scalar<DataVector>& interior_boundary_lapse,
+    const tnsr::I<DataVector, 3, Frame::Inertial>& interior_boundary_shift,
     const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
     [[maybe_unused]] const double time,
     [[maybe_unused]] const bool evolve_lapse_and_shift) const {
@@ -488,6 +499,12 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
       field_b, d_shift(ti::i, ti::J) -
                    unit_normal_one_form(ti::i) * n_dot_d_shift(ti::J) +
                    unit_normal_one_form(ti::i) * dn_shift(ti::J));
+
+  // Boundary second-order fields: copy from interior
+  *boundary_conformal_metric = interior_boundary_conformal_metric;
+  *boundary_conformal_factor = interior_boundary_conformal_factor;
+  *boundary_lapse = interior_boundary_lapse;
+  *boundary_shift = interior_boundary_shift;
 
   return {};
 }

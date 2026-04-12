@@ -55,19 +55,29 @@ struct System {
       ::Ccz4::fd::Tags::UScalar2Minus<DataVector>,
       ::Ccz4::fd::Tags::UTensorMinus<DataVector, 3, Frame::Inertial>>;
 
-  // Full evolved variables = original 9 + 4 boundary modes
+  // Boundary-integrated second-order fields for DirichletCharacteristics BC
+  using boundary_second_order_tags =
+      tmpl::list<::Ccz4::Tags::BoundaryConformalMetric<DataVector, 3>,
+                 ::Ccz4::Tags::BoundaryConformalFactor<DataVector>,
+                 ::Ccz4::Tags::BoundaryLapse<DataVector>,
+                 ::Ccz4::Tags::BoundaryShift<DataVector, 3>>;
+
+  // Full evolved variables = original 9 + 4 boundary modes + 4 boundary
+  // second-order fields
   using evolved_variables_tags =
-      tmpl::append<original_evolved_variables_tags, boundary_mode_tags>;
+      tmpl::append<original_evolved_variables_tags, boundary_mode_tags,
+                   boundary_second_order_tags>;
 
   // Variables whose spectral derivatives are computed by the DG infrastructure.
   // This includes all variables in variables_tag: original evolved + auxiliary
-  // + boundary modes. Boundary modes are ODE-evolved (spatially constant) so
+  // + boundary modes + boundary second-order fields. Boundary modes and
+  // boundary second-order fields are ODE-evolved (spatially constant) so
   // their derivatives are zero, but we include them here because the DG
   // infrastructure's moving-mesh code iterates over all variables and expects
   // derivatives for each.
   using gradient_variables =
       tmpl::append<original_evolved_variables_tags, auxiliary_variables_tags,
-                   boundary_mode_tags>;
+                   boundary_mode_tags, boundary_second_order_tags>;
 
   // variables_tag = gradient_variables (which is all tags in the correct order)
   using variables_tag = ::Tags::Variables<gradient_variables>;
