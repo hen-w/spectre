@@ -39,6 +39,18 @@ struct Phi : db::SimpleTag {
   using type = tnsr::i<DataVector, Dim, Frame::Inertial>;
 };
 
+/*!
+ * \brief Boundary-evolved copy of Psi, integrated via
+ * \f$\partial_t \text{BoundaryPsi} = -\Pi_{\text{boundary}}\f$.
+ *
+ * This variable lives in the volume Variables but has zero volume time
+ * derivative; it is driven purely by the boundary condition's
+ * `dg_time_derivative` correction.
+ */
+struct BoundaryPsi : db::SimpleTag {
+  using type = Scalar<DataVector>;
+};
+
 struct NormalDotPhi : db::SimpleTag {
   using type = Scalar<DataVector>;
 };

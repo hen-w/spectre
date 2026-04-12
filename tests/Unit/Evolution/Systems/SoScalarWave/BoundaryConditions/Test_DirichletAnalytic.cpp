@@ -105,8 +105,9 @@ void test() {
           helpers::Tags::PythonFunctionForErrorMessage<>,
           helpers::Tags::PythonFunctionName<SoScalarWave::Tags::Psi>,
           helpers::Tags::PythonFunctionName<SoScalarWave::Tags::Pi>,
-          helpers::Tags::PythonFunctionName<SoScalarWave::Tags::Phi<Dim>>>{
-          "error", "psi", "pi", "phi"},
+          helpers::Tags::PythonFunctionName<SoScalarWave::Tags::Phi<Dim>>,
+          helpers::Tags::PythonFunctionName<SoScalarWave::Tags::BoundaryPsi>>{
+          "error", "psi", "pi", "phi", "boundary_psi"},
       "DirichletAnalytic:\n"
       "  AnalyticPrescription:\n"
       "    SoPlaneWave:\n"

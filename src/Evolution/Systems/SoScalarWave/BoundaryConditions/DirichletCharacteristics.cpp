@@ -11,6 +11,7 @@
 #include "Evolution/Systems/SoScalarWave/Characteristics.hpp"
 #include "PointwiseFunctions/AnalyticSolutions/WaveEquation/Factory.hpp"
 #include "Utilities/CallWithDynamicType.hpp"
+#include "Utilities/ErrorHandling/Error.hpp"
 #include "Utilities/GenerateInstantiations.hpp"
 
 namespace SoScalarWave::BoundaryConditions {
@@ -19,7 +20,8 @@ DirichletCharacteristics<Dim>::DirichletCharacteristics(
     const DirichletCharacteristics& rhs)
     : BoundaryCondition<Dim>{dynamic_cast<const BoundaryCondition<Dim>&>(rhs)},
       analytic_prescription_(rhs.analytic_prescription_->get_clone()),
-      prescribe_zero_speed_modes_(rhs.prescribe_zero_speed_modes_) {}
+      prescribe_zero_speed_modes_(rhs.prescribe_zero_speed_modes_),
+      copy_psi_from_interior_(rhs.copy_psi_from_interior_) {}
 
 template <size_t Dim>
 DirichletCharacteristics<Dim>& DirichletCharacteristics<Dim>::operator=(
@@ -29,6 +31,7 @@ DirichletCharacteristics<Dim>& DirichletCharacteristics<Dim>::operator=(
   }
   analytic_prescription_ = rhs.analytic_prescription_->get_clone();
   prescribe_zero_speed_modes_ = rhs.prescribe_zero_speed_modes_;
+  copy_psi_from_interior_ = rhs.copy_psi_from_interior_;
   return *this;
 }
 
@@ -40,9 +43,18 @@ DirichletCharacteristics<Dim>::DirichletCharacteristics(
 template <size_t Dim>
 DirichletCharacteristics<Dim>::DirichletCharacteristics(
     std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription,
-    const bool prescribe_zero_speed_modes)
+    const bool prescribe_zero_speed_modes, const bool copy_psi_from_interior)
     : analytic_prescription_(std::move(analytic_prescription)),
-      prescribe_zero_speed_modes_(prescribe_zero_speed_modes) {}
+      prescribe_zero_speed_modes_(prescribe_zero_speed_modes),
+      copy_psi_from_interior_(copy_psi_from_interior) {
+  if (prescribe_zero_speed_modes_ and copy_psi_from_interior_) {
+    ERROR(
+        "DirichletCharacteristics: CopyPsiFromInterior and "
+        "PrescribeZeroSpeedModes cannot both be true. "
+        "CopyPsiFromInterior copies Psi from the interior evolved value, "
+        "while PrescribeZeroSpeedModes sets VPsi from the analytic solution.");
+  }
+}
 
 template <size_t Dim>
 std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>
@@ -55,6 +67,7 @@ void DirichletCharacteristics<Dim>::pup(PUP::er& p) {
   BoundaryCondition<Dim>::pup(p);
   p | analytic_prescription_;
   p | prescribe_zero_speed_modes_;
+  p | copy_psi_from_interior_;
 }
 
 namespace {
@@ -75,27 +88,18 @@ void mix_scalar_mode(const gsl::not_null<DataVector*> result,
     }
   }
 }
-}  // namespace
 
+// Evaluate the analytic solution at the face coordinates
 template <size_t Dim>
-std::optional<std::string> DirichletCharacteristics<Dim>::dg_ghost(
-    const gsl::not_null<Scalar<DataVector>*> psi,
-    const gsl::not_null<Scalar<DataVector>*> pi,
-    const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> phi,
-    const std::optional<
-        tnsr::I<DataVector, Dim, Frame::Inertial>>& face_mesh_velocity,
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
-    const Scalar<DataVector>& interior_psi,
-    const Scalar<DataVector>& interior_pi,
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& interior_phi,
+auto evaluate_analytic(
+    const evolution::initial_data::InitialData& analytic_prescription,
     const tnsr::I<DataVector, Dim, Frame::Inertial>& coords,
-    [[maybe_unused]] const double time) const {
-  // 1. Evaluate analytic solution at face
-  auto boundary_values = call_with_dynamic_type<
+    const double time) {
+  return call_with_dynamic_type<
       tuples::TaggedTuple<SoScalarWave::Tags::Psi, SoScalarWave::Tags::Pi,
                           SoScalarWave::Tags::Phi<Dim>>,
       tmpl::append<SoScalarWave::Solutions::all_solutions<Dim>>>(
-      analytic_prescription_.get(),
+      &analytic_prescription,
       [&coords, &time](const auto* const analytic_solution_or_data) {
         if constexpr (is_analytic_solution_v<
                           std::decay_t<decltype(*analytic_solution_or_data)>>) {
@@ -111,7 +115,87 @@ std::optional<std::string> DirichletCharacteristics<Dim>::dg_ghost(
                          SoScalarWave::Tags::Phi<Dim>>{});
         }
       });
+}
 
+// Mix characteristic modes and return (v_plus, v_minus) after mixing
+template <size_t Dim>
+struct MixedCharData {
+  Scalar<DataVector> v_psi_ext;
+  Scalar<DataVector> v_plus_ext;
+  Scalar<DataVector> v_minus_ext;
+  tnsr::i<DataVector, Dim, Frame::Inertial> v_zero_ext;
+};
+
+template <size_t Dim>
+MixedCharData<Dim> mix_char_modes(
+    const Scalar<DataVector>& interior_psi,
+    const Scalar<DataVector>& interior_pi,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& interior_phi,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+    const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+        face_mesh_velocity,
+    const Scalar<DataVector>& analytic_psi,
+    const Scalar<DataVector>& analytic_pi,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& analytic_phi,
+    const bool prescribe_zero) {
+  const auto interior_char_fields = SoScalarWave::characteristic_fields(
+      interior_psi, interior_pi, interior_phi, normal_covector);
+  const auto analytic_char_fields = SoScalarWave::characteristic_fields(
+      analytic_psi, analytic_pi, analytic_phi, normal_covector);
+  const auto char_speeds =
+      SoScalarWave::characteristic_speeds(normal_covector, face_mesh_velocity);
+
+  const size_t num_points = get(interior_psi).size();
+
+  MixedCharData<Dim> result;
+  result.v_psi_ext = Scalar<DataVector>{num_points};
+  result.v_plus_ext = Scalar<DataVector>{num_points};
+  result.v_minus_ext = Scalar<DataVector>{num_points};
+  result.v_zero_ext = tnsr::i<DataVector, Dim, Frame::Inertial>{num_points};
+
+  mix_scalar_mode(
+      make_not_null(&get(result.v_psi_ext)), char_speeds[0],
+      get(get<SoScalarWave::Tags::VPsi>(interior_char_fields)),
+      get(get<SoScalarWave::Tags::VPsi>(analytic_char_fields)),
+      prescribe_zero);
+  mix_scalar_mode(
+      make_not_null(&get(result.v_plus_ext)), char_speeds[2],
+      get(get<SoScalarWave::Tags::VPlus>(interior_char_fields)),
+      get(get<SoScalarWave::Tags::VPlus>(analytic_char_fields)),
+      prescribe_zero);
+  mix_scalar_mode(
+      make_not_null(&get(result.v_minus_ext)), char_speeds[3],
+      get(get<SoScalarWave::Tags::VMinus>(interior_char_fields)),
+      get(get<SoScalarWave::Tags::VMinus>(analytic_char_fields)),
+      prescribe_zero);
+  for (size_t d = 0; d < Dim; ++d) {
+    mix_scalar_mode(
+        make_not_null(&result.v_zero_ext.get(d)), char_speeds[1],
+        get<SoScalarWave::Tags::VZero<Dim>>(interior_char_fields).get(d),
+        get<SoScalarWave::Tags::VZero<Dim>>(analytic_char_fields).get(d),
+        prescribe_zero);
+  }
+  return result;
+}
+}  // namespace
+
+template <size_t Dim>
+std::optional<std::string> DirichletCharacteristics<Dim>::dg_ghost(
+    const gsl::not_null<Scalar<DataVector>*> psi,
+    const gsl::not_null<Scalar<DataVector>*> pi,
+    const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> phi,
+    const gsl::not_null<Scalar<DataVector>*> boundary_psi,
+    const std::optional<
+        tnsr::I<DataVector, Dim, Frame::Inertial>>& face_mesh_velocity,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+    const Scalar<DataVector>& interior_psi,
+    const Scalar<DataVector>& interior_pi,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& interior_phi,
+    const Scalar<DataVector>& interior_boundary_psi,
+    const tnsr::I<DataVector, Dim, Frame::Inertial>& coords,
+    [[maybe_unused]] const double time) const {
+  const auto boundary_values =
+      evaluate_analytic<Dim>(*analytic_prescription_, coords, time);
   const auto& analytic_psi =
       get<SoScalarWave::Tags::Psi>(boundary_values);
   const auto& analytic_pi =
@@ -119,56 +203,84 @@ std::optional<std::string> DirichletCharacteristics<Dim>::dg_ghost(
   const auto& analytic_phi =
       get<SoScalarWave::Tags::Phi<Dim>>(boundary_values);
 
-  // 2. Compute characteristic fields for interior and analytic
-  const auto interior_char_fields = characteristic_fields(
-      interior_psi, interior_pi, interior_phi, normal_covector);
-  const auto analytic_char_fields = characteristic_fields(
-      analytic_psi, analytic_pi, analytic_phi, normal_covector);
+  const auto mixed = mix_char_modes<Dim>(
+      interior_psi, interior_pi, interior_phi, normal_covector,
+      face_mesh_velocity, analytic_psi, analytic_pi, analytic_phi,
+      prescribe_zero_speed_modes_);
 
-  // 3. Compute characteristic speeds (accounting for mesh velocity)
-  const auto char_speeds =
-      characteristic_speeds(normal_covector, face_mesh_velocity);
-  const auto& speed_vpsi = char_speeds[0];
-  const auto& speed_vzero = char_speeds[1];
-  const auto& speed_vplus = char_speeds[2];
-  const auto& speed_vminus = char_speeds[3];
-
-  // 4. Mix modes: outgoing from interior, incoming from analytic
-  const size_t num_points = get(interior_psi).size();
-
-  Scalar<DataVector> v_psi_ext{num_points};
-  mix_scalar_mode(make_not_null(&get(v_psi_ext)), speed_vpsi,
-                  get(get<Tags::VPsi>(interior_char_fields)),
-                  get(get<Tags::VPsi>(analytic_char_fields)),
-                  prescribe_zero_speed_modes_);
-
-  Scalar<DataVector> v_plus_ext{num_points};
-  mix_scalar_mode(make_not_null(&get(v_plus_ext)), speed_vplus,
-                  get(get<Tags::VPlus>(interior_char_fields)),
-                  get(get<Tags::VPlus>(analytic_char_fields)),
-                  prescribe_zero_speed_modes_);
-
-  Scalar<DataVector> v_minus_ext{num_points};
-  mix_scalar_mode(make_not_null(&get(v_minus_ext)), speed_vminus,
-                  get(get<Tags::VMinus>(interior_char_fields)),
-                  get(get<Tags::VMinus>(analytic_char_fields)),
-                  prescribe_zero_speed_modes_);
-
-  tnsr::i<DataVector, Dim, Frame::Inertial> v_zero_ext{num_points};
-  for (size_t d = 0; d < Dim; ++d) {
-    mix_scalar_mode(make_not_null(&v_zero_ext.get(d)), speed_vzero,
-                    get<Tags::VZero<Dim>>(interior_char_fields).get(d),
-                    get<Tags::VZero<Dim>>(analytic_char_fields).get(d),
-                    prescribe_zero_speed_modes_);
-  }
-
-  // 5. Inverse transform to evolved fields
   auto evolved = evolved_fields_from_characteristic_fields(
-      v_psi_ext, v_zero_ext, v_plus_ext, v_minus_ext, normal_covector);
+      mixed.v_psi_ext, mixed.v_zero_ext, mixed.v_plus_ext, mixed.v_minus_ext,
+      normal_covector);
 
-  *psi = get<Tags::Psi>(evolved);
+  // Ghost Psi selection:
+  //   CopyPsiFromInterior: use interior evolved Psi directly
+  //   PrescribeZeroSpeedModes: use char-decomposed Psi (VPsi from analytic)
+  //   Otherwise: use the time-integrated BoundaryPsi
+  if (copy_psi_from_interior_) {
+    *psi = interior_psi;
+  } else if (prescribe_zero_speed_modes_) {
+    *psi = get<Tags::Psi>(evolved);
+  } else {
+    *psi = interior_boundary_psi;
+  }
   *pi = get<Tags::Pi>(evolved);
   *phi = get<Tags::Phi<Dim>>(evolved);
+  // Ghost BoundaryPsi = interior value (zero jump -> zero flux correction)
+  *boundary_psi = interior_boundary_psi;
+
+  return std::nullopt;
+}
+
+template <size_t Dim>
+std::optional<std::string> DirichletCharacteristics<Dim>::dg_time_derivative(
+    const gsl::not_null<Scalar<DataVector>*> dt_psi_correction,
+    const gsl::not_null<Scalar<DataVector>*> dt_pi_correction,
+    const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
+        dt_phi_correction,
+    const gsl::not_null<Scalar<DataVector>*> dt_boundary_psi_correction,
+    const std::optional<
+        tnsr::I<DataVector, Dim, Frame::Inertial>>& face_mesh_velocity,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+    const Scalar<DataVector>& interior_psi,
+    const Scalar<DataVector>& interior_pi,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& interior_phi,
+    const Scalar<DataVector>& /*interior_boundary_psi*/,
+    const tnsr::I<DataVector, Dim, Frame::Inertial>& coords,
+    [[maybe_unused]] const double time) const {
+  // No corrections to Psi, Pi, or Phi from the time derivative path
+  get(*dt_psi_correction) = 0.0;
+  get(*dt_pi_correction) = 0.0;
+  for (size_t d = 0; d < Dim; ++d) {
+    dt_phi_correction->get(d) = 0.0;
+  }
+
+  if (copy_psi_from_interior_) {
+    // BoundaryPsi is not used; no time derivative correction needed
+    get(*dt_boundary_psi_correction) = 0.0;
+  } else {
+    // Compute Pi_boundary from characteristic decomposition and set
+    // dt_boundary_psi_correction = -Pi_boundary
+    const auto boundary_values =
+        evaluate_analytic<Dim>(*analytic_prescription_, coords, time);
+    const auto& analytic_psi =
+        get<SoScalarWave::Tags::Psi>(boundary_values);
+    const auto& analytic_pi =
+        get<SoScalarWave::Tags::Pi>(boundary_values);
+    const auto& analytic_phi =
+        get<SoScalarWave::Tags::Phi<Dim>>(boundary_values);
+
+    const auto mixed = mix_char_modes<Dim>(
+        interior_psi, interior_pi, interior_phi, normal_covector,
+        face_mesh_velocity, analytic_psi, analytic_pi, analytic_phi,
+        prescribe_zero_speed_modes_);
+
+    // Pi_boundary = (v_plus + v_minus) / 2
+    const DataVector pi_boundary =
+        0.5 * (get(mixed.v_plus_ext) + get(mixed.v_minus_ext));
+
+    // dt BoundaryPsi = -Pi_boundary
+    get(*dt_boundary_psi_correction) = -pi_boundary;
+  }
 
   return std::nullopt;
 }

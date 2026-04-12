@@ -145,12 +145,14 @@ struct OverwriteExternalBoundaryDt {
       Scalar<DataVector> dt_psi_correction{num_face_pts};
       Scalar<DataVector> dt_pi_correction{num_face_pts};
       tnsr::i<DataVector, Dim, Frame::Inertial> dt_phi_correction{num_face_pts};
+      Scalar<DataVector> dt_boundary_psi_correction{num_face_pts};
       const tnsr::i<DataVector, Dim, Frame::Inertial> unused_normal{
           num_face_pts, 0.0};
       td_bc->dg_time_derivative(
           make_not_null(&dt_psi_correction), make_not_null(&dt_pi_correction),
-          make_not_null(&dt_phi_correction), std::nullopt, unused_normal,
-          face_coords, get<dt_psi_tag>(current_dt_on_face),
+          make_not_null(&dt_phi_correction),
+          make_not_null(&dt_boundary_psi_correction), std::nullopt,
+          unused_normal, face_coords, get<dt_psi_tag>(current_dt_on_face),
           get<dt_pi_tag>(current_dt_on_face), time);
 
       // Build a full correction Variables (same tags as dt_variables_tag)

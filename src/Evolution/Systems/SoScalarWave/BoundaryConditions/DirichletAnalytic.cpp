@@ -54,6 +54,7 @@ std::optional<std::string> DirichletAnalytic<Dim>::dg_ghost(
     const gsl::not_null<Scalar<DataVector>*> psi,
     const gsl::not_null<Scalar<DataVector>*> pi,
     const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> phi,
+    const gsl::not_null<Scalar<DataVector>*> boundary_psi,
     const std::optional<
         tnsr::I<DataVector, Dim, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& /*normal_covector*/,
@@ -82,6 +83,9 @@ std::optional<std::string> DirichletAnalytic<Dim>::dg_ghost(
   *psi = get<SoScalarWave::Tags::Psi>(boundary_values);
   *pi = get<SoScalarWave::Tags::Pi>(boundary_values);
   *phi = get<SoScalarWave::Tags::Phi<Dim>>(boundary_values);
+  // Set ghost BoundaryPsi = analytic Psi. The LaxFriedrichs correction for
+  // BoundaryPsi is always zero, so this value has no effect.
+  *boundary_psi = *psi;
 
   return std::nullopt;
 }

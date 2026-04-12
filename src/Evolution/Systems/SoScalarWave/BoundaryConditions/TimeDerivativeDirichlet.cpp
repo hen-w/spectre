@@ -57,6 +57,7 @@ std::optional<std::string> TimeDerivativeDirichlet<Dim>::dg_time_derivative(
     const gsl::not_null<Scalar<DataVector>*> dt_pi_correction,
     const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
         dt_phi_correction,
+    const gsl::not_null<Scalar<DataVector>*> dt_boundary_psi_correction,
 
     const std::optional<
         tnsr::I<DataVector, Dim, Frame::Inertial>>& /*face_mesh_velocity*/,
@@ -101,10 +102,11 @@ std::optional<std::string> TimeDerivativeDirichlet<Dim>::dg_time_derivative(
       -get(volume_dt_pi) +
       get(get<::Tags::dt<SoScalarWave::Tags::Pi>>(analytic_dt_values));
 
-  // No correction to Phi
+  // No correction to Phi or BoundaryPsi
   for (size_t d = 0; d < Dim; ++d) {
     dt_phi_correction->get(d) = 0.0;
   }
+  get(*dt_boundary_psi_correction) = 0.0;
 
   return std::nullopt;
 }

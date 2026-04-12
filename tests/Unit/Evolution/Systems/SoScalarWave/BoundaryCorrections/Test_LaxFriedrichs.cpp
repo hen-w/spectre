@@ -35,6 +35,8 @@ void test_package_data(const gsl::not_null<std::mt19937*> gen) {
   const auto phi =
       make_with_random_values<tnsr::i<DataVector, Dim, Frame::Inertial>>(
           gen, make_not_null(&dist), num_pts);
+  const auto boundary_psi = make_with_random_values<Scalar<DataVector>>(
+      gen, make_not_null(&dist), num_pts);
   const auto normal_covector =
       make_with_random_values<tnsr::i<DataVector, Dim, Frame::Inertial>>(
           gen, make_not_null(&dist), num_pts);
@@ -46,8 +48,8 @@ void test_package_data(const gsl::not_null<std::mt19937*> gen) {
   Scalar<DataVector> packaged_normal_dot_phi{num_pts};
   correction.dg_package_data(make_not_null(&packaged_pi),
                              make_not_null(&packaged_normal_dot_phi), psi, pi,
-                             phi, normal_covector, std::nullopt, std::nullopt,
-                             Direction<Dim>::upper_xi());
+                             phi, boundary_psi, normal_covector, std::nullopt,
+                             std::nullopt, Direction<Dim>::upper_xi());
 
   // Check pi is just copied
   CHECK_ITERABLE_APPROX(get(packaged_pi), get(pi));
@@ -83,11 +85,12 @@ void test_boundary_terms(const gsl::not_null<std::mt19937*> gen) {
   Scalar<DataVector> psi_corr{num_pts};
   Scalar<DataVector> pi_corr{num_pts};
   tnsr::i<DataVector, Dim, Frame::Inertial> phi_corr{num_pts};
+  Scalar<DataVector> boundary_psi_corr{num_pts};
 
   correction.dg_boundary_terms(
       make_not_null(&psi_corr), make_not_null(&pi_corr),
-      make_not_null(&phi_corr), pi_int, ndphi_int, pi_ext, ndphi_ext,
-      dg::Formulation::StrongInertial);
+      make_not_null(&phi_corr), make_not_null(&boundary_psi_corr), pi_int,
+      ndphi_int, pi_ext, ndphi_ext, dg::Formulation::StrongInertial);
 
   // psi correction = 0
   CHECK_ITERABLE_APPROX(get(psi_corr), DataVector(num_pts, 0.0));
@@ -102,6 +105,9 @@ void test_boundary_terms(const gsl::not_null<std::mt19937*> gen) {
   for (size_t d = 0; d < Dim; ++d) {
     CHECK_ITERABLE_APPROX(phi_corr.get(d), DataVector(num_pts, 0.0));
   }
+
+  // boundary_psi correction = 0
+  CHECK_ITERABLE_APPROX(get(boundary_psi_corr), DataVector(num_pts, 0.0));
 }
 
 template <size_t Dim>
@@ -117,6 +123,8 @@ void test_auxiliary_package_data(const gsl::not_null<std::mt19937*> gen) {
   const auto phi =
       make_with_random_values<tnsr::i<DataVector, Dim, Frame::Inertial>>(
           gen, make_not_null(&dist), num_pts);
+  const auto boundary_psi = make_with_random_values<Scalar<DataVector>>(
+      gen, make_not_null(&dist), num_pts);
   const auto normal_covector =
       make_with_random_values<tnsr::i<DataVector, Dim, Frame::Inertial>>(
           gen, make_not_null(&dist), num_pts);
@@ -129,7 +137,7 @@ void test_auxiliary_package_data(const gsl::not_null<std::mt19937*> gen) {
 
   correction.dg_auxiliary_package_data(
       make_not_null(&packaged_psi), make_not_null(&psi_times_normal), psi, pi,
-      phi, normal_covector, std::nullopt, std::nullopt,
+      phi, boundary_psi, normal_covector, std::nullopt, std::nullopt,
       Direction<Dim>::upper_xi());
 
   // Check psi is just copied
@@ -167,11 +175,12 @@ void test_auxiliary_boundary_terms(const gsl::not_null<std::mt19937*> gen) {
   Scalar<DataVector> psi_corr{num_pts};
   Scalar<DataVector> pi_corr{num_pts};
   tnsr::i<DataVector, Dim, Frame::Inertial> phi_corr{num_pts};
+  Scalar<DataVector> boundary_psi_corr{num_pts};
 
   correction.dg_auxiliary_boundary_terms(
       make_not_null(&psi_corr), make_not_null(&pi_corr),
-      make_not_null(&phi_corr), psi_int, psn_int, psi_ext, psn_ext,
-      dg::Formulation::StrongInertial);
+      make_not_null(&phi_corr), make_not_null(&boundary_psi_corr), psi_int,
+      psn_int, psi_ext, psn_ext, dg::Formulation::StrongInertial);
 
   // psi correction = 0
   CHECK_ITERABLE_APPROX(get(psi_corr), DataVector(num_pts, 0.0));
@@ -187,6 +196,9 @@ void test_auxiliary_boundary_terms(const gsl::not_null<std::mt19937*> gen) {
         0.5 * tau2 * (get(psi_ext) - get(psi_int));
     CHECK_ITERABLE_APPROX(phi_corr.get(d), expected);
   }
+
+  // boundary_psi correction = 0
+  CHECK_ITERABLE_APPROX(get(boundary_psi_corr), DataVector(num_pts, 0.0));
 }
 
 template <size_t Dim>
@@ -213,11 +225,12 @@ void test_factory_creation() {
   const Scalar<DataVector> pi{{{{2.0}}}};
   tnsr::i<DataVector, Dim, Frame::Inertial> phi{npts, 0.0};
   phi.get(0) = 3.0;
+  const Scalar<DataVector> boundary_psi{{{{0.5}}}};
   tnsr::i<DataVector, Dim, Frame::Inertial> normal{npts, 0.0};
   normal.get(0) = 1.0;
   serialized.dg_package_data(make_not_null(&packaged_pi),
                              make_not_null(&packaged_ndphi), psi, pi, phi,
-                             normal, std::nullopt, std::nullopt,
+                             boundary_psi, normal, std::nullopt, std::nullopt,
                              Direction<Dim>::upper_xi());
   CHECK(get(packaged_pi)[0] == approx(2.0));
   CHECK(get(packaged_ndphi)[0] == approx(3.0));

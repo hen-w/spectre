@@ -109,6 +109,7 @@ class TimeDerivativeDirichlet final : public BoundaryCondition<Dim> {
       gsl::not_null<Scalar<DataVector>*> dt_pi_correction,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
           dt_phi_correction,
+      gsl::not_null<Scalar<DataVector>*> dt_boundary_psi_correction,
 
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           face_mesh_velocity,

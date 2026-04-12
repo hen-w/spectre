@@ -47,6 +47,7 @@ double LaxFriedrichs<Dim>::dg_package_data(
 
     const Scalar<DataVector>& /*psi*/, const Scalar<DataVector>& pi,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& phi,
+    const Scalar<DataVector>& /*boundary_psi*/,
 
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
     const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
@@ -69,6 +70,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
     const gsl::not_null<Scalar<DataVector>*> pi_boundary_correction,
     const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
         phi_boundary_correction,
+    const gsl::not_null<Scalar<DataVector>*> boundary_psi_boundary_correction,
 
     const Scalar<DataVector>& pi_int,
     const Scalar<DataVector>& normal_dot_phi_int,
@@ -85,6 +87,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
   for (size_t d = 0; d < Dim; ++d) {
     phi_boundary_correction->get(d) = 0.0;
   }
+  get(*boundary_psi_boundary_correction) = 0.0;
 }
 
 template <size_t Dim>
@@ -95,6 +98,7 @@ double LaxFriedrichs<Dim>::dg_auxiliary_package_data(
 
     const Scalar<DataVector>& psi, const Scalar<DataVector>& /*pi*/,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& /*phi*/,
+    const Scalar<DataVector>& /*boundary_psi*/,
 
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
     const std::optional<
@@ -114,6 +118,7 @@ void LaxFriedrichs<Dim>::dg_auxiliary_boundary_terms(
     const gsl::not_null<Scalar<DataVector>*> pi_boundary_correction,
     const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
         phi_boundary_correction,
+    const gsl::not_null<Scalar<DataVector>*> boundary_psi_boundary_correction,
 
     const Scalar<DataVector>& psi_int,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& psi_times_normal_int,
@@ -129,6 +134,7 @@ void LaxFriedrichs<Dim>::dg_auxiliary_boundary_terms(
         0.5 * (psi_times_normal_int.get(d) + psi_times_normal_ext.get(d)) -
         0.5 * tau2_ * (get(psi_ext) - get(psi_int));
   }
+  get(*boundary_psi_boundary_correction) = 0.0;
 }
 
 template <size_t Dim>

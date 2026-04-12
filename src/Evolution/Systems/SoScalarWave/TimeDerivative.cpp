@@ -25,12 +25,14 @@ evolution::dg::TimeDerivativeDecisions<Dim> TimeDerivative<Dim>::apply(
     gsl::not_null<Scalar<DataVector>*> dt_psi,
     gsl::not_null<Scalar<DataVector>*> dt_pi,
     gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> dt_phi,
+    gsl::not_null<Scalar<DataVector>*> dt_boundary_psi,
 
     // Partial derivative arguments. Listed in the system struct as
     // gradient_variables.
     const tnsr::i<DataVector, Dim, Frame::Inertial>& /*d_psi*/,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& d_pi,
     const tnsr::ij<DataVector, Dim, Frame::Inertial>& d_phi,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*d_boundary_psi*/,
 
     // Terms list in argument_tags above
     const Scalar<DataVector>& pi,
@@ -49,6 +51,8 @@ evolution::dg::TimeDerivativeDecisions<Dim> TimeDerivative<Dim>::apply(
   for (size_t d = 0; d < Dim; ++d) {
     dt_phi->get(d) = 0.0;
   }
+  // BoundaryPsi has zero volume time derivative; driven by BC correction only
+  get(*dt_boundary_psi) = 0.0;
 
   //   std::cout << "coords: " << inertial_coords.get(0) << std::endl;
   //   std::cout << "dt_pi max error: "

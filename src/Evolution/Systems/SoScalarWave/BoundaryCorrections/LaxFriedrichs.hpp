@@ -85,6 +85,7 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
 
       const Scalar<DataVector>& /*psi*/, const Scalar<DataVector>& pi,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& phi,
+      const Scalar<DataVector>& /*boundary_psi*/,
 
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
@@ -97,6 +98,7 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       gsl::not_null<Scalar<DataVector>*> pi_boundary_correction,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
           phi_boundary_correction,
+      gsl::not_null<Scalar<DataVector>*> boundary_psi_boundary_correction,
 
       const Scalar<DataVector>& pi_int,
       const Scalar<DataVector>& normal_dot_phi_int,
@@ -119,6 +121,7 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
 
       const Scalar<DataVector>& psi, const Scalar<DataVector>& /*pi*/,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& /*phi*/,
+      const Scalar<DataVector>& /*boundary_psi*/,
 
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
@@ -131,6 +134,7 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       gsl::not_null<Scalar<DataVector>*> pi_boundary_correction,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
           phi_boundary_correction,
+      gsl::not_null<Scalar<DataVector>*> boundary_psi_boundary_correction,
 
       const Scalar<DataVector>& psi_int,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& psi_times_normal_int,

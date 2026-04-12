@@ -102,3 +102,14 @@ def phi(
     for i in range(dim):
         result[i] = _wave_vector(dim)[i] * du
     return result
+
+
+def boundary_psi(
+    face_mesh_velocity,
+    outward_directed_normal_covector,
+    coords,
+    time,
+    dim,
+):
+    # Ghost BoundaryPsi = analytic Psi
+    return _profile(_1d_u(coords, time, dim))

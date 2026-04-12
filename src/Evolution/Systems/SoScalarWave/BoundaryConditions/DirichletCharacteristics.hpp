@@ -69,7 +69,19 @@ class DirichletCharacteristics final : public BoundaryCondition<Dim> {
     using type = bool;
   };
 
-  using options = tmpl::list<AnalyticPrescription, PrescribeZeroSpeedModes>;
+  /// \brief If true, ghost Psi is copied directly from the interior evolved
+  /// Psi (original behavior before BoundaryPsi was introduced). Cannot be
+  /// combined with PrescribeZeroSpeedModes=true.
+  struct CopyPsiFromInterior {
+    static constexpr Options::String help =
+        "If true, ghost Psi is copied from the interior Psi, ignoring "
+        "BoundaryPsi. Cannot be true when PrescribeZeroSpeedModes is also "
+        "true.";
+    using type = bool;
+  };
+
+  using options = tmpl::list<AnalyticPrescription, PrescribeZeroSpeedModes,
+                             CopyPsiFromInterior>;
 
   static constexpr Options::String help{
       "Boundary condition using characteristic decomposition. Incoming modes "
@@ -85,7 +97,7 @@ class DirichletCharacteristics final : public BoundaryCondition<Dim> {
   DirichletCharacteristics(
       std::unique_ptr<evolution::initial_data::InitialData>
           analytic_prescription,
-      bool prescribe_zero_speed_modes);
+      bool prescribe_zero_speed_modes, bool copy_psi_from_interior);
 
   explicit DirichletCharacteristics(CkMigrateMessage* msg);
 
@@ -96,31 +108,51 @@ class DirichletCharacteristics final : public BoundaryCondition<Dim> {
       domain::BoundaryConditions::BoundaryCondition> override;
 
   static constexpr evolution::BoundaryConditions::Type bc_type =
-      evolution::BoundaryConditions::Type::Ghost;
+      evolution::BoundaryConditions::Type::GhostAndTimeDerivative;
 
   void pup(PUP::er& p) override;
 
   using dg_interior_evolved_variables_tags =
-      tmpl::list<Tags::Psi, Tags::Pi, Tags::Phi<Dim>>;
+      tmpl::list<Tags::Psi, Tags::Pi, Tags::Phi<Dim>, Tags::BoundaryPsi>;
   using dg_interior_temporary_tags =
       tmpl::list<domain::Tags::Coordinates<Dim, Frame::Inertial>>;
+  using dg_interior_dt_vars_tags = tmpl::list<>;
   using dg_gridless_tags = tmpl::list<::Tags::Time>;
 
   std::optional<std::string> dg_ghost(
       gsl::not_null<Scalar<DataVector>*> psi,
       gsl::not_null<Scalar<DataVector>*> pi,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> phi,
+      gsl::not_null<Scalar<DataVector>*> boundary_psi,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           face_mesh_velocity,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const Scalar<DataVector>& interior_psi,
       const Scalar<DataVector>& interior_pi,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& interior_phi,
+      const Scalar<DataVector>& interior_boundary_psi,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& coords,
+      double time) const;
+
+  std::optional<std::string> dg_time_derivative(
+      gsl::not_null<Scalar<DataVector>*> dt_psi_correction,
+      gsl::not_null<Scalar<DataVector>*> dt_pi_correction,
+      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
+          dt_phi_correction,
+      gsl::not_null<Scalar<DataVector>*> dt_boundary_psi_correction,
+      const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+          face_mesh_velocity,
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+      const Scalar<DataVector>& interior_psi,
+      const Scalar<DataVector>& interior_pi,
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& interior_phi,
+      const Scalar<DataVector>& interior_boundary_psi,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& coords,
       double time) const;
 
  private:
   std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription_;
-  bool prescribe_zero_speed_modes_ = true;
+  bool prescribe_zero_speed_modes_;
+  bool copy_psi_from_interior_;
 };
 }  // namespace SoScalarWave::BoundaryConditions

@@ -27,6 +27,7 @@ struct Psi;
 struct Pi;
 template <size_t Dim>
 struct Phi;
+struct BoundaryPsi;
 }  // namespace SoScalarWave::Tags
 namespace Tags {
 template <typename Tag>
@@ -80,8 +81,9 @@ class SoPlaneWave : public evolution::initial_data::InitialData,
   static constexpr Options::String help = {
       "A plane wave solution of the Euclidean wave equation"};
   using tags =
-      tmpl::list<Tags::Psi, Tags::Pi, Tags::Phi<Dim>, ::Tags::dt<Tags::Psi>,
-                 ::Tags::dt<Tags::Pi>, ::Tags::dt<Tags::Phi<Dim>>>;
+      tmpl::list<Tags::Psi, Tags::Pi, Tags::Phi<Dim>, Tags::BoundaryPsi,
+                 ::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
+                 ::Tags::dt<Tags::Phi<Dim>>, ::Tags::dt<Tags::BoundaryPsi>>;
 
   SoPlaneWave() = default;
   SoPlaneWave(std::array<double, Dim> wave_vector,
@@ -131,6 +133,13 @@ class SoPlaneWave : public evolution::initial_data::InitialData,
       const tnsr::I<DataVector, Dim>& x, double t,
       tmpl::list<Tags::Psi, Tags::Pi, Tags::Phi<Dim>> /*meta*/) const;
 
+  /// Retrieve the evolution variables including BoundaryPsi
+  tuples::TaggedTuple<Tags::Psi, Tags::Pi, Tags::Phi<Dim>, Tags::BoundaryPsi>
+  variables(
+      const tnsr::I<DataVector, Dim>& x, double t,
+      tmpl::list<Tags::Psi, Tags::Pi, Tags::Phi<Dim>, Tags::BoundaryPsi>
+      /*meta*/) const;
+
   /// Retrieve the time derivative of the evolution variables at time `t` and
   /// spatial coordinates `x`
   ///
@@ -141,6 +150,15 @@ class SoPlaneWave : public evolution::initial_data::InitialData,
   variables(const tnsr::I<DataVector, Dim>& x, double t,
             tmpl::list<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
                        ::Tags::dt<Tags::Phi<Dim>>> /*meta*/) const;
+
+  /// Retrieve time derivatives including dt<BoundaryPsi>
+  tuples::TaggedTuple<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
+                      ::Tags::dt<Tags::Phi<Dim>>,
+                      ::Tags::dt<Tags::BoundaryPsi>>
+  variables(const tnsr::I<DataVector, Dim>& x, double t,
+            tmpl::list<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
+                       ::Tags::dt<Tags::Phi<Dim>>,
+                       ::Tags::dt<Tags::BoundaryPsi>> /*meta*/) const;
 
   // NOLINTNEXTLINE(google-runtime-references)
   void pup(PUP::er& p) override;

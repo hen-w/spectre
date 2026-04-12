@@ -11,6 +11,7 @@ struct Psi;
 struct Pi;
 template <size_t Dim>
 struct Phi;
+struct BoundaryPsi;
 struct NormalDotPhi;
 template <size_t Dim>
 struct PsiTimesNormal;

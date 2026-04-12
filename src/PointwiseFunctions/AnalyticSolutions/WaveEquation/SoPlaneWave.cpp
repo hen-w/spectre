@@ -123,6 +123,20 @@ SoPlaneWave<Dim>::variables(
 }
 
 template <size_t Dim>
+tuples::TaggedTuple<Tags::Psi, Tags::Pi, Tags::Phi<Dim>, Tags::BoundaryPsi>
+SoPlaneWave<Dim>::variables(
+    const tnsr::I<DataVector, Dim>& x, const double t,
+    const tmpl::list<Tags::Psi, Tags::Pi, Tags::Phi<Dim>,
+                     Tags::BoundaryPsi> /*meta*/) const {
+  auto base_vars =
+      variables(x, t, tmpl::list<Tags::Psi, Tags::Pi, Tags::Phi<Dim>>{});
+  // BoundaryPsi initialized to Psi
+  return {std::move(get<Tags::Psi>(base_vars)),
+          std::move(get<Tags::Pi>(base_vars)),
+          std::move(get<Tags::Phi<Dim>>(base_vars)), psi(x, t)};
+}
+
+template <size_t Dim>
 tuples::TaggedTuple<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
                     ::Tags::dt<Tags::Phi<Dim>>>
 SoPlaneWave<Dim>::variables(
@@ -134,6 +148,26 @@ SoPlaneWave<Dim>::variables(
       dt_variables{dpsi_dt(x, t), d2psi_dt2(x, t), d2psi_dtdx(x, t)};
   get<::Tags::dt<Tags::Pi>>(dt_variables).get() *= -1.0;
   return dt_variables;
+}
+
+template <size_t Dim>
+tuples::TaggedTuple<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
+                    ::Tags::dt<Tags::Phi<Dim>>,
+                    ::Tags::dt<Tags::BoundaryPsi>>
+SoPlaneWave<Dim>::variables(
+    const tnsr::I<DataVector, Dim>& x, const double t,
+    const tmpl::list<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
+                     ::Tags::dt<Tags::Phi<Dim>>,
+                     ::Tags::dt<Tags::BoundaryPsi>> /*meta*/) const {
+  auto base_dt_vars = variables(
+      x, t,
+      tmpl::list<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
+                  ::Tags::dt<Tags::Phi<Dim>>>{});
+  // dt<BoundaryPsi> = dpsi_dt (same as dt<Psi> = -Pi)
+  return {std::move(get<::Tags::dt<Tags::Psi>>(base_dt_vars)),
+          std::move(get<::Tags::dt<Tags::Pi>>(base_dt_vars)),
+          std::move(get<::Tags::dt<Tags::Phi<Dim>>>(base_dt_vars)),
+          dpsi_dt(x, t)};
 }
 
 template <size_t Dim>

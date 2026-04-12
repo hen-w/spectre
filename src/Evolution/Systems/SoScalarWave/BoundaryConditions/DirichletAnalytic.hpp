@@ -88,6 +88,7 @@ class DirichletAnalytic final : public BoundaryCondition<Dim> {
       gsl::not_null<Scalar<DataVector>*> psi,
       gsl::not_null<Scalar<DataVector>*> pi,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> phi,
+      gsl::not_null<Scalar<DataVector>*> boundary_psi,
       const std::optional<
           tnsr::I<DataVector, Dim, Frame::Inertial>>& /*face_mesh_velocity*/,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& /*normal_covector*/,
