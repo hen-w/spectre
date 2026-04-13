@@ -16,6 +16,8 @@ namespace Ccz4::fd {
 void EnforceConstrainedEvolution::apply(
     const gsl::not_null<tnsr::ii<DataVector, dim>*> conformal_spatial_metric,
     const gsl::not_null<tnsr::ii<DataVector, dim>*> a_tilde,
+    const gsl::not_null<tnsr::ii<DataVector, dim>*>
+        boundary_conformal_spatial_metric,
     const bool constrained_evolution) {
   if (constrained_evolution) {
     // Allocate shared storage for temporaries in one block using existing tags
@@ -52,6 +54,21 @@ void EnforceConstrainedEvolution::apply(
         a_tilde,
         (*a_tilde)(ti::i, ti::j) -
             trace_a_tilde() * (*conformal_spatial_metric)(ti::i, ti::j) / 3.);
+
+    // Enforce unit determinant on the boundary conformal metric
+    Scalar<DataVector> det_boundary(
+        boundary_conformal_spatial_metric->get(0, 0).size());
+    determinant(make_not_null(&det_boundary),
+                *boundary_conformal_spatial_metric);
+    ASSERT(min(get(det_boundary)) > 0.0,
+           "The determinant of the boundary conformal spatial metric is "
+           "non-positive: "
+               << get(det_boundary));
+    get(det_boundary) = pow(get(det_boundary), -1.0 / 3.0);
+    ::tenex::update<ti::i, ti::j>(
+        boundary_conformal_spatial_metric,
+        det_boundary() *
+            (*boundary_conformal_spatial_metric)(ti::i, ti::j));
   }
 }
 

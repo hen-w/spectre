@@ -18,17 +18,22 @@ namespace Ccz4::fd {
  * Togglable option in input file via option tag defined in Ccz4::fd::Tags.
  * If constrained_evolution is true, enforce
  * the unit determinant constraint on the conformal spatial metric
+ * and the boundary conformal spatial metric,
  * and traceless constraint on the ATilde
  */
 struct EnforceConstrainedEvolution : tt::ConformsTo<db::protocols::Mutator> {
   static constexpr size_t dim = System::volume_dim;
-  using return_tags = tmpl::list<::Ccz4::Tags::ConformalMetric<DataVector, dim>,
-                                 ::Ccz4::Tags::ATilde<DataVector, dim>>;
+  using return_tags =
+      tmpl::list<::Ccz4::Tags::ConformalMetric<DataVector, dim>,
+                 ::Ccz4::Tags::ATilde<DataVector, dim>,
+                 ::Ccz4::Tags::BoundaryConformalMetric<DataVector, dim>>;
   using argument_tags = tmpl::list<::Ccz4::fd::Tags::ConstrainedEvolution>;
 
   static void apply(
       gsl::not_null<tnsr::ii<DataVector, dim>*> conformal_spatial_metric,
       gsl::not_null<tnsr::ii<DataVector, dim>*> a_tilde,
+      gsl::not_null<tnsr::ii<DataVector, dim>*>
+          boundary_conformal_spatial_metric,
       bool constrained_evolution);
 };
 }  // namespace Ccz4::fd
