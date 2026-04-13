@@ -377,9 +377,21 @@ CrpbcMixedState crpbc_characteristic_pipeline(
                       u_scalar3_plus_in() + 4.0 * interior_boundary_theta() /
                                                 coeff_conformal_factor_squared());
 
-    // Transverse projector q^I_j from ghost unit normal.
+    // Transverse projector q^I_j from ghost unit normal (used for T^i,
+    // which is built from ghost-side spatial derivatives of gamma-tilde).
     const auto q_mixed = gr::transverse_projection_operator(
         ghost_unit_normal_vector, ghost_unit_normal_one_form);
+
+    // Interior-side unit normal vector and projector: used to decompose
+    // interior_boundary_z into its normal + transverse parts. Z_i is an
+    // interior-evolved quantity, so its split must match the interior
+    // normal; otherwise interior and ghost Z_i components get mixed.
+    tnsr::I<DataVector, Dim, Frame::Inertial> interior_unit_normal_vector{};
+    ::tenex::evaluate<ti::I>(make_not_null(&interior_unit_normal_vector),
+                             inv_spatial_metric(ti::I, ti::J) *
+                                 interior_unit_normal_one_form(ti::j));
+    const auto q_mixed_interior = gr::transverse_projection_operator(
+        interior_unit_normal_vector, interior_unit_normal_one_form);
 
     // T^i = γ̃^{ij} γ̃^{kl} q^m_l (2·analytic_field_d)_{m,j,k}
     //     = γ̃^{ij} γ̃^{kl} q^m_l · ghost_d_cm(m,j,k)
@@ -397,11 +409,13 @@ CrpbcMixedState crpbc_characteristic_pipeline(
                                  q_mixed(ti::J, ti::k) * T_up(ti::K) /
                                  coeff_conformal_factor_squared());
 
-    // Z^⊥_i = q^j_i Z_j_bdry   (lower, transverse-projected BoundaryZ)
+    // Z^⊥_i = q^j_i Z_j_bdry   (lower, transverse-projected BoundaryZ).
+    // Use the interior projector because interior_boundary_z is an
+    // interior-side quantity.
     tnsr::i<DataVector, Dim, Frame::Inertial> Z_perp_lo{};
     ::tenex::evaluate<ti::i>(
         make_not_null(&Z_perp_lo),
-        q_mixed(ti::J, ti::i) * interior_boundary_z(ti::j));
+        q_mixed_interior(ti::J, ti::i) * interior_boundary_z(ti::j));
 
     // UVector2Minus_rec_i = -UVector2Plus_i + 4·Z^⊥_i / φ² + 2·T^⊥_i
     ::tenex::evaluate<ti::i>(
@@ -416,11 +430,11 @@ CrpbcMixedState crpbc_characteristic_pipeline(
         make_not_null(&T_n),
         ghost_unit_normal_one_form(ti::i) * T_up(ti::I));
 
-    // Z^n = n^i Z_i_bdry
+    // Z^n = n^i Z_i_bdry   (interior normal, for the same reason as Z^⊥_i).
     Scalar<DataVector> Z_n{};
     ::tenex::evaluate(
         make_not_null(&Z_n),
-        ghost_unit_normal_vector(ti::I) * interior_boundary_z(ti::i));
+        interior_unit_normal_vector(ti::I) * interior_boundary_z(ti::i));
 
     // UScalar2Minus_rec = UScalar2Plus
     //   - (φ⁴/2)(UScalar3Plus + UScalar3Minus_rec)
