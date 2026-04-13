@@ -389,11 +389,13 @@ CrpbcMixedState crpbc_characteristic_pipeline(
         inv_coeff_cm(ti::I, ti::J) * inv_coeff_cm(ti::K, ti::L) *
             q_mixed(ti::M, ti::l) * ghost_d_cm(ti::m, ti::j, ti::k));
 
-    // T^⊥_i = γ̃_{ij} q^j_k T^k   (lower, transverse-projected T)
+    // T^⊥_i = q_{ij} T^j = γ_{ij} q^j_k T^k   (physical metric lowering).
+    // γ_{ij} = γ̃_{ij} / φ², so divide by φ² after lowering with γ̃.
     tnsr::i<DataVector, Dim, Frame::Inertial> T_perp_lo{};
     ::tenex::evaluate<ti::i>(make_not_null(&T_perp_lo),
                              coeff_conformal_metric(ti::i, ti::j) *
-                                 q_mixed(ti::J, ti::k) * T_up(ti::K));
+                                 q_mixed(ti::J, ti::k) * T_up(ti::K) /
+                                 coeff_conformal_factor_squared());
 
     // Z^⊥_i = q^j_i Z_j_bdry   (lower, transverse-projected BoundaryZ)
     tnsr::i<DataVector, Dim, Frame::Inertial> Z_perp_lo{};
