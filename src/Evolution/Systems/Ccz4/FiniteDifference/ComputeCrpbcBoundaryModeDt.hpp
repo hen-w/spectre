@@ -174,7 +174,7 @@ struct ComputeCrpbcBoundaryModeDt {
         get<::Tags::dt<Tags::UTensorMinus<DataVector, Dim, Frame::Inertial>>>(
             *dt_vars);
 
-    // Analytic dt auxiliary fields pre-computed in LdgTimeDerivative
+    // dt auxiliary fields pre-computed in LdgTimeDerivative
     const auto& dt_field_a_vol =
         get<::Tags::dt<::Ccz4::Tags::FieldA<DataVector, Dim>>>(*dt_vars);
     const auto& dt_field_b_vol =
@@ -354,7 +354,7 @@ struct ComputeCrpbcBoundaryModeDt {
       Scalar<DataVector> outermost_dt_conformal_factor_face;
       slice_scalar(outermost_dt_conformal_factor_face, dt_conformal_factor);
 
-      // Slice analytic dt auxiliary fields to face
+      // Slice dt auxiliary fields to face
       tnsr::i<DataVector, Dim> outermost_dt_field_a;
       slice_tensor(outermost_dt_field_a, dt_field_a_vol);
       tnsr::iJ<DataVector, Dim> outermost_dt_field_b;

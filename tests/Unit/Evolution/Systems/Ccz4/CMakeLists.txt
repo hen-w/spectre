@@ -7,7 +7,7 @@ set(LIBRARY_SOURCES
   BoundaryConditions/Test_DirichletCharacteristics.cpp
   BoundaryCorrections/Test_LaxFriedrichs.cpp
   # BoundaryConditions/Test_DirichletAnalytic.cpp
-  # BoundaryConditions/Test_ConstraintsRadiationPreserving.cpp
+  BoundaryConditions/Test_ConstraintsRadiationPreserving.cpp
   # BoundaryConditions/Test_Sommerfeld.cpp
   FiniteDifference/Test_AddUpperSpatialZ4Constraint.cpp
   # FiniteDifference/Test_ApplyFilter.cpp
