@@ -80,8 +80,17 @@ class DirichletCharacteristics final : public BoundaryCondition<Dim> {
     using type = bool;
   };
 
+  /// \brief If true, incoming characteristic modes (speed < 0) are set to
+  /// zero instead of analytic data.
+  struct ZeroIncomingMode {
+    static constexpr Options::String help =
+        "If true, incoming characteristic modes are set to zero instead of "
+        "analytic data.";
+    using type = bool;
+  };
+
   using options = tmpl::list<AnalyticPrescription, PrescribeZeroSpeedModes,
-                             CopyPsiFromInterior>;
+                             CopyPsiFromInterior, ZeroIncomingMode>;
 
   static constexpr Options::String help{
       "Boundary condition using characteristic decomposition. Incoming modes "
@@ -97,7 +106,8 @@ class DirichletCharacteristics final : public BoundaryCondition<Dim> {
   DirichletCharacteristics(
       std::unique_ptr<evolution::initial_data::InitialData>
           analytic_prescription,
-      bool prescribe_zero_speed_modes, bool copy_psi_from_interior);
+      bool prescribe_zero_speed_modes, bool copy_psi_from_interior,
+      bool zero_incoming_mode);
 
   explicit DirichletCharacteristics(CkMigrateMessage* msg);
 
@@ -154,5 +164,6 @@ class DirichletCharacteristics final : public BoundaryCondition<Dim> {
   std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription_;
   bool prescribe_zero_speed_modes_;
   bool copy_psi_from_interior_;
+  bool zero_incoming_mode_;
 };
 }  // namespace SoScalarWave::BoundaryConditions

@@ -115,12 +115,12 @@ def _analytic_phi(coords, time, dim):
 # -- Core ghost computation --
 
 
-def _pick(speed, interior_val, analytic_val, prescribe_zero):
+def _pick(speed, interior_val, analytic_val, prescribe_zero, zero_incoming=False):
     """Select interior (outgoing) or analytic (incoming) based on speed sign."""
     if speed > 0.0:
         return interior_val
     elif speed < 0.0:
-        return analytic_val
+        return 0.0 if zero_incoming else analytic_val
     else:
         return analytic_val if prescribe_zero else interior_val
 
@@ -135,6 +135,7 @@ def _compute_ghost(
     time,
     dim,
     prescribe_zero,
+    zero_incoming=False,
 ):
     """Compute ghost (psi, pi, phi) by mixing char modes based on speed signs.
 
@@ -180,10 +181,10 @@ def _compute_ghost(
     speed_vminus = -1.0 - vg_dot_n
 
     # Mode selection
-    vpsi_ext = _pick(speed_vpsi, vpsi_int, vpsi_an, prescribe_zero)
-    vplus_ext = _pick(speed_vplus, vplus_int, vplus_an, prescribe_zero)
-    vminus_ext = _pick(speed_vminus, vminus_int, vminus_an, prescribe_zero)
-    vzero_ext = _pick(speed_vzero, vzero_int, vzero_an, prescribe_zero)
+    vpsi_ext = _pick(speed_vpsi, vpsi_int, vpsi_an, prescribe_zero, zero_incoming)
+    vplus_ext = _pick(speed_vplus, vplus_int, vplus_an, prescribe_zero, zero_incoming)
+    vminus_ext = _pick(speed_vminus, vminus_int, vminus_an, prescribe_zero, zero_incoming)
+    vzero_ext = _pick(speed_vzero, vzero_int, vzero_an, prescribe_zero, zero_incoming)
 
     # Inverse transform
     psi_out = vpsi_ext
@@ -208,6 +209,7 @@ def _compute_pi_boundary(
     time,
     dim,
     prescribe_zero,
+    zero_incoming=False,
 ):
     """Compute Pi_boundary = (v_plus_mixed + v_minus_mixed) / 2."""
     n = normal
@@ -231,8 +233,8 @@ def _compute_pi_boundary(
     speed_vplus = 1.0 - vg_dot_n
     speed_vminus = -1.0 - vg_dot_n
 
-    vplus_ext = _pick(speed_vplus, vplus_int, vplus_an, prescribe_zero)
-    vminus_ext = _pick(speed_vminus, vminus_int, vminus_an, prescribe_zero)
+    vplus_ext = _pick(speed_vplus, vplus_int, vplus_an, prescribe_zero, zero_incoming)
+    vminus_ext = _pick(speed_vminus, vminus_int, vminus_an, prescribe_zero, zero_incoming)
 
     return 0.5 * (vplus_ext + vminus_ext)
 
@@ -685,3 +687,159 @@ def dt_boundary_psi_copy_interior(
     dim,
 ):
     return 0.0 * interior_psi
+
+
+# =====================================================================
+# ZeroIncomingMode = true (PrescribeZeroSpeedModes = false,
+#                          CopyPsiFromInterior = false)
+# =====================================================================
+
+
+def psi_zero_incoming(
+    face_mesh_velocity,
+    outward_directed_normal_covector,
+    interior_psi,
+    interior_pi,
+    interior_phi,
+    interior_boundary_psi,
+    coords,
+    time,
+    dim,
+):
+    # PrescribeZeroSpeedModes=false, CopyPsiFromInterior=false:
+    # ghost Psi = interior_boundary_psi
+    return interior_boundary_psi
+
+
+def pi_zero_incoming(
+    face_mesh_velocity,
+    outward_directed_normal_covector,
+    interior_psi,
+    interior_pi,
+    interior_phi,
+    interior_boundary_psi,
+    coords,
+    time,
+    dim,
+):
+    _, pi_out, _ = _compute_ghost(
+        face_mesh_velocity,
+        outward_directed_normal_covector,
+        interior_psi,
+        interior_pi,
+        interior_phi,
+        coords,
+        time,
+        dim,
+        False,
+        True,
+    )
+    return pi_out
+
+
+def phi_zero_incoming(
+    face_mesh_velocity,
+    outward_directed_normal_covector,
+    interior_psi,
+    interior_pi,
+    interior_phi,
+    interior_boundary_psi,
+    coords,
+    time,
+    dim,
+):
+    _, _, phi_out = _compute_ghost(
+        face_mesh_velocity,
+        outward_directed_normal_covector,
+        interior_psi,
+        interior_pi,
+        interior_phi,
+        coords,
+        time,
+        dim,
+        False,
+        True,
+    )
+    return phi_out
+
+
+def boundary_psi_zero_incoming(
+    face_mesh_velocity,
+    outward_directed_normal_covector,
+    interior_psi,
+    interior_pi,
+    interior_phi,
+    interior_boundary_psi,
+    coords,
+    time,
+    dim,
+):
+    return interior_boundary_psi
+
+
+def dt_psi_zero_incoming(
+    face_mesh_velocity,
+    outward_directed_normal_covector,
+    interior_psi,
+    interior_pi,
+    interior_phi,
+    interior_boundary_psi,
+    coords,
+    time,
+    dim,
+):
+    return 0.0 * interior_psi
+
+
+def dt_pi_zero_incoming(
+    face_mesh_velocity,
+    outward_directed_normal_covector,
+    interior_psi,
+    interior_pi,
+    interior_phi,
+    interior_boundary_psi,
+    coords,
+    time,
+    dim,
+):
+    return 0.0 * interior_pi
+
+
+def dt_phi_zero_incoming(
+    face_mesh_velocity,
+    outward_directed_normal_covector,
+    interior_psi,
+    interior_pi,
+    interior_phi,
+    interior_boundary_psi,
+    coords,
+    time,
+    dim,
+):
+    return 0.0 * interior_phi
+
+
+def dt_boundary_psi_zero_incoming(
+    face_mesh_velocity,
+    outward_directed_normal_covector,
+    interior_psi,
+    interior_pi,
+    interior_phi,
+    interior_boundary_psi,
+    coords,
+    time,
+    dim,
+):
+    pi_boundary = _compute_pi_boundary(
+        face_mesh_velocity,
+        outward_directed_normal_covector,
+        interior_psi,
+        interior_pi,
+        interior_phi,
+        coords,
+        time,
+        dim,
+        False,
+        True,
+    )
+    return -pi_boundary

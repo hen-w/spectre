@@ -21,7 +21,8 @@ DirichletCharacteristics<Dim>::DirichletCharacteristics(
     : BoundaryCondition<Dim>{dynamic_cast<const BoundaryCondition<Dim>&>(rhs)},
       analytic_prescription_(rhs.analytic_prescription_->get_clone()),
       prescribe_zero_speed_modes_(rhs.prescribe_zero_speed_modes_),
-      copy_psi_from_interior_(rhs.copy_psi_from_interior_) {}
+      copy_psi_from_interior_(rhs.copy_psi_from_interior_),
+      zero_incoming_mode_(rhs.zero_incoming_mode_) {}
 
 template <size_t Dim>
 DirichletCharacteristics<Dim>& DirichletCharacteristics<Dim>::operator=(
@@ -32,6 +33,7 @@ DirichletCharacteristics<Dim>& DirichletCharacteristics<Dim>::operator=(
   analytic_prescription_ = rhs.analytic_prescription_->get_clone();
   prescribe_zero_speed_modes_ = rhs.prescribe_zero_speed_modes_;
   copy_psi_from_interior_ = rhs.copy_psi_from_interior_;
+  zero_incoming_mode_ = rhs.zero_incoming_mode_;
   return *this;
 }
 
@@ -43,10 +45,12 @@ DirichletCharacteristics<Dim>::DirichletCharacteristics(
 template <size_t Dim>
 DirichletCharacteristics<Dim>::DirichletCharacteristics(
     std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription,
-    const bool prescribe_zero_speed_modes, const bool copy_psi_from_interior)
+    const bool prescribe_zero_speed_modes, const bool copy_psi_from_interior,
+    const bool zero_incoming_mode)
     : analytic_prescription_(std::move(analytic_prescription)),
       prescribe_zero_speed_modes_(prescribe_zero_speed_modes),
-      copy_psi_from_interior_(copy_psi_from_interior) {
+      copy_psi_from_interior_(copy_psi_from_interior),
+      zero_incoming_mode_(zero_incoming_mode) {
   if (prescribe_zero_speed_modes_ and copy_psi_from_interior_) {
     ERROR(
         "DirichletCharacteristics: CopyPsiFromInterior and "
@@ -68,6 +72,7 @@ void DirichletCharacteristics<Dim>::pup(PUP::er& p) {
   p | analytic_prescription_;
   p | prescribe_zero_speed_modes_;
   p | copy_psi_from_interior_;
+  p | zero_incoming_mode_;
 }
 
 namespace {
@@ -77,12 +82,13 @@ void mix_scalar_mode(const gsl::not_null<DataVector*> result,
                      const DataVector& speed,
                      const DataVector& interior_val,
                      const DataVector& analytic_val,
-                     const bool prescribe_zero) {
+                     const bool prescribe_zero,
+                     const bool zero_incoming) {
   for (size_t s = 0; s < result->size(); ++s) {
     if (speed[s] > 0.0) {
       (*result)[s] = interior_val[s];
     } else if (speed[s] < 0.0) {
-      (*result)[s] = analytic_val[s];
+      (*result)[s] = zero_incoming ? 0.0 : analytic_val[s];
     } else {
       (*result)[s] = prescribe_zero ? analytic_val[s] : interior_val[s];
     }
@@ -137,7 +143,8 @@ MixedCharData<Dim> mix_char_modes(
     const Scalar<DataVector>& analytic_psi,
     const Scalar<DataVector>& analytic_pi,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& analytic_phi,
-    const bool prescribe_zero) {
+    const bool prescribe_zero,
+    const bool zero_incoming) {
   const auto interior_char_fields = SoScalarWave::characteristic_fields(
       interior_psi, interior_pi, interior_phi, normal_covector);
   const auto analytic_char_fields = SoScalarWave::characteristic_fields(
@@ -157,23 +164,23 @@ MixedCharData<Dim> mix_char_modes(
       make_not_null(&get(result.v_psi_ext)), char_speeds[0],
       get(get<SoScalarWave::Tags::VPsi>(interior_char_fields)),
       get(get<SoScalarWave::Tags::VPsi>(analytic_char_fields)),
-      prescribe_zero);
+      prescribe_zero, zero_incoming);
   mix_scalar_mode(
       make_not_null(&get(result.v_plus_ext)), char_speeds[2],
       get(get<SoScalarWave::Tags::VPlus>(interior_char_fields)),
       get(get<SoScalarWave::Tags::VPlus>(analytic_char_fields)),
-      prescribe_zero);
+      prescribe_zero, zero_incoming);
   mix_scalar_mode(
       make_not_null(&get(result.v_minus_ext)), char_speeds[3],
       get(get<SoScalarWave::Tags::VMinus>(interior_char_fields)),
       get(get<SoScalarWave::Tags::VMinus>(analytic_char_fields)),
-      prescribe_zero);
+      prescribe_zero, zero_incoming);
   for (size_t d = 0; d < Dim; ++d) {
     mix_scalar_mode(
         make_not_null(&result.v_zero_ext.get(d)), char_speeds[1],
         get<SoScalarWave::Tags::VZero<Dim>>(interior_char_fields).get(d),
         get<SoScalarWave::Tags::VZero<Dim>>(analytic_char_fields).get(d),
-        prescribe_zero);
+        prescribe_zero, zero_incoming);
   }
   return result;
 }
@@ -206,7 +213,7 @@ std::optional<std::string> DirichletCharacteristics<Dim>::dg_ghost(
   const auto mixed = mix_char_modes<Dim>(
       interior_psi, interior_pi, interior_phi, normal_covector,
       face_mesh_velocity, analytic_psi, analytic_pi, analytic_phi,
-      prescribe_zero_speed_modes_);
+      prescribe_zero_speed_modes_, zero_incoming_mode_);
 
   auto evolved = evolved_fields_from_characteristic_fields(
       mixed.v_psi_ext, mixed.v_zero_ext, mixed.v_plus_ext, mixed.v_minus_ext,
@@ -272,7 +279,7 @@ std::optional<std::string> DirichletCharacteristics<Dim>::dg_time_derivative(
     const auto mixed = mix_char_modes<Dim>(
         interior_psi, interior_pi, interior_phi, normal_covector,
         face_mesh_velocity, analytic_psi, analytic_pi, analytic_phi,
-        prescribe_zero_speed_modes_);
+        prescribe_zero_speed_modes_, zero_incoming_mode_);
 
     // Pi_boundary = (v_plus + v_minus) / 2
     const DataVector pi_boundary =

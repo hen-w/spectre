@@ -143,7 +143,8 @@ void test_prescribe_zero() {
           "dt_phi_prescribe_zero", "dt_boundary_psi_prescribe_zero"},
       yaml_string<Dim>() +
           "  PrescribeZeroSpeedModes: true\n"
-          "  CopyPsiFromInterior: false\n",
+          "  CopyPsiFromInterior: false\n"
+          "  ZeroIncomingMode: false\n",
       Index<Dim - 1>{Dim == 1 ? 1 : 5}, box_analytic_soln,
       tuples::TaggedTuple<>{});
 }
@@ -189,7 +190,8 @@ void test_keep_zero() {
           "dt_phi_keep_zero", "dt_boundary_psi_keep_zero"},
       yaml_string<Dim>() +
           "  PrescribeZeroSpeedModes: false\n"
-          "  CopyPsiFromInterior: false\n",
+          "  CopyPsiFromInterior: false\n"
+          "  ZeroIncomingMode: false\n",
       Index<Dim - 1>{Dim == 1 ? 1 : 5}, box_analytic_soln,
       tuples::TaggedTuple<>{});
 }
@@ -235,7 +237,55 @@ void test_copy_psi() {
           "dt_phi_copy_interior", "dt_boundary_psi_copy_interior"},
       yaml_string<Dim>() +
           "  PrescribeZeroSpeedModes: false\n"
-          "  CopyPsiFromInterior: true\n",
+          "  CopyPsiFromInterior: true\n"
+          "  ZeroIncomingMode: false\n",
+      Index<Dim - 1>{Dim == 1 ? 1 : 5}, box_analytic_soln,
+      tuples::TaggedTuple<>{});
+}
+template <size_t Dim>
+void test_zero_incoming() {
+  register_classes_with_charm(SoScalarWave::Solutions::all_solutions<Dim>{});
+  register_classes_with_charm(
+      MathFunctions::all_math_functions<1, Frame::Inertial>{});
+  CAPTURE(Dim);
+  MAKE_GENERATOR(gen);
+  const auto box_analytic_soln = db::create<db::AddSimpleTags<
+      Tags::Time,
+      Tags::AnalyticSolution<SoScalarWave::Solutions::SoPlaneWave<Dim>>>>(
+      0.5, ConvertPlaneWave<Dim>::create_container());
+
+  helpers::test_boundary_condition_with_python<
+      SoScalarWave::BoundaryConditions::DirichletCharacteristics<Dim>,
+      SoScalarWave::BoundaryConditions::BoundaryCondition<Dim>,
+      SoScalarWave::System<Dim>,
+      tmpl::list<SoScalarWave::BoundaryCorrections::LaxFriedrichs<Dim>>,
+      tmpl::list<ConvertPlaneWave<Dim>>,
+      tmpl::list<
+          Tags::AnalyticSolution<SoScalarWave::Solutions::SoPlaneWave<Dim>>>,
+      Metavariables<Dim>>(
+      make_not_null(&gen), "DirichletCharacteristics",
+      tuples::TaggedTuple<
+          helpers::Tags::PythonFunctionForErrorMessage<>,
+          helpers::Tags::PythonFunctionName<SoScalarWave::Tags::Psi>,
+          helpers::Tags::PythonFunctionName<SoScalarWave::Tags::Pi>,
+          helpers::Tags::PythonFunctionName<SoScalarWave::Tags::Phi<Dim>>,
+          helpers::Tags::PythonFunctionName<SoScalarWave::Tags::BoundaryPsi>,
+          helpers::Tags::PythonFunctionName<
+              ::Tags::dt<SoScalarWave::Tags::Psi>>,
+          helpers::Tags::PythonFunctionName<
+              ::Tags::dt<SoScalarWave::Tags::Pi>>,
+          helpers::Tags::PythonFunctionName<
+              ::Tags::dt<SoScalarWave::Tags::Phi<Dim>>>,
+          helpers::Tags::PythonFunctionName<
+              ::Tags::dt<SoScalarWave::Tags::BoundaryPsi>>>{
+          "error", "psi_zero_incoming", "pi_zero_incoming",
+          "phi_zero_incoming", "boundary_psi_zero_incoming",
+          "dt_psi_zero_incoming", "dt_pi_zero_incoming",
+          "dt_phi_zero_incoming", "dt_boundary_psi_zero_incoming"},
+      yaml_string<Dim>() +
+          "  PrescribeZeroSpeedModes: false\n"
+          "  CopyPsiFromInterior: false\n"
+          "  ZeroIncomingMode: true\n",
       Index<Dim - 1>{Dim == 1 ? 1 : 5}, box_analytic_soln,
       tuples::TaggedTuple<>{});
 }
@@ -255,4 +305,7 @@ SPECTRE_TEST_CASE(
   test_copy_psi<1>();
   test_copy_psi<2>();
   test_copy_psi<3>();
+  test_zero_incoming<1>();
+  test_zero_incoming<2>();
+  test_zero_incoming<3>();
 }

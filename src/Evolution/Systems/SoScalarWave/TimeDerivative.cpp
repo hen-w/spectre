@@ -30,18 +30,18 @@ evolution::dg::TimeDerivativeDecisions<Dim> TimeDerivative<Dim>::apply(
     // Partial derivative arguments. Listed in the system struct as
     // gradient_variables.
     const tnsr::i<DataVector, Dim, Frame::Inertial>& /*d_psi*/,
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& d_pi,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*d_pi*/,
     const tnsr::ij<DataVector, Dim, Frame::Inertial>& d_phi,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& /*d_boundary_psi*/,
 
     // Terms list in argument_tags above
     const Scalar<DataVector>& pi,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& /*phi*/,
-    const Mesh<Dim>& mesh,
+    const Mesh<Dim>& /*mesh*/,
     const InverseJacobian<DataVector, Dim, Frame::ElementLogical,
-                          Frame::Inertial>& inverse_jacobian,
-    const tnsr::I<DataVector, Dim, Frame::Inertial>& inertial_coords,
-    const double& time) {
+                          Frame::Inertial>& /*inverse_jacobian*/,
+    const tnsr::I<DataVector, Dim, Frame::Inertial>& /*inertial_coords*/,
+    const double& /*time*/) {
   get(*dt_psi) = -get(pi);
   get(*dt_pi) = 0.0;
   for (size_t d = 0; d < Dim; ++d) {
