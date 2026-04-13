@@ -29,7 +29,6 @@ spectre_target_headers(
   ${LIBRARY}
   INCLUDE_DIRECTORY ${CMAKE_SOURCE_DIR}/src
   HEADERS
-  AddUpperSpatialZ4Constraint.hpp
   ApplyFilter.hpp
   BoundaryConditionGhostData.hpp
   Characteristics.hpp
@@ -53,6 +52,7 @@ spectre_target_headers(
   SetInitialBoundaryModes.hpp
   SetK0.hpp
   SoTimeDerivative.hpp
+  SpatialZ4ConstraintUpCompute.hpp
   System.hpp
   Tags.hpp
   UpdateAuxiliaryVariables.hpp

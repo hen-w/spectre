@@ -33,7 +33,7 @@
 #include "Evolution/Initialization/SetVariables.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryCorrections/Factory.hpp"
-#include "Evolution/Systems/Ccz4/FiniteDifference/AddUpperSpatialZ4Constraint.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/SpatialZ4ConstraintUpCompute.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/ApplyFilter.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/ComputeCrpbcBoundaryModeDt.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
@@ -185,7 +185,8 @@ struct EvolutionMetavars {
                          volume_dim, Frame::ElementLogical, Frame::Inertial>,
                      ::Events::Tags::ObserverDetInvJacobianCompute<
                          Frame::ElementLogical, Frame::Inertial>>>,
-      analytic_compute, error_compute>;
+      analytic_compute, error_compute,
+      ::Ccz4::fd::SpatialZ4ConstraintUpCompute>;
 
   struct factory_creation
       : tt::ConformsTo<Options::protocols::FactoryCreation> {
@@ -349,8 +350,7 @@ struct EvolutionMetavars {
       ::evolution::dg::Initialization::Mortars<volume_dim>,
       evolution::Actions::InitializeRunEventsAndDenseTriggers,
       Initialization::Actions::AddSimpleTags<
-          ::Ccz4::fd::SetInitialEta, ::Ccz4::fd::SetK0,
-          ::Ccz4::fd::AddUpperSpatialZ4Constraint>,
+          ::Ccz4::fd::SetInitialEta, ::Ccz4::fd::SetK0>,
       Actions::MutateApply<::Ccz4::fd::SetInitialBoundaryModes>,
       Parallel::Actions::TerminatePhase>>;
 

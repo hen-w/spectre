@@ -9,7 +9,7 @@ set(LIBRARY_SOURCES
   # BoundaryConditions/Test_DirichletAnalytic.cpp
   BoundaryConditions/Test_ConstraintsRadiationPreserving.cpp
   # BoundaryConditions/Test_Sommerfeld.cpp
-  FiniteDifference/Test_AddUpperSpatialZ4Constraint.cpp
+  FiniteDifference/Test_SpatialZ4ConstraintUpCompute.cpp
   # FiniteDifference/Test_ApplyFilter.cpp
   # FiniteDifference/Test_BoundaryConditionGhostData.cpp
   # FiniteDifference/Test_Characteristics.cpp
