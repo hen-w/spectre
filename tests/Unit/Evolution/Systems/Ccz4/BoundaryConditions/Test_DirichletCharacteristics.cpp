@@ -129,9 +129,6 @@ void test_minkowski() {
   const auto interior_field_p = make_covector(0.0);
 
   // Boundary mode interior values = 0
-  const auto interior_u_scalar3_minus = make_scalar(0.0);
-  const auto interior_u_vector2_minus = make_covector(0.0);
-  const auto interior_u_scalar2_minus = make_scalar(0.0);
   tnsr::ii<DataVector, Dim, Frame::Inertial> interior_u_tensor_minus(num_pts,
                                                                      0.0);
 
@@ -140,6 +137,8 @@ void test_minkowski() {
   const auto interior_boundary_conformal_factor = make_scalar(1.0);
   const auto interior_boundary_lapse = make_scalar(1.0);
   const auto interior_boundary_shift = make_vector(0.0);
+  const auto interior_boundary_theta = make_scalar(0.0);
+  const auto interior_boundary_z = make_covector(0.0);
 
   // Coordinates (arbitrary, Minkowski is spatially homogeneous)
   tnsr::I<DataVector, Dim, Frame::Inertial> coords(num_pts, 0.0);
@@ -173,15 +172,14 @@ void test_minkowski() {
   tnsr::iJ<DataVector, Dim, Frame::Inertial> ghost_field_b(num_pts, 0.0);
   tnsr::ijj<DataVector, Dim, Frame::Inertial> ghost_field_d(num_pts, 0.0);
   auto ghost_field_p = make_covector(0.0);
-  auto ghost_u_scalar3_minus = make_scalar(0.0);
-  auto ghost_u_vector2_minus = make_covector(0.0);
-  auto ghost_u_scalar2_minus = make_scalar(0.0);
   tnsr::ii<DataVector, Dim, Frame::Inertial> ghost_u_tensor_minus(num_pts, 0.0);
   tnsr::ii<DataVector, Dim, Frame::Inertial> ghost_boundary_conformal_metric(
       num_pts, 0.0);
   auto ghost_boundary_conformal_factor = make_scalar(0.0);
   auto ghost_boundary_lapse = make_scalar(0.0);
   auto ghost_boundary_shift = make_vector(0.0);
+  auto ghost_boundary_theta = make_scalar(0.0);
+  auto ghost_boundary_z = make_covector(0.0);
 
   const auto ghost_result = bc.dg_ghost(
       make_not_null(&ghost_conformal_metric),
@@ -191,22 +189,21 @@ void test_minkowski() {
       make_not_null(&ghost_shift), make_not_null(&ghost_auxiliary_shift_b),
       make_not_null(&ghost_field_a), make_not_null(&ghost_field_b),
       make_not_null(&ghost_field_d), make_not_null(&ghost_field_p),
-      make_not_null(&ghost_u_scalar3_minus),
-      make_not_null(&ghost_u_vector2_minus),
-      make_not_null(&ghost_u_scalar2_minus),
       make_not_null(&ghost_u_tensor_minus),
       make_not_null(&ghost_boundary_conformal_metric),
       make_not_null(&ghost_boundary_conformal_factor),
       make_not_null(&ghost_boundary_lapse),
-      make_not_null(&ghost_boundary_shift), face_mesh_velocity, normal_covector,
+      make_not_null(&ghost_boundary_shift),
+      make_not_null(&ghost_boundary_theta),
+      make_not_null(&ghost_boundary_z), face_mesh_velocity, normal_covector,
       interior_conformal_metric, interior_conformal_factor, interior_a_tilde,
       interior_trace_K, interior_theta, interior_gamma_hat, interior_lapse,
       interior_shift, interior_auxiliary_shift_b, interior_field_a,
       interior_field_b, interior_field_d, interior_field_p,
-      interior_u_scalar3_minus, interior_u_vector2_minus,
-      interior_u_scalar2_minus, interior_u_tensor_minus,
+      interior_u_tensor_minus,
       interior_boundary_conformal_metric, interior_boundary_conformal_factor,
-      interior_boundary_lapse, interior_boundary_shift, coords, time,
+      interior_boundary_lapse, interior_boundary_shift,
+      interior_boundary_theta, interior_boundary_z, coords, time,
       evolve_lapse_and_shift);
 
   CHECK_FALSE(ghost_result.has_value());
@@ -245,14 +242,13 @@ void test_minkowski() {
   tnsr::iJ<DataVector, Dim, Frame::Inertial> dt_field_b(num_pts, 0.0);
   tnsr::ijj<DataVector, Dim, Frame::Inertial> dt_field_d(num_pts, 0.0);
   auto dt_field_p = make_covector(0.0);
-  auto dt_u_s3m = make_scalar(0.0);
-  auto dt_u_v2m = make_covector(0.0);
-  auto dt_u_s2m = make_scalar(0.0);
   tnsr::ii<DataVector, Dim, Frame::Inertial> dt_u_tm(num_pts, 0.0);
   tnsr::ii<DataVector, Dim, Frame::Inertial> dt_bcm(num_pts, 0.0);
   auto dt_bcf = make_scalar(0.0);
   auto dt_blapse = make_scalar(0.0);
   auto dt_bshift = make_vector(0.0);
+  auto dt_btheta = make_scalar(0.0);
+  auto dt_bz = make_covector(0.0);
 
   const auto dt_result = bc.dg_time_derivative(
       make_not_null(&dt_cm), make_not_null(&dt_cf), make_not_null(&dt_a_tilde),
@@ -261,18 +257,19 @@ void test_minkowski() {
       make_not_null(&dt_shift), make_not_null(&dt_b),
       make_not_null(&dt_field_a), make_not_null(&dt_field_b),
       make_not_null(&dt_field_d), make_not_null(&dt_field_p),
-      make_not_null(&dt_u_s3m), make_not_null(&dt_u_v2m),
-      make_not_null(&dt_u_s2m), make_not_null(&dt_u_tm), make_not_null(&dt_bcm),
+      make_not_null(&dt_u_tm), make_not_null(&dt_bcm),
       make_not_null(&dt_bcf), make_not_null(&dt_blapse),
-      make_not_null(&dt_bshift), face_mesh_velocity, normal_covector,
+      make_not_null(&dt_bshift),
+      make_not_null(&dt_btheta), make_not_null(&dt_bz),
+      face_mesh_velocity, normal_covector,
       interior_conformal_metric, interior_conformal_factor, interior_a_tilde,
       interior_trace_K, interior_theta, interior_gamma_hat, interior_lapse,
       interior_shift, interior_auxiliary_shift_b, interior_field_a,
       interior_field_b, interior_field_d, interior_field_p,
-      interior_u_scalar3_minus, interior_u_vector2_minus,
-      interior_u_scalar2_minus, interior_u_tensor_minus,
+      interior_u_tensor_minus,
       interior_boundary_conformal_metric, interior_boundary_conformal_factor,
-      interior_boundary_lapse, interior_boundary_shift, coords, time,
+      interior_boundary_lapse, interior_boundary_shift,
+      interior_boundary_theta, interior_boundary_z, coords, time,
       evolve_lapse_and_shift);
 
   CHECK_FALSE(dt_result.has_value());
@@ -393,12 +390,6 @@ void test_kerrschild() {
       get<Ccz4::Tags::FieldP<DataVector, 3>>(analytic_values);
 
   // Boundary mode interior values = 0 (constraints satisfied)
-  const auto interior_u_scalar3_minus =
-      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
-  const auto interior_u_vector2_minus =
-      make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
-  const auto interior_u_scalar2_minus =
-      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
   auto interior_u_tensor_minus =
       make_with_value<tnsr::ii<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
 
@@ -407,6 +398,10 @@ void test_kerrschild() {
   const auto& interior_boundary_conformal_factor = interior_conformal_factor;
   const auto& interior_boundary_lapse = interior_lapse;
   const auto& interior_boundary_shift = interior_shift;
+  const auto interior_boundary_theta =
+      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  const auto interior_boundary_z =
+      make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
 
   // Normal covector (pointing in x-direction)
   auto normal_covector =
@@ -436,12 +431,6 @@ void test_kerrschild() {
   auto ghost_field_d =
       make_with_value<tnsr::ijj<DataVector, Dim>>(num_pts, 0.0);
   auto ghost_field_p = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
-  auto ghost_u_scalar3_minus =
-      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
-  auto ghost_u_vector2_minus =
-      make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
-  auto ghost_u_scalar2_minus =
-      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
   auto ghost_u_tensor_minus =
       make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
   auto ghost_boundary_conformal_metric =
@@ -451,6 +440,9 @@ void test_kerrschild() {
   auto ghost_boundary_lapse = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
   auto ghost_boundary_shift =
       make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_boundary_theta = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto ghost_boundary_z =
+      make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
 
   const auto ghost_result = bc.dg_ghost(
       make_not_null(&ghost_conformal_metric),
@@ -460,22 +452,21 @@ void test_kerrschild() {
       make_not_null(&ghost_shift), make_not_null(&ghost_auxiliary_shift_b),
       make_not_null(&ghost_field_a), make_not_null(&ghost_field_b),
       make_not_null(&ghost_field_d), make_not_null(&ghost_field_p),
-      make_not_null(&ghost_u_scalar3_minus),
-      make_not_null(&ghost_u_vector2_minus),
-      make_not_null(&ghost_u_scalar2_minus),
       make_not_null(&ghost_u_tensor_minus),
       make_not_null(&ghost_boundary_conformal_metric),
       make_not_null(&ghost_boundary_conformal_factor),
       make_not_null(&ghost_boundary_lapse),
-      make_not_null(&ghost_boundary_shift), face_mesh_velocity, normal_covector,
+      make_not_null(&ghost_boundary_shift),
+      make_not_null(&ghost_boundary_theta),
+      make_not_null(&ghost_boundary_z), face_mesh_velocity, normal_covector,
       interior_conformal_metric, interior_conformal_factor, interior_a_tilde,
       interior_trace_K, interior_theta, interior_gamma_hat, interior_lapse,
       interior_shift, interior_auxiliary_shift_b, interior_field_a,
       interior_field_b, interior_field_d, interior_field_p,
-      interior_u_scalar3_minus, interior_u_vector2_minus,
-      interior_u_scalar2_minus, interior_u_tensor_minus,
+      interior_u_tensor_minus,
       interior_boundary_conformal_metric, interior_boundary_conformal_factor,
-      interior_boundary_lapse, interior_boundary_shift, coords, time,
+      interior_boundary_lapse, interior_boundary_shift,
+      interior_boundary_theta, interior_boundary_z, coords, time,
       evolve_lapse_and_shift);
 
   CHECK_FALSE(ghost_result.has_value());
@@ -513,14 +504,13 @@ void test_kerrschild() {
   auto dt_field_b = make_with_value<tnsr::iJ<DataVector, Dim>>(num_pts, 0.0);
   auto dt_field_d = make_with_value<tnsr::ijj<DataVector, Dim>>(num_pts, 0.0);
   auto dt_field_p = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
-  auto dt_u_s3m = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
-  auto dt_u_v2m = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
-  auto dt_u_s2m = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
   auto dt_u_tm = make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
   auto dt_bcm = make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
   auto dt_bcf = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
   auto dt_blapse = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
   auto dt_bshift = make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_btheta = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_bz = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
 
   const auto dt_result = bc.dg_time_derivative(
       make_not_null(&dt_cm), make_not_null(&dt_cf), make_not_null(&dt_a_tilde),
@@ -529,18 +519,19 @@ void test_kerrschild() {
       make_not_null(&dt_shift), make_not_null(&dt_b),
       make_not_null(&dt_field_a), make_not_null(&dt_field_b),
       make_not_null(&dt_field_d), make_not_null(&dt_field_p),
-      make_not_null(&dt_u_s3m), make_not_null(&dt_u_v2m),
-      make_not_null(&dt_u_s2m), make_not_null(&dt_u_tm), make_not_null(&dt_bcm),
+      make_not_null(&dt_u_tm), make_not_null(&dt_bcm),
       make_not_null(&dt_bcf), make_not_null(&dt_blapse),
-      make_not_null(&dt_bshift), face_mesh_velocity, normal_covector,
+      make_not_null(&dt_bshift),
+      make_not_null(&dt_btheta), make_not_null(&dt_bz),
+      face_mesh_velocity, normal_covector,
       interior_conformal_metric, interior_conformal_factor, interior_a_tilde,
       interior_trace_K, interior_theta, interior_gamma_hat, interior_lapse,
       interior_shift, interior_auxiliary_shift_b, interior_field_a,
       interior_field_b, interior_field_d, interior_field_p,
-      interior_u_scalar3_minus, interior_u_vector2_minus,
-      interior_u_scalar2_minus, interior_u_tensor_minus,
+      interior_u_tensor_minus,
       interior_boundary_conformal_metric, interior_boundary_conformal_factor,
-      interior_boundary_lapse, interior_boundary_shift, coords, time,
+      interior_boundary_lapse, interior_boundary_shift,
+      interior_boundary_theta, interior_boundary_z, coords, time,
       evolve_lapse_and_shift);
 
   CHECK_FALSE(dt_result.has_value());
@@ -664,21 +655,19 @@ void test_kerrschild_perturbed_four_fields() {
   get(perturbed_lapse) += 0.1;
 
   // Boundary mode interior values = 0
-  const auto interior_u_scalar3_minus =
-      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
-  const auto interior_u_vector2_minus =
-      make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
-  const auto interior_u_scalar2_minus =
-      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
   auto interior_u_tensor_minus =
       make_with_value<tnsr::ii<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
 
   // Boundary second-order fields = perturbed interior
-  // (CopySecondOrderFieldsFromInterior=true → coeff = interior = perturbed)
+  // (CopySecondOrderFieldsFromInterior=true -> coeff = interior = perturbed)
   const auto& interior_boundary_conformal_metric = analytic_conformal_metric;
   const auto& interior_boundary_conformal_factor = perturbed_conformal_factor;
   const auto& interior_boundary_lapse = perturbed_lapse;
   const auto& interior_boundary_shift = analytic_shift;
+  const auto interior_boundary_theta =
+      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  const auto interior_boundary_z =
+      make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
 
   auto normal_covector =
       make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
@@ -707,12 +696,6 @@ void test_kerrschild_perturbed_four_fields() {
   auto ghost_field_d =
       make_with_value<tnsr::ijj<DataVector, Dim>>(num_pts, 0.0);
   auto ghost_field_p = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
-  auto ghost_u_scalar3_minus =
-      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
-  auto ghost_u_vector2_minus =
-      make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
-  auto ghost_u_scalar2_minus =
-      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
   auto ghost_u_tensor_minus =
       make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
   auto ghost_boundary_conformal_metric =
@@ -722,6 +705,10 @@ void test_kerrschild_perturbed_four_fields() {
   auto ghost_boundary_lapse = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
   auto ghost_boundary_shift =
       make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_boundary_theta =
+      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto ghost_boundary_z =
+      make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
 
   const auto ghost_result = bc.dg_ghost(
       make_not_null(&ghost_conformal_metric),
@@ -731,22 +718,21 @@ void test_kerrschild_perturbed_four_fields() {
       make_not_null(&ghost_shift), make_not_null(&ghost_auxiliary_shift_b),
       make_not_null(&ghost_field_a), make_not_null(&ghost_field_b),
       make_not_null(&ghost_field_d), make_not_null(&ghost_field_p),
-      make_not_null(&ghost_u_scalar3_minus),
-      make_not_null(&ghost_u_vector2_minus),
-      make_not_null(&ghost_u_scalar2_minus),
       make_not_null(&ghost_u_tensor_minus),
       make_not_null(&ghost_boundary_conformal_metric),
       make_not_null(&ghost_boundary_conformal_factor),
       make_not_null(&ghost_boundary_lapse),
-      make_not_null(&ghost_boundary_shift), face_mesh_velocity, normal_covector,
+      make_not_null(&ghost_boundary_shift),
+      make_not_null(&ghost_boundary_theta),
+      make_not_null(&ghost_boundary_z), face_mesh_velocity, normal_covector,
       analytic_conformal_metric, perturbed_conformal_factor, analytic_a_tilde,
       analytic_trace_K, analytic_theta, analytic_gamma_hat, perturbed_lapse,
       analytic_shift, analytic_auxiliary_shift_b, analytic_field_a,
       analytic_field_b, analytic_field_d, analytic_field_p,
-      interior_u_scalar3_minus, interior_u_vector2_minus,
-      interior_u_scalar2_minus, interior_u_tensor_minus,
+      interior_u_tensor_minus,
       interior_boundary_conformal_metric, interior_boundary_conformal_factor,
-      interior_boundary_lapse, interior_boundary_shift, coords, time,
+      interior_boundary_lapse, interior_boundary_shift,
+      interior_boundary_theta, interior_boundary_z, coords, time,
       evolve_lapse_and_shift);
 
   CHECK_FALSE(ghost_result.has_value());

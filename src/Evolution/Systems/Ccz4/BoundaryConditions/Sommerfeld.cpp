@@ -60,14 +60,13 @@ std::optional<std::string> Sommerfeld::dg_ghost(
     gsl::not_null<tnsr::iJ<DataVector, 3, Frame::Inertial>*> /*unused*/,
     gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*> /*unused*/,
     gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> /*unused*/,
-    gsl::not_null<Scalar<DataVector>*> /*unused*/,
-    gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> /*unused*/,
-    gsl::not_null<Scalar<DataVector>*> /*unused*/,
     gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> /*unused*/,
     gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> /*unused*/,
     gsl::not_null<Scalar<DataVector>*> /*unused*/,
     gsl::not_null<Scalar<DataVector>*> /*unused*/,
     gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> /*unused*/,
+    gsl::not_null<Scalar<DataVector>*> /*unused*/,
+    gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> /*unused*/,
     const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>& /*unused*/,
     const tnsr::i<DataVector, 3, Frame::Inertial>& /*unused*/) const {
   ERROR("Sommerfeld DG boundary condition is not yet implemented.");

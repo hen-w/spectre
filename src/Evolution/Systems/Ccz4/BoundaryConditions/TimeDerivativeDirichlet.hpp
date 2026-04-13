@@ -80,7 +80,7 @@ class TimeDerivativeDirichlet final : public BoundaryCondition {
   using dg_gridless_tags = tmpl::list<>;
 
   std::optional<std::string> dg_time_derivative(
-      // 13 not_null correction outputs (variables_tag_list order):
+      // not_null correction outputs (variables_tag_list order):
       gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
           dt_conformal_metric_correction,
       gsl::not_null<Scalar<DataVector>*> dt_conformal_factor_correction,
@@ -104,10 +104,6 @@ class TimeDerivativeDirichlet final : public BoundaryCondition {
           dt_field_d_correction,
       gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
           dt_field_p_correction,
-      gsl::not_null<Scalar<DataVector>*> dt_u_scalar3_minus_correction,
-      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
-          dt_u_vector2_minus_correction,
-      gsl::not_null<Scalar<DataVector>*> dt_u_scalar2_minus_correction,
       gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
           dt_u_tensor_minus_correction,
       gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
@@ -117,6 +113,9 @@ class TimeDerivativeDirichlet final : public BoundaryCondition {
       gsl::not_null<Scalar<DataVector>*> dt_boundary_lapse_correction,
       gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
           dt_boundary_shift_correction,
+      gsl::not_null<Scalar<DataVector>*> dt_boundary_theta_correction,
+      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
+          dt_boundary_z_correction,
       // Standard DG time derivative args:
       const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&
           face_mesh_velocity,

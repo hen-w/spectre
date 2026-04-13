@@ -81,21 +81,22 @@ struct LdgTimeDerivative {
       gsl::not_null<tnsr::iJ<DataVector, 3>*> dt_field_b,
       gsl::not_null<tnsr::ijj<DataVector, 3>*> dt_field_d,
       gsl::not_null<tnsr::i<DataVector, 3>*> dt_field_p,
-      //   boundary modes (4):
-      gsl::not_null<Scalar<DataVector>*> dt_u_scalar3_minus,
-      gsl::not_null<tnsr::i<DataVector, 3>*> dt_u_vector2_minus,
-      gsl::not_null<Scalar<DataVector>*> dt_u_scalar2_minus,
+      //   boundary modes (1):
       gsl::not_null<tnsr::ii<DataVector, 3>*> dt_u_tensor_minus,
-      //   boundary second-order fields (4):
+      //   boundary second-order fields (6):
       gsl::not_null<tnsr::ii<DataVector, 3>*> dt_boundary_conformal_metric,
       gsl::not_null<Scalar<DataVector>*> dt_boundary_conformal_factor,
       gsl::not_null<Scalar<DataVector>*> dt_boundary_lapse,
       gsl::not_null<tnsr::I<DataVector, 3>*> dt_boundary_shift,
+      gsl::not_null<Scalar<DataVector>*> dt_boundary_theta,
+      gsl::not_null<tnsr::i<DataVector, 3>*> dt_boundary_z,
 
-      // Partial derivatives of gradient_variables (21 total):
+      // Partial derivatives of gradient_variables (13 original/aux +
+      // UTensorMinus + 6 boundary second-order):
       // ConformalMetric, ConformalFactor, ATilde, K, Theta, GammaHat,
-      // Lapse, Shift, b, FieldA, FieldB, FieldD, FieldP,
-      // UScalar3Minus, UVector2Minus, UScalar2Minus, UTensorMinus
+      // Lapse, Shift, b, FieldA, FieldB, FieldD, FieldP, UTensorMinus,
+      // BoundaryConformalMetric, BoundaryConformalFactor, BoundaryLapse,
+      // BoundaryShift, BoundaryTheta, BoundaryZ
       const tnsr::ijj<DataVector, 3>& /*d_conformal_metric*/,
       const tnsr::i<DataVector, 3>& /*d_conformal_factor*/,
       const tnsr::ijj<DataVector, 3>& d_a_tilde,
@@ -110,9 +111,6 @@ struct LdgTimeDerivative {
       const tnsr::ijkk<DataVector, 3>& d_field_d_raw,
       const tnsr::ij<DataVector, 3>& d_field_p_raw,
       // Boundary mode derivatives (zero, included for DG infrastructure)
-      const tnsr::i<DataVector, 3>& /*d_u_scalar3_minus*/,
-      const tnsr::ij<DataVector, 3>& /*d_u_vector2_minus*/,
-      const tnsr::i<DataVector, 3>& /*d_u_scalar2_minus*/,
       const tnsr::ijj<DataVector, 3>& /*d_u_tensor_minus*/,
       // Boundary second-order field derivatives (zero, included for DG
       // infrastructure)
@@ -120,6 +118,8 @@ struct LdgTimeDerivative {
       const tnsr::i<DataVector, 3>& /*d_boundary_conformal_factor*/,
       const tnsr::i<DataVector, 3>& /*d_boundary_lapse*/,
       const tnsr::iJ<DataVector, 3>& /*d_boundary_shift*/,
+      const tnsr::i<DataVector, 3>& /*d_boundary_theta*/,
+      const tnsr::ij<DataVector, 3>& /*d_boundary_z*/,
 
       // argument_tags
       const tnsr::ii<DataVector, 3>& conformal_metric,
@@ -144,11 +144,6 @@ struct LdgTimeDerivative {
     const size_t num_pts = get(lapse).size();
 
     // Initialize boundary mode dt to zero everywhere
-    get(*dt_u_scalar3_minus) = 0.0;
-    for (auto& component : *dt_u_vector2_minus) {
-      component = 0.0;
-    }
-    get(*dt_u_scalar2_minus) = 0.0;
     for (auto& component : *dt_u_tensor_minus) {
       component = 0.0;
     }
@@ -160,6 +155,10 @@ struct LdgTimeDerivative {
     get(*dt_boundary_conformal_factor) = 0.0;
     get(*dt_boundary_lapse) = 0.0;
     for (auto& component : *dt_boundary_shift) {
+      component = 0.0;
+    }
+    get(*dt_boundary_theta) = 0.0;
+    for (auto& component : *dt_boundary_z) {
       component = 0.0;
     }
 

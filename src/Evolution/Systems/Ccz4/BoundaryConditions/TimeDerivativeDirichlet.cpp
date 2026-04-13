@@ -56,10 +56,6 @@ std::optional<std::string> TimeDerivativeDirichlet::dg_time_derivative(
         dt_field_d_correction,
     const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
         dt_field_p_correction,
-    const gsl::not_null<Scalar<DataVector>*> dt_u_scalar3_minus_correction,
-    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
-        dt_u_vector2_minus_correction,
-    const gsl::not_null<Scalar<DataVector>*> dt_u_scalar2_minus_correction,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
         dt_u_tensor_minus_correction,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
@@ -69,6 +65,9 @@ std::optional<std::string> TimeDerivativeDirichlet::dg_time_derivative(
     const gsl::not_null<Scalar<DataVector>*> dt_boundary_lapse_correction,
     const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
         dt_boundary_shift_correction,
+    const gsl::not_null<Scalar<DataVector>*> dt_boundary_theta_correction,
+    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
+        dt_boundary_z_correction,
     const std::optional<
         tnsr::I<DataVector, 3, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, 3, Frame::Inertial>& /*normal_covector*/) const {
@@ -107,11 +106,6 @@ std::optional<std::string> TimeDerivativeDirichlet::dg_time_derivative(
   for (auto& component : *dt_field_p_correction) {
     component = 0.0;
   }
-  get(*dt_u_scalar3_minus_correction) = 0.0;
-  for (auto& component : *dt_u_vector2_minus_correction) {
-    component = 0.0;
-  }
-  get(*dt_u_scalar2_minus_correction) = 0.0;
   for (auto& component : *dt_u_tensor_minus_correction) {
     component = 0.0;
   }
@@ -121,6 +115,10 @@ std::optional<std::string> TimeDerivativeDirichlet::dg_time_derivative(
   get(*dt_boundary_conformal_factor_correction) = 0.0;
   get(*dt_boundary_lapse_correction) = 0.0;
   for (auto& component : *dt_boundary_shift_correction) {
+    component = 0.0;
+  }
+  get(*dt_boundary_theta_correction) = 0.0;
+  for (auto& component : *dt_boundary_z_correction) {
     component = 0.0;
   }
   return {};

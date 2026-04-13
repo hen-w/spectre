@@ -531,5 +531,23 @@ template <typename DataType, size_t Dim, typename Frame>
 struct BoundaryShift : db::SimpleTag {
   using type = tnsr::I<DataType, Dim, Frame>;
 };
+
+/// \brief Boundary-integrated Z4 scalar constraint Theta for CRPBC.
+/// Evolved on CRPBC faces as an advection + damping ODE; used to reconstruct
+/// the UScalar3Minus / UVector2Minus / UScalar2Minus incoming characteristic
+/// modes in `ConstraintsRadiationPreserving`.
+template <typename DataType>
+struct BoundaryTheta : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
+
+/// \brief Boundary-integrated Z4 spatial constraint vector Z_i for CRPBC.
+/// Lower-index, matches `Ccz4::Tags::SpatialZ4Constraint`. Evolved on CRPBC
+/// faces; used together with `BoundaryTheta` to reconstruct the three
+/// incoming physical+constraint minus modes.
+template <typename DataType, size_t Dim, typename Frame>
+struct BoundaryZ : db::SimpleTag {
+  using type = tnsr::i<DataType, Dim, Frame>;
+};
 }  // namespace Tags
 }  // namespace Ccz4

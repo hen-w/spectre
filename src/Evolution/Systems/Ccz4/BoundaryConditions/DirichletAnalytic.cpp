@@ -62,10 +62,6 @@ std::optional<std::string> DirichletAnalytic::dg_ghost(
     const gsl::not_null<tnsr::iJ<DataVector, 3, Frame::Inertial>*> field_b,
     const gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*> field_d,
     const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> field_p,
-    const gsl::not_null<Scalar<DataVector>*> u_scalar3_minus,
-    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
-        u_vector2_minus,
-    const gsl::not_null<Scalar<DataVector>*> u_scalar2_minus,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
         u_tensor_minus,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
@@ -74,6 +70,8 @@ std::optional<std::string> DirichletAnalytic::dg_ghost(
     const gsl::not_null<Scalar<DataVector>*> boundary_lapse,
     const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
         boundary_shift,
+    const gsl::not_null<Scalar<DataVector>*> boundary_theta,
+    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> boundary_z,
     const std::optional<
         tnsr::I<DataVector, 3, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, 3, Frame::Inertial>& /*normal_covector*/,
@@ -131,11 +129,6 @@ std::optional<std::string> DirichletAnalytic::dg_ghost(
   *field_d = get<Tags::FieldD<DataVector, 3>>(boundary_values);
   *field_p = get<Tags::FieldP<DataVector, 3>>(boundary_values);
   // Boundary mode exterior values: zero (corrections are zero for these tags)
-  *u_scalar3_minus = make_with_value<Scalar<DataVector>>(coords, 0.0);
-  for (auto& component : *u_vector2_minus) {
-    component = 0.0;
-  }
-  *u_scalar2_minus = make_with_value<Scalar<DataVector>>(coords, 0.0);
   for (auto& component : *u_tensor_minus) {
     component = 0.0;
   }
@@ -145,6 +138,12 @@ std::optional<std::string> DirichletAnalytic::dg_ghost(
       get<Tags::ConformalFactor<DataVector>>(boundary_values);
   *boundary_lapse = get<gr::Tags::Lapse<DataVector>>(boundary_values);
   *boundary_shift = get<gr::Tags::Shift<DataVector, 3>>(boundary_values);
+  // Boundary theta/z: set from analytic theta (z=0 for analytic solutions
+  // where constraints are satisfied)
+  *boundary_theta = get<Tags::Theta<DataVector>>(boundary_values);
+  for (auto& component : *boundary_z) {
+    component = 0.0;
+  }
   return std::nullopt;
 }
 

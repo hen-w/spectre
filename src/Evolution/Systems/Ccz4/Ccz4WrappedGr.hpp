@@ -104,14 +104,13 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
       Ccz4::Tags::FieldB<DataType, volume_dim>,
       Ccz4::Tags::FieldD<DataType, volume_dim>,
       Ccz4::Tags::FieldP<DataType, volume_dim>,
-      Ccz4::fd::Tags::UScalar3Minus<DataType>,
-      Ccz4::fd::Tags::UVector2Minus<DataType, volume_dim, Frame::Inertial>,
-      Ccz4::fd::Tags::UScalar2Minus<DataType>,
       Ccz4::fd::Tags::UTensorMinus<DataType, volume_dim, Frame::Inertial>,
       Ccz4::Tags::BoundaryConformalMetric<DataType, volume_dim>,
       Ccz4::Tags::BoundaryConformalFactor<DataType>,
       Ccz4::Tags::BoundaryLapse<DataType>,
-      Ccz4::Tags::BoundaryShift<DataType, volume_dim>>;
+      Ccz4::Tags::BoundaryShift<DataType, volume_dim>,
+      Ccz4::Tags::BoundaryTheta<DataType>,
+      Ccz4::Tags::BoundaryZ<DataType, volume_dim, Frame::Inertial>>;
 
   template <typename... Tags>
   tuples::TaggedTuple<Tags...> variables(
@@ -260,27 +259,6 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
       const IntermediateVars& intermediate_vars) const;
 
   // Boundary mode tags — always zero at initialization
-  tuples::TaggedTuple<Ccz4::fd::Tags::UScalar3Minus<DataVector>> variables(
-      const tnsr::I<DataVector, volume_dim>& x,
-      tmpl::list<Ccz4::fd::Tags::UScalar3Minus<DataVector>> /*meta*/,
-      const IntermediateVars& /*intermediate_vars*/) const {
-    return {make_with_value<Scalar<DataVector>>(x, 0.0)};
-  }
-  tuples::TaggedTuple<
-      Ccz4::fd::Tags::UVector2Minus<DataVector, volume_dim, Frame::Inertial>>
-  variables(const tnsr::I<DataVector, volume_dim>& x,
-            tmpl::list<Ccz4::fd::Tags::UVector2Minus<DataVector, volume_dim,
-                                                     Frame::Inertial>> /*meta*/,
-            const IntermediateVars& /*intermediate_vars*/) const {
-    return {make_with_value<tnsr::i<DataVector, volume_dim, Frame::Inertial>>(
-        x, 0.0)};
-  }
-  tuples::TaggedTuple<Ccz4::fd::Tags::UScalar2Minus<DataVector>> variables(
-      const tnsr::I<DataVector, volume_dim>& x,
-      tmpl::list<Ccz4::fd::Tags::UScalar2Minus<DataVector>> /*meta*/,
-      const IntermediateVars& /*intermediate_vars*/) const {
-    return {make_with_value<Scalar<DataVector>>(x, 0.0)};
-  }
   tuples::TaggedTuple<
       Ccz4::fd::Tags::UTensorMinus<DataVector, volume_dim, Frame::Inertial>>
   variables(const tnsr::I<DataVector, volume_dim>& x,
@@ -289,6 +267,22 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
             const IntermediateVars& /*intermediate_vars*/) const {
     return {make_with_value<tnsr::ii<DataVector, volume_dim, Frame::Inertial>>(
         x, 0.0)};
+  }
+  tuples::TaggedTuple<Ccz4::Tags::BoundaryTheta<DataVector>> variables(
+      const tnsr::I<DataVector, volume_dim>& x,
+      tmpl::list<Ccz4::Tags::BoundaryTheta<DataVector>> /*meta*/,
+      const IntermediateVars& /*intermediate_vars*/) const {
+    return {make_with_value<Scalar<DataVector>>(x, 0.0)};
+  }
+  tuples::TaggedTuple<
+      Ccz4::Tags::BoundaryZ<DataVector, volume_dim, Frame::Inertial>>
+  variables(const tnsr::I<DataVector, volume_dim>& x,
+            tmpl::list<Ccz4::Tags::BoundaryZ<DataVector, volume_dim,
+                                             Frame::Inertial>> /*meta*/,
+            const IntermediateVars& /*intermediate_vars*/) const {
+    return {
+        make_with_value<tnsr::i<DataVector, volume_dim, Frame::Inertial>>(x,
+                                                                          0.0)};
   }
 
   // Boundary second-order fields — initialized to analytic field values.
@@ -422,32 +416,26 @@ class Ccz4WrappedGr : public virtual evolution::initial_data::InitialData,
   }
 
   // Boundary mode tags — always zero (time-dependent overloads)
-  tuples::TaggedTuple<Ccz4::fd::Tags::UScalar3Minus<DataVector>> variables(
-      const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
-      tmpl::list<Ccz4::fd::Tags::UScalar3Minus<DataVector>> meta,
-      const IntermediateVars& intermediate_vars) const {
-    return variables(x, meta, intermediate_vars);
-  }
-  tuples::TaggedTuple<
-      Ccz4::fd::Tags::UVector2Minus<DataVector, volume_dim, Frame::Inertial>>
-  variables(const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
-            tmpl::list<Ccz4::fd::Tags::UVector2Minus<DataVector, volume_dim,
-                                                     Frame::Inertial>>
-                meta,
-            const IntermediateVars& intermediate_vars) const {
-    return variables(x, meta, intermediate_vars);
-  }
-  tuples::TaggedTuple<Ccz4::fd::Tags::UScalar2Minus<DataVector>> variables(
-      const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
-      tmpl::list<Ccz4::fd::Tags::UScalar2Minus<DataVector>> meta,
-      const IntermediateVars& intermediate_vars) const {
-    return variables(x, meta, intermediate_vars);
-  }
   tuples::TaggedTuple<
       Ccz4::fd::Tags::UTensorMinus<DataVector, volume_dim, Frame::Inertial>>
   variables(const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
             tmpl::list<Ccz4::fd::Tags::UTensorMinus<DataVector, volume_dim,
                                                     Frame::Inertial>>
+                meta,
+            const IntermediateVars& intermediate_vars) const {
+    return variables(x, meta, intermediate_vars);
+  }
+  tuples::TaggedTuple<Ccz4::Tags::BoundaryTheta<DataVector>> variables(
+      const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+      tmpl::list<Ccz4::Tags::BoundaryTheta<DataVector>> meta,
+      const IntermediateVars& intermediate_vars) const {
+    return variables(x, meta, intermediate_vars);
+  }
+  tuples::TaggedTuple<
+      Ccz4::Tags::BoundaryZ<DataVector, volume_dim, Frame::Inertial>>
+  variables(const tnsr::I<DataVector, volume_dim>& x, double /*t*/,
+            tmpl::list<Ccz4::Tags::BoundaryZ<DataVector, volume_dim,
+                                             Frame::Inertial>>
                 meta,
             const IntermediateVars& intermediate_vars) const {
     return variables(x, meta, intermediate_vars);

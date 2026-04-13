@@ -585,10 +585,6 @@ std::optional<std::string> DirichletCharacteristics::dg_ghost(
     const gsl::not_null<tnsr::iJ<DataVector, 3, Frame::Inertial>*> field_b,
     const gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*> field_d,
     const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> field_p,
-    const gsl::not_null<Scalar<DataVector>*> bm_u_scalar3_minus,
-    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
-        bm_u_vector2_minus,
-    const gsl::not_null<Scalar<DataVector>*> bm_u_scalar2_minus,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
         bm_u_tensor_minus,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
@@ -597,6 +593,8 @@ std::optional<std::string> DirichletCharacteristics::dg_ghost(
     const gsl::not_null<Scalar<DataVector>*> boundary_lapse,
     const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
         boundary_shift,
+    const gsl::not_null<Scalar<DataVector>*> boundary_theta,
+    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> boundary_z,
     const std::optional<
         tnsr::I<DataVector, 3, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
@@ -613,15 +611,14 @@ std::optional<std::string> DirichletCharacteristics::dg_ghost(
     const tnsr::iJ<DataVector, 3, Frame::Inertial>& interior_field_b,
     const tnsr::ijj<DataVector, 3, Frame::Inertial>& interior_field_d,
     const tnsr::i<DataVector, 3, Frame::Inertial>& interior_field_p,
-    const Scalar<DataVector>& /*interior_u_scalar3_minus*/,
-    const tnsr::i<DataVector, 3, Frame::Inertial>& /*interior_u_vector2_minus*/,
-    const Scalar<DataVector>& /*interior_u_scalar2_minus*/,
-    const tnsr::ii<DataVector, 3, Frame::Inertial>& /*interior_u_tensor_minus*/,
+    const tnsr::ii<DataVector, 3, Frame::Inertial>& /*interior_boundary_u_tensor_minus*/,
     const tnsr::ii<DataVector, 3, Frame::Inertial>&
         interior_boundary_conformal_metric,
     const Scalar<DataVector>& interior_boundary_conformal_factor,
     const Scalar<DataVector>& interior_boundary_lapse,
     const tnsr::I<DataVector, 3, Frame::Inertial>& interior_boundary_shift,
+    const Scalar<DataVector>& interior_boundary_theta,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& interior_boundary_z,
     const tnsr::I<DataVector, 3, Frame::Inertial>& coords, const double time,
     const bool evolve_lapse_and_shift) const {
   static constexpr size_t Dim = 3;
@@ -742,22 +739,17 @@ std::optional<std::string> DirichletCharacteristics::dg_ghost(
   *field_p = std::move(result.field_p);
 
   // Boundary mode exterior values: zero
-  *bm_u_scalar3_minus =
-      make_with_value<Scalar<DataVector>>(get(interior_conformal_factor), 0.0);
-  for (auto& component : *bm_u_vector2_minus) {
-    component = 0.0;
-  }
-  *bm_u_scalar2_minus =
-      make_with_value<Scalar<DataVector>>(get(interior_conformal_factor), 0.0);
   for (auto& component : *bm_u_tensor_minus) {
     component = 0.0;
   }
 
-  // Boundary second-order field exterior values: zero jump
+  // Boundary second-order field exterior values: pass through interior
   *boundary_conformal_metric = interior_boundary_conformal_metric;
   *boundary_conformal_factor = interior_boundary_conformal_factor;
   *boundary_lapse = interior_boundary_lapse;
   *boundary_shift = interior_boundary_shift;
+  *boundary_theta = interior_boundary_theta;
+  *boundary_z = interior_boundary_z;
 
   return {};
 }
@@ -786,10 +778,6 @@ std::optional<std::string> DirichletCharacteristics::dg_time_derivative(
         dt_field_d_correction,
     const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
         dt_field_p_correction,
-    const gsl::not_null<Scalar<DataVector>*> dt_u_scalar3_minus_correction,
-    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
-        dt_u_vector2_minus_correction,
-    const gsl::not_null<Scalar<DataVector>*> dt_u_scalar2_minus_correction,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
         dt_u_tensor_minus_correction,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
@@ -799,6 +787,9 @@ std::optional<std::string> DirichletCharacteristics::dg_time_derivative(
     const gsl::not_null<Scalar<DataVector>*> dt_boundary_lapse_correction,
     const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
         dt_boundary_shift_correction,
+    const gsl::not_null<Scalar<DataVector>*> dt_boundary_theta_correction,
+    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
+        dt_boundary_z_correction,
     const std::optional<
         tnsr::I<DataVector, 3, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
@@ -815,15 +806,14 @@ std::optional<std::string> DirichletCharacteristics::dg_time_derivative(
     const tnsr::iJ<DataVector, 3, Frame::Inertial>& interior_field_b,
     const tnsr::ijj<DataVector, 3, Frame::Inertial>& interior_field_d,
     const tnsr::i<DataVector, 3, Frame::Inertial>& interior_field_p,
-    const Scalar<DataVector>& /*interior_u_scalar3_minus*/,
-    const tnsr::i<DataVector, 3, Frame::Inertial>& /*interior_u_vector2_minus*/,
-    const Scalar<DataVector>& /*interior_u_scalar2_minus*/,
-    const tnsr::ii<DataVector, 3, Frame::Inertial>& /*interior_u_tensor_minus*/,
+    const tnsr::ii<DataVector, 3, Frame::Inertial>& /*interior_boundary_u_tensor_minus*/,
     const tnsr::ii<DataVector, 3, Frame::Inertial>&
         interior_boundary_conformal_metric,
     const Scalar<DataVector>& interior_boundary_conformal_factor,
     const Scalar<DataVector>& interior_boundary_lapse,
     const tnsr::I<DataVector, 3, Frame::Inertial>& interior_boundary_shift,
+    const Scalar<DataVector>& /*interior_boundary_theta*/,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& /*interior_boundary_z*/,
     const tnsr::I<DataVector, 3, Frame::Inertial>& coords, const double time,
     const bool evolve_lapse_and_shift) const {
   static constexpr size_t Dim = 3;
@@ -867,11 +857,6 @@ std::optional<std::string> DirichletCharacteristics::dg_time_derivative(
     component = 0.0;
   }
   // Zero boundary mode dt corrections
-  get(*dt_u_scalar3_minus_correction) = 0.0;
-  for (auto& component : *dt_u_vector2_minus_correction) {
-    component = 0.0;
-  }
-  get(*dt_u_scalar2_minus_correction) = 0.0;
   for (auto& component : *dt_u_tensor_minus_correction) {
     component = 0.0;
   }
@@ -884,6 +869,10 @@ std::optional<std::string> DirichletCharacteristics::dg_time_derivative(
     get(*dt_boundary_conformal_factor_correction) = 0.0;
     get(*dt_boundary_lapse_correction) = 0.0;
     for (auto& component : *dt_boundary_shift_correction) {
+      component = 0.0;
+    }
+    get(*dt_boundary_theta_correction) = 0.0;
+    for (auto& component : *dt_boundary_z_correction) {
       component = 0.0;
     }
     return {};
@@ -954,6 +943,12 @@ std::optional<std::string> DirichletCharacteristics::dg_time_derivative(
       interior_boundary_shift, mixed_a_tilde, mixed_K, mixed_theta, mixed_b,
       result.field_a, result.field_b, result.field_d, result.field_p, k_0,
       f_val, shifting_shift);
+
+  // Zero boundary theta/z dt corrections (not evolved by this BC)
+  get(*dt_boundary_theta_correction) = 0.0;
+  for (auto& component : *dt_boundary_z_correction) {
+    component = 0.0;
+  }
 
   return {};
 }

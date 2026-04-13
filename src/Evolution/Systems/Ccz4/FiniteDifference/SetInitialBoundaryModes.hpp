@@ -19,10 +19,12 @@
 #include "Domain/Structure/Element.hpp"
 #include "Domain/Tags.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/ConstraintsRadiationPreserving.hpp"
+#include "Evolution/Systems/Ccz4/Christoffel.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Characteristics.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
+#include "Evolution/Systems/Ccz4/Z4Constraint.hpp"
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
 #include "PointwiseFunctions/GeneralRelativity/Tags.hpp"
 #include "Utilities/ErrorHandling/Assert.hpp"
@@ -32,24 +34,29 @@
 
 namespace Ccz4::fd {
 /*!
- * \brief Initialize boundary mode evolved variables from the initial data
- * at CRPBC external boundary faces.
+ * \brief Initialize boundary mode / boundary-integrated evolved variables
+ * from the initial data at CRPBC external boundary faces.
  *
- * \details The boundary mode variables (UScalar3Minus, UVector2Minus,
- * UScalar2Minus, UTensorMinus) are initialized to the incoming characteristic
- * field values computed from the initial data. At interior points and
- * non-CRPBC faces, the boundary modes remain zero.
+ * \details
+ * - `UTensorMinus` is initialized to the incoming characteristic field
+ *   value computed from the initial data.
+ * - `BoundaryTheta` and `BoundaryZ` are initialized from the initial
+ *   values of Theta and the spatial Z4 constraint Z_i evaluated at face
+ *   points. `Z_i = ½ γ̃_{ij} (Γ̂^j − Γ̃^j)` is computed from
+ *   `conformal_metric`, `gamma_hat` and the conformal Christoffels built
+ *   from `field_d`.
+ *
+ * At interior points and non-CRPBC faces these fields remain zero.
  */
 struct SetInitialBoundaryModes : tt::ConformsTo<db::protocols::Mutator> {
   static constexpr size_t Dim = 3;
   using System = ::Ccz4::fd::System;
 
-  // Boundary mode tags that are mutated
+  // Boundary mode / boundary-integrated tags that are mutated
   using return_tags =
-      tmpl::list<Tags::UScalar3Minus<DataVector>,
-                 Tags::UVector2Minus<DataVector, Dim, Frame::Inertial>,
-                 Tags::UScalar2Minus<DataVector>,
-                 Tags::UTensorMinus<DataVector, Dim, Frame::Inertial>>;
+      tmpl::list<Tags::UTensorMinus<DataVector, Dim, Frame::Inertial>,
+                 ::Ccz4::Tags::BoundaryTheta<DataVector>,
+                 ::Ccz4::Tags::BoundaryZ<DataVector, Dim, Frame::Inertial>>;
 
   // Read-only evolved/auxiliary variable tags and domain tags
   using argument_tags = tmpl::list<
@@ -70,12 +77,11 @@ struct SetInitialBoundaryModes : tt::ConformsTo<db::protocols::Mutator> {
       ::Ccz4::fd::Tags::EvolveLapseAndShift>;
 
   static void apply(
-      const gsl::not_null<Scalar<DataVector>*> vol_u_scalar3_minus,
-      const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
-          vol_u_vector2_minus,
-      const gsl::not_null<Scalar<DataVector>*> vol_u_scalar2_minus,
       const gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
           vol_u_tensor_minus,
+      const gsl::not_null<Scalar<DataVector>*> vol_boundary_theta,
+      const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
+          vol_boundary_z,
       const tnsr::ii<DataVector, Dim>& conformal_metric,
       const Scalar<DataVector>& conformal_factor,
       const tnsr::ii<DataVector, Dim>& a_tilde,
@@ -259,29 +265,37 @@ struct SetInitialBoundaryModes : tt::ConformsTo<db::protocols::Mutator> {
           trace_k_face, a_tilde_face, theta_face, gamma_hat_face, b_aux_face,
           d_conformal_metric, d_conformal_factor, d_lapse, d_shift, System::f);
 
-      // Extract the 4 incoming modes
-      const auto& face_u_scalar3_minus =
-          get<Tags::UScalar3Minus<DataVector>>(char_fields);
-      const auto& face_u_vector2_minus =
-          get<Tags::UVector2Minus<DataVector, Dim, Frame::Inertial>>(
-              char_fields);
-      const auto& face_u_scalar2_minus =
-          get<Tags::UScalar2Minus<DataVector>>(char_fields);
+      // Extract UTensorMinus incoming mode
       const auto& face_u_tensor_minus =
           get<Tags::UTensorMinus<DataVector, Dim, Frame::Inertial>>(
               char_fields);
 
-      // Scatter face values back to volume boundary mode variables
+      // Compute BoundaryTheta from theta and BoundaryZ from
+      // Z_i = ½ γ̃_{ij} (Γ̂^j − Γ̃^j), where Γ̃^j is the contracted
+      // conformal Christoffel of the second kind built from field_d and
+      // the inverse conformal metric.
+      const auto conformal_christoffel_2_face =
+          ::Ccz4::conformal_christoffel_second_kind(face_inv_conformal_metric,
+                                                    field_d_face);
+      const auto contracted_conformal_christoffel_face =
+          ::Ccz4::contracted_conformal_christoffel_second_kind(
+              face_inv_conformal_metric, conformal_christoffel_2_face);
+      tnsr::I<DataVector, Dim> gamma_hat_minus_gamma_tilde(num_face_pts);
+      ::tenex::evaluate<ti::I>(
+          make_not_null(&gamma_hat_minus_gamma_tilde),
+          gamma_hat_face(ti::I) - contracted_conformal_christoffel_face(ti::I));
+      const auto face_boundary_z = ::Ccz4::spatial_z4_constraint(
+          conformal_metric_face, gamma_hat_minus_gamma_tilde);
+
+      // Scatter face values back to volume variables
       for (size_t fp = 0; fp < num_face_pts; ++fp) {
         const size_t vol_idx = volume_index(fp, outermost_layer);
-        get(*vol_u_scalar3_minus)[vol_idx] = get(face_u_scalar3_minus)[fp];
-        get(*vol_u_scalar2_minus)[vol_idx] = get(face_u_scalar2_minus)[fp];
-        for (size_t i = 0; i < Dim; ++i) {
-          vol_u_vector2_minus->get(i)[vol_idx] =
-              face_u_vector2_minus.get(i)[fp];
-        }
         for (size_t ti = 0; ti < vol_u_tensor_minus->size(); ++ti) {
           (*vol_u_tensor_minus)[ti][vol_idx] = face_u_tensor_minus[ti][fp];
+        }
+        get(*vol_boundary_theta)[vol_idx] = get(theta_face)[fp];
+        for (size_t i = 0; i < Dim; ++i) {
+          vol_boundary_z->get(i)[vol_idx] = face_boundary_z.get(i)[fp];
         }
       }
     }

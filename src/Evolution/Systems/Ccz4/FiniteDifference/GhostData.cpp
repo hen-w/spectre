@@ -39,14 +39,6 @@ DataVector GhostVariables::apply(
       get<::Ccz4::Tags::GammaHat<DataVector, 3>>(evolved_vars);
   get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(vars_to_reconstruct) =
       get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(evolved_vars);
-  get<::Ccz4::fd::Tags::UScalar3Minus<DataVector>>(vars_to_reconstruct) =
-      get<::Ccz4::fd::Tags::UScalar3Minus<DataVector>>(evolved_vars);
-  get<::Ccz4::fd::Tags::UVector2Minus<DataVector, 3, Frame::Inertial>>(
-      vars_to_reconstruct) =
-      get<::Ccz4::fd::Tags::UVector2Minus<DataVector, 3, Frame::Inertial>>(
-          evolved_vars);
-  get<::Ccz4::fd::Tags::UScalar2Minus<DataVector>>(vars_to_reconstruct) =
-      get<::Ccz4::fd::Tags::UScalar2Minus<DataVector>>(evolved_vars);
   get<::Ccz4::fd::Tags::UTensorMinus<DataVector, 3, Frame::Inertial>>(
       vars_to_reconstruct) =
       get<::Ccz4::fd::Tags::UTensorMinus<DataVector, 3, Frame::Inertial>>(

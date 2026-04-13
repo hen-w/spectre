@@ -174,13 +174,6 @@ void test_dg_package_data() {
       make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
           make_not_null(&gen), dist, DataVector(face_size));
   // Boundary modes (unused by LF, but must be passed)
-  const auto u_scalar3_minus =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  const auto u_vector2_minus =
-      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
-  const auto u_scalar2_minus =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
   const auto u_tensor_minus =
       make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
@@ -194,6 +187,11 @@ void test_dg_package_data() {
       make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
   const auto boundary_shift =
       make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  const auto boundary_theta =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  const auto boundary_z =
+      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
   const auto normal_covector = make_unit_normal(face_size);
 
@@ -226,13 +224,6 @@ void test_dg_package_data() {
       DataVector(face_size), 0.0);
   auto pkg_field_p = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
       DataVector(face_size), 0.0);
-  auto pkg_u_scalar3_minus =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  auto pkg_u_vector2_minus =
-      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
-  auto pkg_u_scalar2_minus =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
   auto pkg_u_tensor_minus =
       make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
@@ -245,6 +236,11 @@ void test_dg_package_data() {
       make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
   auto pkg_boundary_shift =
       make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  auto pkg_boundary_theta =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  auto pkg_boundary_z =
+      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
   auto pkg_normal_covector =
       make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
@@ -265,18 +261,19 @@ void test_dg_package_data() {
       make_not_null(&pkg_shift), make_not_null(&pkg_auxiliary_shift_b),
       make_not_null(&pkg_field_a), make_not_null(&pkg_field_b),
       make_not_null(&pkg_field_d), make_not_null(&pkg_field_p),
-      make_not_null(&pkg_u_scalar3_minus), make_not_null(&pkg_u_vector2_minus),
-      make_not_null(&pkg_u_scalar2_minus), make_not_null(&pkg_u_tensor_minus),
+      make_not_null(&pkg_u_tensor_minus),
       make_not_null(&pkg_boundary_conformal_metric),
       make_not_null(&pkg_boundary_conformal_factor),
       make_not_null(&pkg_boundary_lapse), make_not_null(&pkg_boundary_shift),
+      make_not_null(&pkg_boundary_theta), make_not_null(&pkg_boundary_z),
       make_not_null(&pkg_normal_covector),
       make_not_null(&pkg_inverse_grid_spacing), conformal_metric,
       conformal_factor, a_tilde, trace_extrinsic_curvature, theta, gamma_hat,
       lapse, shift, auxiliary_shift_b, field_a, field_b, field_d, field_p,
-      u_scalar3_minus, u_vector2_minus, u_scalar2_minus, u_tensor_minus,
+      u_tensor_minus,
       boundary_conformal_metric, boundary_conformal_factor, boundary_lapse,
-      boundary_shift, normal_covector, mesh_velocity, normal_dot_mesh_velocity,
+      boundary_shift, boundary_theta, boundary_z,
+      normal_covector, mesh_velocity, normal_dot_mesh_velocity,
       direction, volume_mesh, volume_coords);
 
   CHECK(result == 0.0);
@@ -356,13 +353,6 @@ void test_dg_auxiliary_package_data() {
       make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
           make_not_null(&gen), dist, DataVector(face_size));
   // Boundary modes (unused by LF aux)
-  const auto u_scalar3_minus =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  const auto u_vector2_minus =
-      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
-  const auto u_scalar2_minus =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
   const auto u_tensor_minus =
       make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
@@ -376,6 +366,11 @@ void test_dg_auxiliary_package_data() {
       make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
   const auto boundary_shift =
       make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  const auto boundary_theta =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  const auto boundary_z =
+      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
   const auto normal_covector = make_unit_normal(face_size);
 
@@ -416,10 +411,10 @@ void test_dg_auxiliary_package_data() {
       make_not_null(&pkg_field_b), make_not_null(&pkg_field_d),
       make_not_null(&pkg_field_p), conformal_metric, conformal_factor, a_tilde,
       trace_extrinsic_curvature, theta, gamma_hat, lapse, shift,
-      auxiliary_shift_b, field_a, field_b, field_d, field_p, u_scalar3_minus,
-      u_vector2_minus, u_scalar2_minus, u_tensor_minus,
+      auxiliary_shift_b, field_a, field_b, field_d, field_p, u_tensor_minus,
       boundary_conformal_metric, boundary_conformal_factor, boundary_lapse,
-      boundary_shift, normal_covector, mesh_velocity, normal_dot_mesh_velocity,
+      boundary_shift, boundary_theta, boundary_z,
+      normal_covector, mesh_velocity, normal_dot_mesh_velocity,
       direction, volume_mesh, volume_coords);
 
   CHECK(result == 0.0);
@@ -484,13 +479,6 @@ void test_dg_boundary_terms() {
       make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
           make_not_null(&gen), dist, DataVector(face_size));
   // Boundary modes and SO fields (zero, unused by LF)
-  const auto u_scalar3_minus_int =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  const auto u_vector2_minus_int =
-      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
-  const auto u_scalar2_minus_int =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
   const auto u_tensor_minus_int =
       make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
@@ -503,6 +491,11 @@ void test_dg_boundary_terms() {
       make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
   const auto boundary_shift_int =
       make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  const auto boundary_theta_int =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  const auto boundary_z_int =
+      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
   const auto normal_covector_int = make_unit_normal(face_size);
   const auto inverse_grid_spacing_int = make_with_value<Scalar<DataVector>>(
@@ -543,13 +536,6 @@ void test_dg_boundary_terms() {
   const auto field_p_ext =
       make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
           make_not_null(&gen), dist, DataVector(face_size));
-  const auto u_scalar3_minus_ext =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  const auto u_vector2_minus_ext =
-      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
-  const auto u_scalar2_minus_ext =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
   const auto u_tensor_minus_ext =
       make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
@@ -562,6 +548,11 @@ void test_dg_boundary_terms() {
       make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
   const auto boundary_shift_ext =
       make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  const auto boundary_theta_ext =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  const auto boundary_z_ext =
+      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
   // Exterior normal points opposite
   auto normal_covector_ext =
@@ -604,13 +595,6 @@ void test_dg_boundary_terms() {
           DataVector(face_size), 0.0);
   auto corr_field_p = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
       DataVector(face_size), 0.0);
-  auto corr_u_scalar3_minus =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  auto corr_u_vector2_minus =
-      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
-  auto corr_u_scalar2_minus =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
   auto corr_u_tensor_minus =
       make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
@@ -624,6 +608,11 @@ void test_dg_boundary_terms() {
   auto corr_boundary_shift =
       make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
+  auto corr_boundary_theta =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  auto corr_boundary_z =
+      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
 
   correction.dg_boundary_terms(
       make_not_null(&corr_conformal_metric),
@@ -633,25 +622,24 @@ void test_dg_boundary_terms() {
       make_not_null(&corr_lapse), make_not_null(&corr_shift),
       make_not_null(&corr_auxiliary_shift_b), make_not_null(&corr_field_a),
       make_not_null(&corr_field_b), make_not_null(&corr_field_d),
-      make_not_null(&corr_field_p), make_not_null(&corr_u_scalar3_minus),
-      make_not_null(&corr_u_vector2_minus),
-      make_not_null(&corr_u_scalar2_minus), make_not_null(&corr_u_tensor_minus),
+      make_not_null(&corr_field_p), make_not_null(&corr_u_tensor_minus),
       make_not_null(&corr_boundary_conformal_metric),
       make_not_null(&corr_boundary_conformal_factor),
       make_not_null(&corr_boundary_lapse), make_not_null(&corr_boundary_shift),
+      make_not_null(&corr_boundary_theta), make_not_null(&corr_boundary_z),
       conformal_metric_int, conformal_factor_int, a_tilde_int,
       trace_extrinsic_curvature_int, theta_int, gamma_hat_int, lapse_int,
       shift_int, auxiliary_shift_b_int, field_a_int, field_b_int, field_d_int,
-      field_p_int, u_scalar3_minus_int, u_vector2_minus_int,
-      u_scalar2_minus_int, u_tensor_minus_int, boundary_conformal_metric_int,
+      field_p_int, u_tensor_minus_int, boundary_conformal_metric_int,
       boundary_conformal_factor_int, boundary_lapse_int, boundary_shift_int,
+      boundary_theta_int, boundary_z_int,
       normal_covector_int, inverse_grid_spacing_int, conformal_metric_ext,
       conformal_factor_ext, a_tilde_ext, trace_extrinsic_curvature_ext,
       theta_ext, gamma_hat_ext, lapse_ext, shift_ext, auxiliary_shift_b_ext,
-      field_a_ext, field_b_ext, field_d_ext, field_p_ext, u_scalar3_minus_ext,
-      u_vector2_minus_ext, u_scalar2_minus_ext, u_tensor_minus_ext,
+      field_a_ext, field_b_ext, field_d_ext, field_p_ext, u_tensor_minus_ext,
       boundary_conformal_metric_ext, boundary_conformal_factor_ext,
-      boundary_lapse_ext, boundary_shift_ext, normal_covector_ext,
+      boundary_lapse_ext, boundary_shift_ext, boundary_theta_ext,
+      boundary_z_ext, normal_covector_ext,
       inverse_grid_spacing_ext, dg::Formulation::StrongInertial);
 
   // --- Check zero corrections ---
@@ -1264,13 +1252,6 @@ void test_dg_auxiliary_boundary_terms() {
           DataVector(face_size), 0.0);
   auto corr_field_p = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
       DataVector(face_size), 0.0);
-  auto corr_u_scalar3_minus =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  auto corr_u_vector2_minus =
-      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
-  auto corr_u_scalar2_minus =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
   auto corr_u_tensor_minus =
       make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
@@ -1284,6 +1265,11 @@ void test_dg_auxiliary_boundary_terms() {
   auto corr_boundary_shift =
       make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
+  auto corr_boundary_theta =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  auto corr_boundary_z =
+      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
 
   correction.dg_auxiliary_boundary_terms(
       make_not_null(&corr_conformal_metric),
@@ -1293,12 +1279,11 @@ void test_dg_auxiliary_boundary_terms() {
       make_not_null(&corr_lapse), make_not_null(&corr_shift),
       make_not_null(&corr_auxiliary_shift_b), make_not_null(&corr_field_a),
       make_not_null(&corr_field_b), make_not_null(&corr_field_d),
-      make_not_null(&corr_field_p), make_not_null(&corr_u_scalar3_minus),
-      make_not_null(&corr_u_vector2_minus),
-      make_not_null(&corr_u_scalar2_minus), make_not_null(&corr_u_tensor_minus),
+      make_not_null(&corr_field_p), make_not_null(&corr_u_tensor_minus),
       make_not_null(&corr_boundary_conformal_metric),
       make_not_null(&corr_boundary_conformal_factor),
       make_not_null(&corr_boundary_lapse), make_not_null(&corr_boundary_shift),
+      make_not_null(&corr_boundary_theta), make_not_null(&corr_boundary_z),
       conformal_metric_int, conformal_factor_int, lapse_int, shift_int,
       normal_covector_int, inverse_grid_spacing_int, field_a_int, field_b_int,
       field_d_int, field_p_int, conformal_metric_ext, conformal_factor_ext,
@@ -1428,12 +1413,6 @@ void test_serialization() {
       DataVector(face_size), 0.0);
   auto pkg_fp = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
       DataVector(face_size), 0.0);
-  auto pkg_u_s3m =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  auto pkg_u_v2m = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
-      DataVector(face_size), 0.0);
-  auto pkg_u_s2m =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
   auto pkg_u_tm = make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
       DataVector(face_size), 0.0);
   auto pkg_bcm = make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
@@ -1443,6 +1422,10 @@ void test_serialization() {
   auto pkg_blapse =
       make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
   auto pkg_bshift = make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
+      DataVector(face_size), 0.0);
+  auto pkg_btheta =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  auto pkg_bz = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
       DataVector(face_size), 0.0);
   auto pkg_n = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
       DataVector(face_size), 0.0);
@@ -1477,12 +1460,6 @@ void test_serialization() {
   const auto fp = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
       DataVector(face_size), 0.0);
   // Boundary modes and SO fields (zero)
-  const auto u_s3m =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  const auto u_v2m = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
-      DataVector(face_size), 0.0);
-  const auto u_s2m =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
   const auto u_tm = make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
       DataVector(face_size), 0.0);
   const auto bcm = make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
@@ -1492,6 +1469,10 @@ void test_serialization() {
   const auto blapse =
       make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
   const auto bshift = make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
+      DataVector(face_size), 0.0);
+  const auto btheta =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  const auto bz = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
       DataVector(face_size), 0.0);
 
   const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>> mesh_velocity =
@@ -1505,13 +1486,13 @@ void test_serialization() {
       make_not_null(&pkg_K), make_not_null(&pkg_theta), make_not_null(&pkg_gh),
       make_not_null(&pkg_lapse), make_not_null(&pkg_shift),
       make_not_null(&pkg_b), make_not_null(&pkg_fa), make_not_null(&pkg_fb),
-      make_not_null(&pkg_fd), make_not_null(&pkg_fp), make_not_null(&pkg_u_s3m),
-      make_not_null(&pkg_u_v2m), make_not_null(&pkg_u_s2m),
+      make_not_null(&pkg_fd), make_not_null(&pkg_fp),
       make_not_null(&pkg_u_tm), make_not_null(&pkg_bcm),
       make_not_null(&pkg_bcf), make_not_null(&pkg_blapse),
-      make_not_null(&pkg_bshift), make_not_null(&pkg_n),
+      make_not_null(&pkg_bshift), make_not_null(&pkg_btheta),
+      make_not_null(&pkg_bz), make_not_null(&pkg_n),
       make_not_null(&pkg_inv_gs), cm, cf, at, K, theta, gh, lapse, shift, b, fa,
-      fb, fd, fp, u_s3m, u_v2m, u_s2m, u_tm, bcm, bcf, blapse, bshift, normal,
+      fb, fd, fp, u_tm, bcm, bcf, blapse, bshift, btheta, bz, normal,
       mesh_velocity, normal_dot_mesh_velocity, direction, volume_mesh,
       volume_coords);
   const auto inv_gs_orig = pkg_inv_gs;
@@ -1523,13 +1504,13 @@ void test_serialization() {
       make_not_null(&pkg_K), make_not_null(&pkg_theta), make_not_null(&pkg_gh),
       make_not_null(&pkg_lapse), make_not_null(&pkg_shift),
       make_not_null(&pkg_b), make_not_null(&pkg_fa), make_not_null(&pkg_fb),
-      make_not_null(&pkg_fd), make_not_null(&pkg_fp), make_not_null(&pkg_u_s3m),
-      make_not_null(&pkg_u_v2m), make_not_null(&pkg_u_s2m),
+      make_not_null(&pkg_fd), make_not_null(&pkg_fp),
       make_not_null(&pkg_u_tm), make_not_null(&pkg_bcm),
       make_not_null(&pkg_bcf), make_not_null(&pkg_blapse),
-      make_not_null(&pkg_bshift), make_not_null(&pkg_n),
+      make_not_null(&pkg_bshift), make_not_null(&pkg_btheta),
+      make_not_null(&pkg_bz), make_not_null(&pkg_n),
       make_not_null(&pkg_inv_gs), cm, cf, at, K, theta, gh, lapse, shift, b, fa,
-      fb, fd, fp, u_s3m, u_v2m, u_s2m, u_tm, bcm, bcf, blapse, bshift, normal,
+      fb, fd, fp, u_tm, bcm, bcf, blapse, bshift, btheta, bz, normal,
       mesh_velocity, normal_dot_mesh_velocity, direction, volume_mesh,
       volume_coords);
 

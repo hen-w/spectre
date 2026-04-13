@@ -65,10 +65,6 @@ double LaxFriedrichs<Dim>::dg_package_data(
     gsl::not_null<tnsr::ijj<DataVector, Dim, Frame::Inertial>*>
         packaged_field_d,
     gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> packaged_field_p,
-    gsl::not_null<Scalar<DataVector>*> /*packaged_u_scalar3_minus*/,
-    gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
-    /*packaged_u_vector2_minus*/,
-    gsl::not_null<Scalar<DataVector>*> /*packaged_u_scalar2_minus*/,
     gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
     /*packaged_u_tensor_minus*/,
     gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
@@ -77,6 +73,9 @@ double LaxFriedrichs<Dim>::dg_package_data(
     gsl::not_null<Scalar<DataVector>*> /*packaged_boundary_lapse*/,
     gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
     /*packaged_boundary_shift*/,
+    gsl::not_null<Scalar<DataVector>*> /*packaged_boundary_theta*/,
+    gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
+    /*packaged_boundary_z*/,
     gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
         packaged_normal_covector,
     gsl::not_null<Scalar<DataVector>*> packaged_inverse_grid_spacing,
@@ -95,9 +94,6 @@ double LaxFriedrichs<Dim>::dg_package_data(
     const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p,
 
-    const Scalar<DataVector>& /*u_scalar3_minus*/,
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*u_vector2_minus*/,
-    const Scalar<DataVector>& /*u_scalar2_minus*/,
     const tnsr::ii<DataVector, Dim, Frame::Inertial>& /*u_tensor_minus*/,
 
     const tnsr::ii<DataVector, Dim, Frame::Inertial>&
@@ -105,6 +101,8 @@ double LaxFriedrichs<Dim>::dg_package_data(
     const Scalar<DataVector>& /*boundary_conformal_factor*/,
     const Scalar<DataVector>& /*boundary_lapse*/,
     const tnsr::I<DataVector, Dim, Frame::Inertial>& /*boundary_shift*/,
+    const Scalar<DataVector>& /*boundary_theta*/,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*boundary_z*/,
 
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
     const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
@@ -171,10 +169,6 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
         field_d_boundary_correction,
     gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
         field_p_boundary_correction,
-    gsl::not_null<Scalar<DataVector>*> u_scalar3_minus_boundary_correction,
-    gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
-        u_vector2_minus_boundary_correction,
-    gsl::not_null<Scalar<DataVector>*> u_scalar2_minus_boundary_correction,
     gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
         u_tensor_minus_boundary_correction,
     gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
@@ -184,6 +178,9 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
     gsl::not_null<Scalar<DataVector>*> boundary_lapse_boundary_correction,
     gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
         boundary_shift_boundary_correction,
+    gsl::not_null<Scalar<DataVector>*> boundary_theta_boundary_correction,
+    gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
+        boundary_z_boundary_correction,
 
     const tnsr::ii<DataVector, Dim, Frame::Inertial>& conformal_metric_int,
     const Scalar<DataVector>& conformal_factor_int,
@@ -198,15 +195,14 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
     const tnsr::iJ<DataVector, Dim, Frame::Inertial>& field_b_int,
     const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d_int,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p_int,
-    const Scalar<DataVector>& /*u_scalar3_minus_int*/,
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*u_vector2_minus_int*/,
-    const Scalar<DataVector>& /*u_scalar2_minus_int*/,
     const tnsr::ii<DataVector, Dim, Frame::Inertial>& /*u_tensor_minus_int*/,
     const tnsr::ii<DataVector, Dim, Frame::Inertial>&
     /*boundary_conformal_metric_int*/,
     const Scalar<DataVector>& /*boundary_conformal_factor_int*/,
     const Scalar<DataVector>& /*boundary_lapse_int*/,
     const tnsr::I<DataVector, Dim, Frame::Inertial>& /*boundary_shift_int*/,
+    const Scalar<DataVector>& /*boundary_theta_int*/,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*boundary_z_int*/,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector_int,
     const Scalar<DataVector>& inverse_grid_spacing_int,
 
@@ -223,27 +219,19 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
     const tnsr::iJ<DataVector, Dim, Frame::Inertial>& field_b_ext,
     const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d_ext,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p_ext,
-    const Scalar<DataVector>& /*u_scalar3_minus_ext*/,
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*u_vector2_minus_ext*/,
-    const Scalar<DataVector>& /*u_scalar2_minus_ext*/,
     const tnsr::ii<DataVector, Dim, Frame::Inertial>& /*u_tensor_minus_ext*/,
     const tnsr::ii<DataVector, Dim, Frame::Inertial>&
     /*boundary_conformal_metric_ext*/,
     const Scalar<DataVector>& /*boundary_conformal_factor_ext*/,
     const Scalar<DataVector>& /*boundary_lapse_ext*/,
     const tnsr::I<DataVector, Dim, Frame::Inertial>& /*boundary_shift_ext*/,
+    const Scalar<DataVector>& /*boundary_theta_ext*/,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*boundary_z_ext*/,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector_ext,
     const Scalar<DataVector>& inverse_grid_spacing_ext,
 
     dg::Formulation /*dg_formulation*/) const {
   // Boundary mode corrections are always zero
-  *u_scalar3_minus_boundary_correction =
-      make_with_value<Scalar<DataVector>>(conformal_factor_int, 0.0);
-  *u_vector2_minus_boundary_correction =
-      make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(
-          conformal_factor_int, 0.0);
-  *u_scalar2_minus_boundary_correction =
-      make_with_value<Scalar<DataVector>>(conformal_factor_int, 0.0);
   *u_tensor_minus_boundary_correction =
       make_with_value<tnsr::ii<DataVector, Dim, Frame::Inertial>>(
           conformal_factor_int, 0.0);
@@ -256,6 +244,11 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       make_with_value<Scalar<DataVector>>(conformal_factor_int, 0.0);
   *boundary_shift_boundary_correction =
       make_with_value<tnsr::I<DataVector, Dim, Frame::Inertial>>(
+          conformal_factor_int, 0.0);
+  *boundary_theta_boundary_correction =
+      make_with_value<Scalar<DataVector>>(conformal_factor_int, 0.0);
+  *boundary_z_boundary_correction =
+      make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(
           conformal_factor_int, 0.0);
 
   constexpr double f_param = ::Ccz4::fd::System::f;
@@ -714,9 +707,6 @@ double LaxFriedrichs<Dim>::dg_auxiliary_package_data(
     const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p,
 
-    const Scalar<DataVector>& /*u_scalar3_minus*/,
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*u_vector2_minus*/,
-    const Scalar<DataVector>& /*u_scalar2_minus*/,
     const tnsr::ii<DataVector, Dim, Frame::Inertial>& /*u_tensor_minus*/,
 
     const tnsr::ii<DataVector, Dim, Frame::Inertial>&
@@ -724,6 +714,8 @@ double LaxFriedrichs<Dim>::dg_auxiliary_package_data(
     const Scalar<DataVector>& /*boundary_conformal_factor*/,
     const Scalar<DataVector>& /*boundary_lapse*/,
     const tnsr::I<DataVector, Dim, Frame::Inertial>& /*boundary_shift*/,
+    const Scalar<DataVector>& /*boundary_theta*/,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*boundary_z*/,
 
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
     const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
@@ -785,10 +777,6 @@ void LaxFriedrichs<Dim>::dg_auxiliary_boundary_terms(
         field_d_boundary_correction,
     gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
         field_p_boundary_correction,
-    gsl::not_null<Scalar<DataVector>*> u_scalar3_minus_boundary_correction,
-    gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
-        u_vector2_minus_boundary_correction,
-    gsl::not_null<Scalar<DataVector>*> u_scalar2_minus_boundary_correction,
     gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
         u_tensor_minus_boundary_correction,
     gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
@@ -798,6 +786,9 @@ void LaxFriedrichs<Dim>::dg_auxiliary_boundary_terms(
     gsl::not_null<Scalar<DataVector>*> boundary_lapse_boundary_correction,
     gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
         boundary_shift_boundary_correction,
+    gsl::not_null<Scalar<DataVector>*> boundary_theta_boundary_correction,
+    gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
+        boundary_z_boundary_correction,
 
     const tnsr::ii<DataVector, Dim, Frame::Inertial>& conformal_metric_int,
     const Scalar<DataVector>& conformal_factor_int,
@@ -850,13 +841,6 @@ void LaxFriedrichs<Dim>::dg_auxiliary_boundary_terms(
                                                                  0.0);
 
   // Boundary mode corrections are always zero
-  *u_scalar3_minus_boundary_correction =
-      make_with_value<Scalar<DataVector>>(conformal_factor_int, 0.0);
-  *u_vector2_minus_boundary_correction =
-      make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(
-          conformal_factor_int, 0.0);
-  *u_scalar2_minus_boundary_correction =
-      make_with_value<Scalar<DataVector>>(conformal_factor_int, 0.0);
   *u_tensor_minus_boundary_correction =
       make_with_value<tnsr::ii<DataVector, Dim, Frame::Inertial>>(
           conformal_factor_int, 0.0);
@@ -869,6 +853,11 @@ void LaxFriedrichs<Dim>::dg_auxiliary_boundary_terms(
       make_with_value<Scalar<DataVector>>(conformal_factor_int, 0.0);
   *boundary_shift_boundary_correction =
       make_with_value<tnsr::I<DataVector, Dim, Frame::Inertial>>(
+          conformal_factor_int, 0.0);
+  *boundary_theta_boundary_correction =
+      make_with_value<Scalar<DataVector>>(conformal_factor_int, 0.0);
+  *boundary_z_boundary_correction =
+      make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(
           conformal_factor_int, 0.0);
 
   // compute auxiliary boundary correction for field_a = d_log_lapse

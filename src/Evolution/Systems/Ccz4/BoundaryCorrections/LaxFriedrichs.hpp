@@ -93,15 +93,14 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       ::Ccz4::Tags::FieldA<DataVector, 3>, ::Ccz4::Tags::FieldB<DataVector, 3>,
       ::Ccz4::Tags::FieldD<DataVector, 3>, ::Ccz4::Tags::FieldP<DataVector, 3>,
       // boundary mode variables
-      ::Ccz4::fd::Tags::UScalar3Minus<DataVector>,
-      ::Ccz4::fd::Tags::UVector2Minus<DataVector, 3, Frame::Inertial>,
-      ::Ccz4::fd::Tags::UScalar2Minus<DataVector>,
       ::Ccz4::fd::Tags::UTensorMinus<DataVector, 3, Frame::Inertial>,
       // boundary second-order fields
       ::Ccz4::Tags::BoundaryConformalMetric<DataVector, 3>,
       ::Ccz4::Tags::BoundaryConformalFactor<DataVector>,
       ::Ccz4::Tags::BoundaryLapse<DataVector>,
       ::Ccz4::Tags::BoundaryShift<DataVector, 3>,
+      ::Ccz4::Tags::BoundaryTheta<DataVector>,
+      ::Ccz4::Tags::BoundaryZ<DataVector, 3, Frame::Inertial>,
       // normal covector and inverse grid spacing
       ::Ccz4::Tags::NormalCovector<DataVector, 3>,
       ::Ccz4::Tags::InverseGridSpacing<DataVector>>;
@@ -133,10 +132,6 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
           packaged_field_d,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
           packaged_field_p,
-      gsl::not_null<Scalar<DataVector>*> packaged_u_scalar3_minus,
-      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
-          packaged_u_vector2_minus,
-      gsl::not_null<Scalar<DataVector>*> packaged_u_scalar2_minus,
       gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
           packaged_u_tensor_minus,
       gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
@@ -145,6 +140,9 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       gsl::not_null<Scalar<DataVector>*> packaged_boundary_lapse,
       gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
           packaged_boundary_shift,
+      gsl::not_null<Scalar<DataVector>*> packaged_boundary_theta,
+      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
+          packaged_boundary_z,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
           packaged_normal_covector,
       gsl::not_null<Scalar<DataVector>*> packaged_inverse_grid_spacing,
@@ -163,9 +161,6 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p,
 
-      const Scalar<DataVector>& /*u_scalar3_minus*/,
-      const tnsr::i<DataVector, Dim, Frame::Inertial>& /*u_vector2_minus*/,
-      const Scalar<DataVector>& /*u_scalar2_minus*/,
       const tnsr::ii<DataVector, Dim, Frame::Inertial>& /*u_tensor_minus*/,
 
       const tnsr::ii<DataVector, Dim, Frame::Inertial>&
@@ -173,6 +168,8 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       const Scalar<DataVector>& /*boundary_conformal_factor*/,
       const Scalar<DataVector>& /*boundary_lapse*/,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& /*boundary_shift*/,
+      const Scalar<DataVector>& /*boundary_theta*/,
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& /*boundary_z*/,
 
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
@@ -205,10 +202,6 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
           field_d_boundary_correction,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
           field_p_boundary_correction,
-      gsl::not_null<Scalar<DataVector>*> u_scalar3_minus_boundary_correction,
-      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
-          u_vector2_minus_boundary_correction,
-      gsl::not_null<Scalar<DataVector>*> u_scalar2_minus_boundary_correction,
       gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
           u_tensor_minus_boundary_correction,
       gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
@@ -218,6 +211,9 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       gsl::not_null<Scalar<DataVector>*> boundary_lapse_boundary_correction,
       gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
           boundary_shift_boundary_correction,
+      gsl::not_null<Scalar<DataVector>*> boundary_theta_boundary_correction,
+      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
+          boundary_z_boundary_correction,
 
       const tnsr::ii<DataVector, Dim, Frame::Inertial>& conformal_metric_int,
       const Scalar<DataVector>& conformal_factor_int,
@@ -232,15 +228,14 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       const tnsr::iJ<DataVector, Dim, Frame::Inertial>& field_b_int,
       const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d_int,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p_int,
-      const Scalar<DataVector>& /*u_scalar3_minus_int*/,
-      const tnsr::i<DataVector, Dim, Frame::Inertial>& /*u_vector2_minus_int*/,
-      const Scalar<DataVector>& /*u_scalar2_minus_int*/,
       const tnsr::ii<DataVector, Dim, Frame::Inertial>& /*u_tensor_minus_int*/,
       const tnsr::ii<DataVector, Dim, Frame::Inertial>&
       /*boundary_conformal_metric_int*/,
       const Scalar<DataVector>& /*boundary_conformal_factor_int*/,
       const Scalar<DataVector>& /*boundary_lapse_int*/,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& /*boundary_shift_int*/,
+      const Scalar<DataVector>& /*boundary_theta_int*/,
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& /*boundary_z_int*/,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector_int,
       const Scalar<DataVector>& inverse_grid_spacing_int,
 
@@ -257,15 +252,14 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       const tnsr::iJ<DataVector, Dim, Frame::Inertial>& field_b_ext,
       const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d_ext,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p_ext,
-      const Scalar<DataVector>& /*u_scalar3_minus_ext*/,
-      const tnsr::i<DataVector, Dim, Frame::Inertial>& /*u_vector2_minus_ext*/,
-      const Scalar<DataVector>& /*u_scalar2_minus_ext*/,
       const tnsr::ii<DataVector, Dim, Frame::Inertial>& /*u_tensor_minus_ext*/,
       const tnsr::ii<DataVector, Dim, Frame::Inertial>&
       /*boundary_conformal_metric_ext*/,
       const Scalar<DataVector>& /*boundary_conformal_factor_ext*/,
       const Scalar<DataVector>& /*boundary_lapse_ext*/,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& /*boundary_shift_ext*/,
+      const Scalar<DataVector>& /*boundary_theta_ext*/,
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& /*boundary_z_ext*/,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector_ext,
       const Scalar<DataVector>& inverse_grid_spacing_ext,
 
@@ -316,9 +310,6 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p,
 
-      const Scalar<DataVector>& /*u_scalar3_minus*/,
-      const tnsr::i<DataVector, Dim, Frame::Inertial>& /*u_vector2_minus*/,
-      const Scalar<DataVector>& /*u_scalar2_minus*/,
       const tnsr::ii<DataVector, Dim, Frame::Inertial>& /*u_tensor_minus*/,
 
       const tnsr::ii<DataVector, Dim, Frame::Inertial>&
@@ -326,6 +317,8 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       const Scalar<DataVector>& /*boundary_conformal_factor*/,
       const Scalar<DataVector>& /*boundary_lapse*/,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& /*boundary_shift*/,
+      const Scalar<DataVector>& /*boundary_theta*/,
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& /*boundary_z*/,
 
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
@@ -358,10 +351,6 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
           field_d_boundary_correction,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
           field_p_boundary_correction,
-      gsl::not_null<Scalar<DataVector>*> u_scalar3_minus_boundary_correction,
-      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
-          u_vector2_minus_boundary_correction,
-      gsl::not_null<Scalar<DataVector>*> u_scalar2_minus_boundary_correction,
       gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
           u_tensor_minus_boundary_correction,
       gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
@@ -371,6 +360,9 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       gsl::not_null<Scalar<DataVector>*> boundary_lapse_boundary_correction,
       gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
           boundary_shift_boundary_correction,
+      gsl::not_null<Scalar<DataVector>*> boundary_theta_boundary_correction,
+      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
+          boundary_z_boundary_correction,
 
       const tnsr::ii<DataVector, Dim, Frame::Inertial>& conformal_metric_int,
       const Scalar<DataVector>& conformal_factor_int,

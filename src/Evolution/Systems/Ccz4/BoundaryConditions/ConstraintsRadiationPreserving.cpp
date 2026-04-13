@@ -21,6 +21,7 @@
 #include "Evolution/Systems/Ccz4/Solutions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Evolution/TypeTraits.hpp"
+#include "PointwiseFunctions/GeneralRelativity/ProjectionOperators.hpp"
 #include "Utilities/CallWithDynamicType.hpp"
 #include "Utilities/ErrorHandling/Error.hpp"
 #include "Utilities/Gsl.hpp"
@@ -148,10 +149,8 @@ CrpbcMixedState crpbc_characteristic_pipeline(
     const tnsr::I<DataVector, 3, Frame::Inertial>& ghost_unit_normal_vector,
     const tnsr::ii<DataVector, 3, Frame::Inertial>&
         interior_boundary_u_tensor_minus,
-    const tnsr::i<DataVector, 3, Frame::Inertial>&
-        interior_boundary_u_vector2_minus,
-    const Scalar<DataVector>& interior_boundary_u_scalar2_minus,
-    const Scalar<DataVector>& interior_boundary_u_scalar3_minus,
+    const Scalar<DataVector>& interior_boundary_theta,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& interior_boundary_z,
     const tnsr::I<DataVector, 3, Frame::Inertial>& coords, const double time,
     const double f, const bool use_analytic_for_all) {
   static constexpr size_t Dim = 3;
@@ -340,11 +339,97 @@ CrpbcMixedState crpbc_characteristic_pipeline(
     u_scalar5_minus_field =
         get<UScalar5Minus<DataVector>>(ghost_char_fields);
   } else {
-    // Normal CRPBC mode: 4 boundary modes from time-integrated values
+    // Normal CRPBC mode:
+    //   - UTensorMinus is evolved as a boundary mode.
+    //   - UScalar3Minus / UVector2Minus / UScalar2Minus are reconstructed
+    //     algebraically from BoundaryTheta and BoundaryZ (evolved as
+    //     advection+damping ODEs on the CRPBC face) combined with the
+    //     interior plus modes, per the inverse relations in `crpbc.tex`.
+    //   - The three gauge (-) modes come from the analytic (ghost) char
+    //     fields as before.
     u_tnsr_minus = interior_boundary_u_tensor_minus;
-    u_vector2_minus_field = interior_boundary_u_vector2_minus;
-    u_scalar2_minus_field = interior_boundary_u_scalar2_minus;
-    u_scalar3_minus_field = interior_boundary_u_scalar3_minus;
+
+    // Inverse of the coefficient (boundary-integrated) conformal metric.
+    const auto [det_coeff_cm_local, inv_coeff_cm] =
+        determinant_and_inverse(coeff_conformal_metric);
+    (void)det_coeff_cm_local;
+
+    // Coefficient conformal factor squared and its square.
+    Scalar<DataVector> coeff_conformal_factor_squared{};
+    ::tenex::evaluate(make_not_null(&coeff_conformal_factor_squared),
+                      coeff_conformal_factor() * coeff_conformal_factor());
+    Scalar<DataVector> coeff_phi4{};
+    ::tenex::evaluate(
+        make_not_null(&coeff_phi4),
+        coeff_conformal_factor_squared() * coeff_conformal_factor_squared());
+
+    // Outgoing (+) modes from the interior char fields.
+    const auto& u_scalar3_plus_in =
+        get<UScalar3Plus<DataVector>>(interior_char_fields);
+    const auto& u_vector2_plus_in =
+        get<UVector2Plus<DataVector, Dim, Frame::Inertial>>(
+            interior_char_fields);
+    const auto& u_scalar2_plus_in =
+        get<UScalar2Plus<DataVector>>(interior_char_fields);
+
+    // UScalar3Minus_rec = UScalar3Plus + 4·Θ_bdry / φ²
+    ::tenex::evaluate(make_not_null(&u_scalar3_minus_field),
+                      u_scalar3_plus_in() + 4.0 * interior_boundary_theta() /
+                                                coeff_conformal_factor_squared());
+
+    // Transverse projector q^I_j from ghost unit normal.
+    const auto q_mixed = gr::transverse_projection_operator(
+        ghost_unit_normal_vector, ghost_unit_normal_one_form);
+
+    // T^i = γ̃^{ij} γ̃^{kl} q^m_l (2·analytic_field_d)_{m,j,k}
+    //     = γ̃^{ij} γ̃^{kl} q^m_l · ghost_d_cm(m,j,k)
+    tnsr::I<DataVector, Dim, Frame::Inertial> T_up{};
+    ::tenex::evaluate<ti::I>(
+        make_not_null(&T_up),
+        inv_coeff_cm(ti::I, ti::J) * inv_coeff_cm(ti::K, ti::L) *
+            q_mixed(ti::M, ti::l) * ghost_d_cm(ti::m, ti::j, ti::k));
+
+    // T^⊥_i = γ̃_{ij} q^j_k T^k   (lower, transverse-projected T)
+    tnsr::i<DataVector, Dim, Frame::Inertial> T_perp_lo{};
+    ::tenex::evaluate<ti::i>(make_not_null(&T_perp_lo),
+                             coeff_conformal_metric(ti::i, ti::j) *
+                                 q_mixed(ti::J, ti::k) * T_up(ti::K));
+
+    // Z^⊥_i = q^j_i Z_j_bdry   (lower, transverse-projected BoundaryZ)
+    tnsr::i<DataVector, Dim, Frame::Inertial> Z_perp_lo{};
+    ::tenex::evaluate<ti::i>(
+        make_not_null(&Z_perp_lo),
+        q_mixed(ti::J, ti::i) * interior_boundary_z(ti::j));
+
+    // UVector2Minus_rec_i = -UVector2Plus_i + 4·Z^⊥_i / φ² + 2·T^⊥_i
+    ::tenex::evaluate<ti::i>(
+        make_not_null(&u_vector2_minus_field),
+        -u_vector2_plus_in(ti::i) +
+            4.0 * Z_perp_lo(ti::i) / coeff_conformal_factor_squared() +
+            2.0 * T_perp_lo(ti::i));
+
+    // T^n = n_i T^i
+    Scalar<DataVector> T_n{};
+    ::tenex::evaluate(
+        make_not_null(&T_n),
+        ghost_unit_normal_one_form(ti::i) * T_up(ti::I));
+
+    // Z^n = n^i Z_i_bdry
+    Scalar<DataVector> Z_n{};
+    ::tenex::evaluate(
+        make_not_null(&Z_n),
+        ghost_unit_normal_vector(ti::I) * interior_boundary_z(ti::i));
+
+    // UScalar2Minus_rec = UScalar2Plus
+    //   - (φ⁴/2)(UScalar3Plus + UScalar3Minus_rec)
+    //   + φ⁴·T^n + 2·φ²·Z^n
+    ::tenex::evaluate(
+        make_not_null(&u_scalar2_minus_field),
+        u_scalar2_plus_in() -
+            0.5 * coeff_phi4() *
+                (u_scalar3_plus_in() + u_scalar3_minus_field()) +
+            coeff_phi4() * T_n() +
+            2.0 * coeff_conformal_factor_squared() * Z_n());
 
     // 3 gauge modes from ghost char fields
     u_vector3_minus_field =
@@ -522,10 +607,6 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
     const gsl::not_null<tnsr::iJ<DataVector, 3, Frame::Inertial>*> field_b,
     const gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*> field_d,
     const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> field_p,
-    const gsl::not_null<Scalar<DataVector>*> u_scalar3_minus,
-    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
-        u_vector2_minus,
-    const gsl::not_null<Scalar<DataVector>*> u_scalar2_minus,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
         u_tensor_minus,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
@@ -534,6 +615,8 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
     const gsl::not_null<Scalar<DataVector>*> boundary_lapse,
     const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
         boundary_shift,
+    const gsl::not_null<Scalar<DataVector>*> boundary_theta,
+    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> boundary_z,
     const std::optional<
         tnsr::I<DataVector, 3, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
@@ -550,10 +633,6 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
     const tnsr::iJ<DataVector, 3, Frame::Inertial>& interior_field_b,
     const tnsr::ijj<DataVector, 3, Frame::Inertial>& interior_field_d,
     const tnsr::i<DataVector, 3, Frame::Inertial>& interior_field_p,
-    const Scalar<DataVector>& interior_boundary_u_scalar3_minus,
-    const tnsr::i<DataVector, 3, Frame::Inertial>&
-        interior_boundary_u_vector2_minus,
-    const Scalar<DataVector>& interior_boundary_u_scalar2_minus,
     const tnsr::ii<DataVector, 3, Frame::Inertial>&
         interior_boundary_u_tensor_minus,
     const tnsr::ii<DataVector, 3, Frame::Inertial>&
@@ -561,6 +640,8 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
     const Scalar<DataVector>& interior_boundary_conformal_factor,
     const Scalar<DataVector>& interior_boundary_lapse,
     const tnsr::I<DataVector, 3, Frame::Inertial>& interior_boundary_shift,
+    const Scalar<DataVector>& interior_boundary_theta,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& interior_boundary_z,
     const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
     [[maybe_unused]] const double time,
     [[maybe_unused]] const bool evolve_lapse_and_shift) const {
@@ -613,9 +694,8 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
       interior_field_a, interior_field_b, interior_field_d, interior_field_p,
       coeff_conformal_metric, coeff_conformal_factor, coeff_lapse, coeff_shift,
       ghost_unit_normal_one_form, ghost_unit_normal_vector,
-      interior_boundary_u_tensor_minus, interior_boundary_u_vector2_minus,
-      interior_boundary_u_scalar2_minus, interior_boundary_u_scalar3_minus,
-      coords, time, f, use_analytic_for_all_);
+      interior_boundary_u_tensor_minus, interior_boundary_theta,
+      interior_boundary_z, coords, time, f, use_analytic_for_all_);
 
   // Validate characteristic speed signs
   for (size_t s = 0; s < num_pts; ++s) {
@@ -669,11 +749,6 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
   *field_p = std::move(result.field_p);
 
   // Boundary mode exterior values: zero (unused by LF)
-  get(*u_scalar3_minus) = 0.0;
-  get(*u_scalar2_minus) = 0.0;
-  for (size_t i = 0; i < Dim; ++i) {
-    u_vector2_minus->get(i) = 0.0;
-  }
   for (size_t i = 0; i < Dim; ++i) {
     for (size_t j = i; j < Dim; ++j) {
       u_tensor_minus->get(i, j) = 0.0;
@@ -685,6 +760,8 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
   *boundary_conformal_factor = interior_boundary_conformal_factor;
   *boundary_lapse = interior_boundary_lapse;
   *boundary_shift = interior_boundary_shift;
+  *boundary_theta = interior_boundary_theta;
+  *boundary_z = interior_boundary_z;
 
   return {};
 }
@@ -713,10 +790,6 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
         dt_field_d_correction,
     const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
         dt_field_p_correction,
-    const gsl::not_null<Scalar<DataVector>*> dt_u_scalar3_minus_correction,
-    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
-        dt_u_vector2_minus_correction,
-    const gsl::not_null<Scalar<DataVector>*> dt_u_scalar2_minus_correction,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
         dt_u_tensor_minus_correction,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
@@ -726,6 +799,9 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
     const gsl::not_null<Scalar<DataVector>*> dt_boundary_lapse_correction,
     const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
         dt_boundary_shift_correction,
+    const gsl::not_null<Scalar<DataVector>*> dt_boundary_theta_correction,
+    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
+        dt_boundary_z_correction,
     const std::optional<
         tnsr::I<DataVector, 3, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
@@ -742,10 +818,6 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
     const tnsr::iJ<DataVector, 3, Frame::Inertial>& interior_field_b,
     const tnsr::ijj<DataVector, 3, Frame::Inertial>& interior_field_d,
     const tnsr::i<DataVector, 3, Frame::Inertial>& interior_field_p,
-    const Scalar<DataVector>& interior_boundary_u_scalar3_minus,
-    const tnsr::i<DataVector, 3, Frame::Inertial>&
-        interior_boundary_u_vector2_minus,
-    const Scalar<DataVector>& interior_boundary_u_scalar2_minus,
     const tnsr::ii<DataVector, 3, Frame::Inertial>&
         interior_boundary_u_tensor_minus,
     const tnsr::ii<DataVector, 3, Frame::Inertial>&
@@ -753,6 +825,8 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
     const Scalar<DataVector>& interior_boundary_conformal_factor,
     const Scalar<DataVector>& interior_boundary_lapse,
     const tnsr::I<DataVector, 3, Frame::Inertial>& interior_boundary_shift,
+    const Scalar<DataVector>& interior_boundary_theta,
+    const tnsr::i<DataVector, 3, Frame::Inertial>& interior_boundary_z,
     const tnsr::I<DataVector, 3, Frame::Inertial>& coords, const double time,
     const bool evolve_lapse_and_shift) const {
   static constexpr size_t Dim = 3;
@@ -796,12 +870,12 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
     component = 0.0;
   }
   // Zero boundary mode dt corrections
-  get(*dt_u_scalar3_minus_correction) = 0.0;
-  for (auto& component : *dt_u_vector2_minus_correction) {
+  for (auto& component : *dt_u_tensor_minus_correction) {
     component = 0.0;
   }
-  get(*dt_u_scalar2_minus_correction) = 0.0;
-  for (auto& component : *dt_u_tensor_minus_correction) {
+  // BoundaryTheta and BoundaryZ dt corrections are zero (no DG jump).
+  get(*dt_boundary_theta_correction) = 0.0;
+  for (auto& component : *dt_boundary_z_correction) {
     component = 0.0;
   }
 
@@ -842,9 +916,8 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
       interior_boundary_conformal_metric, interior_boundary_conformal_factor,
       interior_boundary_lapse, interior_boundary_shift,
       boundary_unit_normal_one_form, boundary_unit_normal_vector,
-      interior_boundary_u_tensor_minus, interior_boundary_u_vector2_minus,
-      interior_boundary_u_scalar2_minus, interior_boundary_u_scalar3_minus,
-      coords, time, f_val, use_analytic_for_all_);
+      interior_boundary_u_tensor_minus, interior_boundary_theta,
+      interior_boundary_z, coords, time, f_val, use_analytic_for_all_);
 
   // Extract char-mixed evolved variables
   const auto& mixed_a_tilde =

@@ -43,19 +43,27 @@
 
 namespace Ccz4::fd {
 /*!
- * \brief Computes the CRPBC boundary-mode time derivatives using
- * fully corrected dt values.
+ * \brief Computes the CRPBC boundary-mode / boundary-integrated time
+ * derivatives using fully corrected dt values.
  *
  * \details This MutateApply action runs **after**
  * `ApplyBoundaryCorrectionsToTimeDerivative` in the DG step, so the dt
  * fields it reads already include DG boundary corrections. For each
  * external face with a `ConstraintsRadiationPreserving` boundary
  * condition, it:
- * 1. Computes face geometry (metrics, Christoffels, Ricci, Z4 constraint)
- * 2. Computes dt characteristic fields from corrected dt evolved vars
- * 3. Applies constraint-preserving equations (Eq1-Eq3)
- * 4. Applies radiation-preserving correction for UTensorMinus
- * 5. Scatters the 4 boundary-mode dt values back to the volume
+ * 1. Computes face geometry (metrics, Christoffels, Ricci, Z4 constraint).
+ * 2. Writes the advection + damping RHS for the boundary-integrated
+ *    fields:
+ *      `dt Θ_bdry   = -(α n^k − β^k) ∂_k θ_interior     − τ · Θ_bdry`
+ *      `dt Z_i_bdry = -(α n^k − β^k) ∂_k Z_i_interior   − τ · Z_i_bdry`
+ *    These replace the former direct evolution of UScalar3Minus /
+ *    UVector2Minus / UScalar2Minus. The three minus modes are
+ *    reconstructed algebraically inside `ConstraintsRadiationPreserving`.
+ * 3. Computes dt characteristic fields from corrected dt evolved vars
+ *    to get the natural dt of UTensorMinus, and applies the
+ *    radiation-preserving correction.
+ * 4. Scatters `dt BoundaryTheta`, `dt BoundaryZ`, and `dt UTensorMinus`
+ *    face values back to the volume at the outermost face layer.
  */
 struct ComputeCrpbcBoundaryModeDt {
   static constexpr size_t Dim = 3;
@@ -140,6 +148,11 @@ struct ComputeCrpbcBoundaryModeDt {
         get<::Ccz4::Tags::FieldD<DataVector, Dim>>(evolved_vars);
     const auto& field_p =
         get<::Ccz4::Tags::FieldP<DataVector, Dim>>(evolved_vars);
+    const auto& boundary_theta_vol =
+        get<::Ccz4::Tags::BoundaryTheta<DataVector>>(evolved_vars);
+    const auto& boundary_z_vol =
+        get<::Ccz4::Tags::BoundaryZ<DataVector, Dim, Frame::Inertial>>(
+            evolved_vars);
 
     // Extract dt fields from the dt_vars container
     const auto& dt_conformal_metric =
@@ -163,16 +176,14 @@ struct ComputeCrpbcBoundaryModeDt {
     const auto& dt_b =
         get<::Tags::dt<::Ccz4::Tags::AuxiliaryShiftB<DataVector, Dim>>>(
             *dt_vars);
-    auto& dt_u_scalar3_minus =
-        get<::Tags::dt<Tags::UScalar3Minus<DataVector>>>(*dt_vars);
-    auto& dt_u_vector2_minus =
-        get<::Tags::dt<Tags::UVector2Minus<DataVector, Dim, Frame::Inertial>>>(
-            *dt_vars);
-    auto& dt_u_scalar2_minus =
-        get<::Tags::dt<Tags::UScalar2Minus<DataVector>>>(*dt_vars);
     auto& dt_u_tensor_minus =
         get<::Tags::dt<Tags::UTensorMinus<DataVector, Dim, Frame::Inertial>>>(
             *dt_vars);
+    auto& dt_boundary_theta =
+        get<::Tags::dt<::Ccz4::Tags::BoundaryTheta<DataVector>>>(*dt_vars);
+    auto& dt_boundary_z = get<
+        ::Tags::dt<::Ccz4::Tags::BoundaryZ<DataVector, Dim, Frame::Inertial>>>(
+        *dt_vars);
 
     // dt auxiliary fields pre-computed in LdgTimeDerivative
     const auto& dt_field_a_vol =
@@ -320,6 +331,10 @@ struct ComputeCrpbcBoundaryModeDt {
       slice_tensor(field_d_face, field_d);
       tnsr::i<DataVector, Dim> field_p_face;
       slice_tensor(field_p_face, field_p);
+      Scalar<DataVector> boundary_theta_face;
+      slice_scalar(boundary_theta_face, boundary_theta_vol);
+      tnsr::i<DataVector, Dim> boundary_z_face;
+      slice_tensor(boundary_z_face, boundary_z_vol);
 
       // Reconstruct first derivatives from aux fields
       tnsr::ijj<DataVector, Dim> d_conformal_metric_face(num_face_pts);
@@ -548,10 +563,11 @@ struct ComputeCrpbcBoundaryModeDt {
         }
       }
 
-      // Constraint-preserving equations
-      const auto q_mixed = gr::transverse_projection_operator(
-          unit_normal_vector, unit_normal_one_form);
-
+      // ----------------------------------------------------------------
+      // BoundaryTheta / BoundaryZ advection + damping RHS
+      // ----------------------------------------------------------------
+      // ∂_t Θ_bdry   = -(α n^k - β^k) ∂_k θ_interior   - τ · Θ_bdry
+      // ∂_t Z_i_bdry = -(α n^k - β^k) ∂_k Z_i_interior - τ · Z_i_bdry
       Scalar<DataVector> dn_theta(num_face_pts);
       ::tenex::evaluate(make_not_null(&dn_theta),
                         unit_normal_vector(ti::I) * d_theta_face(ti::i));
@@ -560,94 +576,30 @@ struct ComputeCrpbcBoundaryModeDt {
       ::tenex::evaluate(make_not_null(&beta_dot_d_theta),
                         shift_face(ti::K) * d_theta_face(ti::k));
 
-      const auto& dt_u_scalar3_plus =
-          get<::Tags::dt<Tags::UScalar3Plus<DataVector>>>(dt_char_fields);
-      auto& dt_u_scalar3_minus_field2 =
-          get<::Tags::dt<Tags::UScalar3Minus<DataVector>>>(dt_char_fields);
+      Scalar<DataVector> dt_boundary_theta_face(num_face_pts);
+      ::tenex::evaluate(make_not_null(&dt_boundary_theta_face),
+                        -lapse_face() * dn_theta() + beta_dot_d_theta() -
+                            penalty_strength() * boundary_theta_face());
 
-      // Eq1: dt UScalar3Minus
-      ::tenex::evaluate(
-          make_not_null(&dt_u_scalar3_minus_field2),
-          dt_u_scalar3_plus() +
-              4.0 / conformal_factor_squared_face() *
-                  (-lapse_face() * dn_theta() + beta_dot_d_theta() -
-                   penalty_strength() * theta_face()));
-
-      // Eq2: dt UVector2Minus
-      const auto& dt_u_vector2_plus =
-          get<::Tags::dt<Tags::UVector2Plus<DataVector, Dim, Frame::Inertial>>>(
-              dt_char_fields);
-      auto& dt_u_vector2_minus_field = get<
-          ::Tags::dt<Tags::UVector2Minus<DataVector, Dim, Frame::Inertial>>>(
-          dt_char_fields);
-
-      tnsr::i<DataVector, Dim> eq2_term2(num_face_pts);
-      ::tenex::evaluate<ti::i>(
-          make_not_null(&eq2_term2),
-          q_mixed(ti::J, ti::i) * inv_conformal_metric_face(ti::K, ti::L) *
-              q_mixed(ti::M, ti::l) *
-              outermost_dt_d_conformal_metric(ti::m, ti::j, ti::k));
-
+      // d_z4_face(k, i) = ∂_k Z_i
       tnsr::i<DataVector, Dim> n_dot_dZ(num_face_pts);
-      ::tenex::evaluate<ti::m>(
+      ::tenex::evaluate<ti::i>(
           make_not_null(&n_dot_dZ),
-          unit_normal_vector(ti::I) * d_z4_face(ti::i, ti::m));
+          unit_normal_vector(ti::K) * d_z4_face(ti::k, ti::i));
 
       tnsr::i<DataVector, Dim> beta_dot_dZ(num_face_pts);
-      ::tenex::evaluate<ti::m>(make_not_null(&beta_dot_dZ),
-                               shift_face(ti::K) * d_z4_face(ti::k, ti::m));
+      ::tenex::evaluate<ti::i>(make_not_null(&beta_dot_dZ),
+                               shift_face(ti::K) * d_z4_face(ti::k, ti::i));
 
-      tnsr::i<DataVector, Dim> eq2_term3(num_face_pts);
+      tnsr::i<DataVector, Dim> dt_boundary_z_face(num_face_pts);
       ::tenex::evaluate<ti::i>(
-          make_not_null(&eq2_term3),
-          q_mixed(ti::M, ti::i) *
-              (-lapse_face() * n_dot_dZ(ti::m) + beta_dot_dZ(ti::m) -
-               penalty_strength() * spatial_z4_constraint_face(ti::m)));
+          make_not_null(&dt_boundary_z_face),
+          -lapse_face() * n_dot_dZ(ti::i) + beta_dot_dZ(ti::i) -
+              penalty_strength() * boundary_z_face(ti::i));
 
-      ::tenex::evaluate<ti::i>(
-          make_not_null(&dt_u_vector2_minus_field),
-          -dt_u_vector2_plus(ti::i) +
-              2.0 / conformal_factor_squared_face() * eq2_term2(ti::i) +
-              4.0 / conformal_factor_squared_face() * eq2_term3(ti::i));
-
-      // Eq3: dt UScalar2Minus
-      const auto& dt_u_scalar2_plus =
-          get<::Tags::dt<Tags::UScalar2Plus<DataVector>>>(dt_char_fields);
-      auto& dt_u_scalar2_minus_field =
-          get<::Tags::dt<Tags::UScalar2Minus<DataVector>>>(dt_char_fields);
-
-      Scalar<DataVector> phi4(num_face_pts);
-      ::tenex::evaluate(
-          make_not_null(&phi4),
-          conformal_factor_squared_face() * conformal_factor_squared_face());
-
-      Scalar<DataVector> eq3_term_B(num_face_pts);
-      ::tenex::evaluate(
-          make_not_null(&eq3_term_B),
-          unit_normal_one_form(ti::i) * q_mixed(ti::M, ti::l) *
-              inv_conformal_metric_face(ti::I, ti::J) *
-              inv_conformal_metric_face(ti::K, ti::L) *
-              outermost_dt_d_conformal_metric(ti::m, ti::j, ti::k));
-
-      Scalar<DataVector> dn_Zn(num_face_pts);
-      ::tenex::evaluate(make_not_null(&dn_Zn),
-                        unit_normal_vector(ti::I) * n_dot_dZ(ti::i));
-      Scalar<DataVector> beta_dot_d_Zn(num_face_pts);
-      ::tenex::evaluate(make_not_null(&beta_dot_d_Zn),
-                        unit_normal_vector(ti::I) * beta_dot_dZ(ti::i));
-
-      ::tenex::evaluate(
-          make_not_null(&dt_u_scalar2_minus_field),
-          dt_u_scalar2_plus() -
-              0.5 * phi4() *
-                  (dt_u_scalar3_plus() + dt_u_scalar3_minus_field2()) +
-              phi4() * eq3_term_B() +
-              2.0 * conformal_factor_squared_face() *
-                  (-lapse_face() * dn_Zn() + beta_dot_d_Zn() -
-                   penalty_strength() * unit_normal_vector(ti::M) *
-                       spatial_z4_constraint_face(ti::m)));
-
+      // ----------------------------------------------------------------
       // Radiation-preserving correction for UTensorMinus
+      // ----------------------------------------------------------------
       Scalar<DataVector> half_cfs_face(num_face_pts);
       ::tenex::evaluate(make_not_null(&half_cfs_face),
                         0.5 * conformal_factor_squared_face());
@@ -672,26 +624,17 @@ struct ComputeCrpbcBoundaryModeDt {
                   conformal_factor_squared_face() *
                   c_tensor_minus(ti::i, ti::j));
 
-      // Scatter: store dt of the 4 boundary mode fields back to volume
-      // at face node positions
-      const auto& face_dt_u_scalar3_minus =
-          get<::Tags::dt<Tags::UScalar3Minus<DataVector>>>(dt_char_fields);
-      const auto& face_dt_u_vector2_minus = get<
-          ::Tags::dt<Tags::UVector2Minus<DataVector, Dim, Frame::Inertial>>>(
-          dt_char_fields);
-      const auto& face_dt_u_scalar2_minus =
-          get<::Tags::dt<Tags::UScalar2Minus<DataVector>>>(dt_char_fields);
+      // Scatter: store dt of BoundaryTheta, BoundaryZ, and UTensorMinus
+      // back to the volume at face node positions.
       const auto& face_dt_u_tensor_minus =
           get<::Tags::dt<Tags::UTensorMinus<DataVector, Dim, Frame::Inertial>>>(
               dt_char_fields);
 
       for (size_t fp = 0; fp < num_face_pts; ++fp) {
         const size_t vol_idx = volume_index(fp, outermost_layer);
-        get(dt_u_scalar3_minus)[vol_idx] = get(face_dt_u_scalar3_minus)[fp];
-        get(dt_u_scalar2_minus)[vol_idx] = get(face_dt_u_scalar2_minus)[fp];
+        get(dt_boundary_theta)[vol_idx] = get(dt_boundary_theta_face)[fp];
         for (size_t i = 0; i < Dim; ++i) {
-          dt_u_vector2_minus.get(i)[vol_idx] =
-              face_dt_u_vector2_minus.get(i)[fp];
+          dt_boundary_z.get(i)[vol_idx] = dt_boundary_z_face.get(i)[fp];
         }
         for (size_t ti = 0; ti < dt_u_tensor_minus.size(); ++ti) {
           dt_u_tensor_minus[ti][vol_idx] = face_dt_u_tensor_minus[ti][fp];

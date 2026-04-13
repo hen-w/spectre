@@ -48,19 +48,26 @@ struct System {
       ::Ccz4::Tags::FieldA<DataVector, 3>, ::Ccz4::Tags::FieldB<DataVector, 3>,
       ::Ccz4::Tags::FieldD<DataVector, 3>, ::Ccz4::Tags::FieldP<DataVector, 3>>;
 
-  // Boundary mode tags: incoming characteristic modes evolved at CRPBC faces
+  // Boundary mode tags: incoming characteristic modes evolved at CRPBC faces.
+  // Only UTensorMinus is evolved as a minus mode here. The incoming modes
+  // UScalar3Minus / UVector2Minus / UScalar2Minus are reconstructed in
+  // ConstraintsRadiationPreserving from the boundary-integrated physical
+  // fields (BoundaryTheta / BoundaryZ) below together with the interior
+  // plus modes.
   using boundary_mode_tags = tmpl::list<
-      ::Ccz4::fd::Tags::UScalar3Minus<DataVector>,
-      ::Ccz4::fd::Tags::UVector2Minus<DataVector, 3, Frame::Inertial>,
-      ::Ccz4::fd::Tags::UScalar2Minus<DataVector>,
       ::Ccz4::fd::Tags::UTensorMinus<DataVector, 3, Frame::Inertial>>;
 
-  // Boundary-integrated second-order fields for DirichletCharacteristics BC
+  // Boundary-integrated second-order fields. The first four are used by
+  // DirichletCharacteristics/CRPBC as ghost-side second-order data; the
+  // last two (BoundaryTheta, BoundaryZ) are advection+damping ODEs at
+  // CRPBC faces used to reconstruct three incoming minus modes.
   using boundary_second_order_tags =
       tmpl::list<::Ccz4::Tags::BoundaryConformalMetric<DataVector, 3>,
                  ::Ccz4::Tags::BoundaryConformalFactor<DataVector>,
                  ::Ccz4::Tags::BoundaryLapse<DataVector>,
-                 ::Ccz4::Tags::BoundaryShift<DataVector, 3>>;
+                 ::Ccz4::Tags::BoundaryShift<DataVector, 3>,
+                 ::Ccz4::Tags::BoundaryTheta<DataVector>,
+                 ::Ccz4::Tags::BoundaryZ<DataVector, 3, Frame::Inertial>>;
 
   // Full evolved variables = original 9 + 4 boundary modes + 4 boundary
   // second-order fields
