@@ -348,7 +348,9 @@ CrpbcMixedState crpbc_characteristic_pipeline(
     //     interior plus modes, per the inverse relations in `crpbc.tex`.
     //   - The three gauge (-) modes come from the analytic (ghost) char
     //     fields as before.
-    u_tnsr_minus = interior_boundary_u_tensor_minus;
+// u_tnsr_minus = interior_boundary_u_tensor_minus;
+    u_tnsr_minus = get<UTensorMinus<DataVector, Dim, Frame::Inertial>>(
+        ghost_char_fields);
 
     // Inverse of the coefficient (boundary-integrated) conformal metric.
     const auto [det_coeff_cm_local, inv_coeff_cm] =
