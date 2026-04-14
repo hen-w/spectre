@@ -60,7 +60,8 @@ void test_creation_and_serialization() {
       "  AnalyticPrescription:\n"
       "    Ccz4(Minkowski):\n"
       "  UseAnalyticForAll: false\n"
-      "  PenaltyMultiplier: 1.0\n");
+      "  PenaltyMultiplier: 1.0\n"
+      "  ZeroBoundaryThetaAndZ: false\n");
 
   CHECK(boundary_condition->get_clone() != nullptr);
 
@@ -96,7 +97,8 @@ void test_kerrschild_use_analytic_for_all() {
       "      Center: [0.2, 0.5, 0.1]\n"
       "      Velocity: [0.0, 0.0, 0.0]\n"
       "  UseAnalyticForAll: true\n"
-      "  PenaltyMultiplier: 1.0\n");
+      "  PenaltyMultiplier: 1.0\n"
+      "  ZeroBoundaryThetaAndZ: false\n");
   const auto& bc = dynamic_cast<
       const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving&>(*bc_ptr);
 
@@ -409,7 +411,8 @@ void test_minkowski() {
       "  AnalyticPrescription:\n"
       "    Ccz4(Minkowski):\n"
       "  UseAnalyticForAll: false\n"
-      "  PenaltyMultiplier: 1.0\n");
+      "  PenaltyMultiplier: 1.0\n"
+      "  ZeroBoundaryThetaAndZ: false\n");
   const auto& bc = dynamic_cast<
       const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving&>(*bc_ptr);
 
@@ -645,7 +648,8 @@ void test_kerrschild_roundtrip_t_perp() {
       "      Center: [0.2, 0.5, 0.1]\n"
       "      Velocity: [0.0, 0.0, 0.0]\n"
       "  UseAnalyticForAll: false\n"
-      "  PenaltyMultiplier: 1.0\n");
+      "  PenaltyMultiplier: 1.0\n"
+      "  ZeroBoundaryThetaAndZ: false\n");
   const auto& bc = dynamic_cast<
       const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving&>(*bc_ptr);
 

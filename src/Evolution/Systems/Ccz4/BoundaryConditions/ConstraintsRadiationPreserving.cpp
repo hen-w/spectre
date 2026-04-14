@@ -152,7 +152,8 @@ CrpbcMixedState crpbc_characteristic_pipeline(
     const Scalar<DataVector>& interior_boundary_theta,
     const tnsr::i<DataVector, 3, Frame::Inertial>& interior_boundary_z,
     const tnsr::I<DataVector, 3, Frame::Inertial>& coords, const double time,
-    const double f, const bool use_analytic_for_all) {
+    const double f, const bool use_analytic_for_all,
+    const bool zero_boundary_theta_and_z) {
   static constexpr size_t Dim = 3;
   const size_t num_pts = get(interior_conformal_factor).size();
 
@@ -372,9 +373,17 @@ CrpbcMixedState crpbc_characteristic_pipeline(
     const auto& u_scalar2_plus_in =
         get<UScalar2Plus<DataVector>>(interior_char_fields);
 
+    // Optionally treat boundary Theta and Z_i as zero
+    const Scalar<DataVector> zero_theta(num_pts, 0.0);
+    const tnsr::i<DataVector, Dim, Frame::Inertial> zero_z(num_pts, 0.0);
+    const auto& effective_boundary_theta =
+        zero_boundary_theta_and_z ? zero_theta : interior_boundary_theta;
+    const auto& effective_boundary_z =
+        zero_boundary_theta_and_z ? zero_z : interior_boundary_z;
+
     // UScalar3Minus_rec = UScalar3Plus + 4·Θ_bdry / φ²
     ::tenex::evaluate(make_not_null(&u_scalar3_minus_field),
-                      u_scalar3_plus_in() + 4.0 * interior_boundary_theta() /
+                      u_scalar3_plus_in() + 4.0 * effective_boundary_theta() /
                                                 coeff_conformal_factor_squared());
 
     // Transverse projector q^I_j from ghost unit normal (used for T^i,
@@ -415,7 +424,7 @@ CrpbcMixedState crpbc_characteristic_pipeline(
     tnsr::i<DataVector, Dim, Frame::Inertial> Z_perp_lo{};
     ::tenex::evaluate<ti::i>(
         make_not_null(&Z_perp_lo),
-        q_mixed_interior(ti::J, ti::i) * interior_boundary_z(ti::j));
+        q_mixed_interior(ti::J, ti::i) * effective_boundary_z(ti::j));
 
     // UVector2Minus_rec_i = -UVector2Plus_i + 4·Z^⊥_i / φ² + 2·T^⊥_i
     ::tenex::evaluate<ti::i>(
@@ -434,7 +443,7 @@ CrpbcMixedState crpbc_characteristic_pipeline(
     Scalar<DataVector> Z_n{};
     ::tenex::evaluate(
         make_not_null(&Z_n),
-        interior_unit_normal_vector(ti::I) * interior_boundary_z(ti::i));
+        interior_unit_normal_vector(ti::I) * effective_boundary_z(ti::i));
 
     // UScalar2Minus_rec = UScalar2Plus
     //   - (φ⁴/2)(UScalar3Plus + UScalar3Minus_rec)
@@ -573,7 +582,8 @@ ConstraintsRadiationPreserving::ConstraintsRadiationPreserving(
     : BoundaryCondition{dynamic_cast<const BoundaryCondition&>(rhs)},
       analytic_prescription_(rhs.analytic_prescription_->get_clone()),
       use_analytic_for_all_(rhs.use_analytic_for_all_),
-      penalty_multiplier_(rhs.penalty_multiplier_) {}
+      penalty_multiplier_(rhs.penalty_multiplier_),
+      zero_boundary_theta_and_z_(rhs.zero_boundary_theta_and_z_) {}
 
 ConstraintsRadiationPreserving& ConstraintsRadiationPreserving::operator=(
     const ConstraintsRadiationPreserving& rhs) {
@@ -583,15 +593,18 @@ ConstraintsRadiationPreserving& ConstraintsRadiationPreserving::operator=(
   analytic_prescription_ = rhs.analytic_prescription_->get_clone();
   use_analytic_for_all_ = rhs.use_analytic_for_all_;
   penalty_multiplier_ = rhs.penalty_multiplier_;
+  zero_boundary_theta_and_z_ = rhs.zero_boundary_theta_and_z_;
   return *this;
 }
 
 ConstraintsRadiationPreserving::ConstraintsRadiationPreserving(
     std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription,
-    bool use_analytic_for_all, double penalty_multiplier)
+    bool use_analytic_for_all, double penalty_multiplier,
+    bool zero_boundary_theta_and_z)
     : analytic_prescription_(std::move(analytic_prescription)),
       use_analytic_for_all_(use_analytic_for_all),
-      penalty_multiplier_(penalty_multiplier) {}
+      penalty_multiplier_(penalty_multiplier),
+      zero_boundary_theta_and_z_(zero_boundary_theta_and_z) {}
 
 std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>
 ConstraintsRadiationPreserving::get_clone() const {
@@ -603,6 +616,7 @@ void ConstraintsRadiationPreserving::pup(PUP::er& p) {
   p | analytic_prescription_;
   p | use_analytic_for_all_;
   p | penalty_multiplier_;
+  p | zero_boundary_theta_and_z_;
 }
 // NOLINTNEXTLINE
 PUP::able::PUP_ID ConstraintsRadiationPreserving::my_PUP_ID = 0;
@@ -711,7 +725,8 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
       coeff_conformal_metric, coeff_conformal_factor, coeff_lapse, coeff_shift,
       ghost_unit_normal_one_form, ghost_unit_normal_vector,
       interior_boundary_u_tensor_minus, interior_boundary_theta,
-      interior_boundary_z, coords, time, f, use_analytic_for_all_);
+      interior_boundary_z, coords, time, f, use_analytic_for_all_,
+      zero_boundary_theta_and_z_);
 
   // Validate characteristic speed signs
   for (size_t s = 0; s < num_pts; ++s) {
@@ -933,7 +948,8 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
       interior_boundary_lapse, interior_boundary_shift,
       boundary_unit_normal_one_form, boundary_unit_normal_vector,
       interior_boundary_u_tensor_minus, interior_boundary_theta,
-      interior_boundary_z, coords, time, f_val, use_analytic_for_all_);
+      interior_boundary_z, coords, time, f_val, use_analytic_for_all_,
+      zero_boundary_theta_and_z_);
 
   // Extract char-mixed evolved variables
   const auto& mixed_a_tilde =

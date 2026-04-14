@@ -76,8 +76,19 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
     using type = double;
     static type default_value() { return 1.0; }
   };
-  using options =
-      tmpl::list<AnalyticPrescription, UseAnalyticForAll, PenaltyMultiplier>;
+  /// \brief If true, treat boundary-integrated Theta and Z_i as exactly zero
+  /// in the CRPBC characteristic mode mixing.
+  struct ZeroBoundaryThetaAndZ {
+    static constexpr Options::String help =
+        "If true, treat boundary-integrated Theta and Z_i as zero in the "
+        "CRPBC mode reconstruction (UScalar3Minus, UVector2Minus, "
+        "UScalar2Minus). For testing whether constraint fields drive "
+        "instability.";
+    using type = bool;
+    static type suggested_value() { return false; }
+  };
+  using options = tmpl::list<AnalyticPrescription, UseAnalyticForAll,
+                             PenaltyMultiplier, ZeroBoundaryThetaAndZ>;
   static constexpr Options::String help{
       "Constraints and radiation preserving boundary conditions. "
       "Uses Ghost BC with time-integrated incoming characteristic modes."};
@@ -94,7 +105,8 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
   explicit ConstraintsRadiationPreserving(
       std::unique_ptr<evolution::initial_data::InitialData>
           analytic_prescription,
-      bool use_analytic_for_all = false, double penalty_multiplier = 1.0);
+      bool use_analytic_for_all = false, double penalty_multiplier = 1.0,
+      bool zero_boundary_theta_and_z = false);
 
   explicit ConstraintsRadiationPreserving(CkMigrateMessage* msg);
 
@@ -266,5 +278,6 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
   std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription_;
   bool use_analytic_for_all_{false};
   double penalty_multiplier_{1.0};
+  bool zero_boundary_theta_and_z_{false};
 };
 }  // namespace Ccz4::BoundaryConditions
