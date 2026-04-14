@@ -766,6 +766,195 @@ void test_kerrschild_perturbed_four_fields() {
   CHECK_ITERABLE_CUSTOM_APPROX(ghost_theta, analytic_theta, custom_approx);
 }
 
+// Verify that dg_time_derivative computes the correct dt_boundary_conformal_
+// metric when CopySecondOrderFieldsFromInterior=false (boundary-integrated
+// evolution path). This test catches the tnsr::ii vs tnsr::ij symmetry bug
+// in compute_dt_second_order_fields: conformal_metric_times_field_b_{ij} =
+// γ̃_{ki} B_j^k is NOT symmetric, so it must be stored as tnsr::ij. With
+// tnsr::ii, the sum M_{ij} + M_{ji} in eq 12a silently becomes 2*M_{ij},
+// losing the antisymmetric part.
+void test_kerrschild_dt_boundary_conformal_metric() {
+  register_factory_classes_with_charm<Metavariables>();
+
+  const auto bc_ptr = TestHelpers::test_creation<
+      std::unique_ptr<Ccz4::BoundaryConditions::BoundaryCondition>,
+      Metavariables>(
+      "DirichletCharacteristics:\n"
+      "  AnalyticPrescription:\n"
+      "    Ccz4(KerrSchild):\n"
+      "      Mass: 2.0\n"
+      "      Spin: [0.2, 0.4, 0.8]\n"
+      "      Center: [0.2, 0.5, 0.1]\n"
+      "      Velocity: [0.0, 0.0, 0.0]\n"
+      "  PrescribeOutgoing: false\n"
+      "  CopySecondOrderFieldsFromInterior: false\n");
+  const auto& bc =
+      dynamic_cast<const Ccz4::BoundaryConditions::DirichletCharacteristics&>(
+          *bc_ptr);
+
+  static constexpr size_t Dim = 3;
+  const size_t num_pts = 5;
+
+  tnsr::I<DataVector, Dim, Frame::Inertial> coords(num_pts, 0.0);
+  for (size_t i = 0; i < num_pts; ++i) {
+    coords.get(0)[i] = 5.0 + 0.1 * static_cast<double>(i);
+    coords.get(1)[i] = 0.1 * static_cast<double>(i);
+    coords.get(2)[i] = -0.1 * static_cast<double>(i);
+  }
+
+  const double time = 0.0;
+  const gr::Solutions::KerrSchild kerr_schild(
+      2.0, std::array<double, 3>{{0.2, 0.4, 0.8}},
+      std::array<double, 3>{{0.2, 0.5, 0.1}});
+  const Ccz4::Solutions::Ccz4WrappedGr<gr::Solutions::KerrSchild>
+      wrapped_solution(kerr_schild);
+
+  using all_tags = tmpl::list<
+      Ccz4::Tags::ConformalMetric<DataVector, 3>,
+      Ccz4::Tags::ConformalFactor<DataVector>,
+      Ccz4::Tags::ATilde<DataVector, 3>,
+      gr::Tags::TraceExtrinsicCurvature<DataVector>,
+      Ccz4::Tags::Theta<DataVector>, Ccz4::Tags::GammaHat<DataVector, 3>,
+      gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
+      Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>,
+      Ccz4::Tags::FieldA<DataVector, 3>, Ccz4::Tags::FieldB<DataVector, 3>,
+      Ccz4::Tags::FieldD<DataVector, 3>, Ccz4::Tags::FieldP<DataVector, 3>>;
+  const auto analytic_values =
+      wrapped_solution.variables(coords, time, all_tags{});
+
+  const auto& interior_conformal_metric =
+      get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(analytic_values);
+  const auto& interior_conformal_factor =
+      get<Ccz4::Tags::ConformalFactor<DataVector>>(analytic_values);
+  const auto& interior_a_tilde =
+      get<Ccz4::Tags::ATilde<DataVector, 3>>(analytic_values);
+  const auto& interior_trace_K =
+      get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(analytic_values);
+  const auto& interior_theta =
+      get<Ccz4::Tags::Theta<DataVector>>(analytic_values);
+  const auto& interior_gamma_hat =
+      get<Ccz4::Tags::GammaHat<DataVector, 3>>(analytic_values);
+  const auto& interior_lapse =
+      get<gr::Tags::Lapse<DataVector>>(analytic_values);
+  const auto& interior_shift =
+      get<gr::Tags::Shift<DataVector, 3>>(analytic_values);
+  const auto& interior_auxiliary_shift_b =
+      get<Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(analytic_values);
+  const auto& interior_field_a =
+      get<Ccz4::Tags::FieldA<DataVector, 3>>(analytic_values);
+  const auto& interior_field_b =
+      get<Ccz4::Tags::FieldB<DataVector, 3>>(analytic_values);
+  const auto& interior_field_d =
+      get<Ccz4::Tags::FieldD<DataVector, 3>>(analytic_values);
+  const auto& interior_field_p =
+      get<Ccz4::Tags::FieldP<DataVector, 3>>(analytic_values);
+
+  auto interior_u_tensor_minus =
+      make_with_value<tnsr::ii<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
+
+  // Boundary-integrated = analytic (CopySecondOrderFieldsFromInterior=false
+  // uses these as coefficients and for boundary evolution)
+  const auto& interior_boundary_conformal_metric = interior_conformal_metric;
+  const auto& interior_boundary_conformal_factor = interior_conformal_factor;
+  const auto& interior_boundary_lapse = interior_lapse;
+  const auto& interior_boundary_shift = interior_shift;
+  const auto interior_boundary_theta =
+      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  const auto interior_boundary_z =
+      make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
+
+  auto normal_covector =
+      make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
+  normal_covector.get(0) = 1.0;
+
+  const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>
+      face_mesh_velocity{};
+  const bool evolve_lapse_and_shift = true;
+
+  auto dt_cm = make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_cf = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_a_tilde = make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_K = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_theta = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_gamma_hat = make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_lapse = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_shift = make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_b = make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_field_a = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_field_b = make_with_value<tnsr::iJ<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_field_d = make_with_value<tnsr::ijj<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_field_p = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_u_tm = make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_bcm = make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_bcf = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_blapse = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_bshift = make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_btheta = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_bz = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
+
+  const auto dt_result = bc.dg_time_derivative(
+      make_not_null(&dt_cm), make_not_null(&dt_cf), make_not_null(&dt_a_tilde),
+      make_not_null(&dt_K), make_not_null(&dt_theta),
+      make_not_null(&dt_gamma_hat), make_not_null(&dt_lapse),
+      make_not_null(&dt_shift), make_not_null(&dt_b),
+      make_not_null(&dt_field_a), make_not_null(&dt_field_b),
+      make_not_null(&dt_field_d), make_not_null(&dt_field_p),
+      make_not_null(&dt_u_tm), make_not_null(&dt_bcm),
+      make_not_null(&dt_bcf), make_not_null(&dt_blapse),
+      make_not_null(&dt_bshift),
+      make_not_null(&dt_btheta), make_not_null(&dt_bz),
+      face_mesh_velocity, normal_covector,
+      interior_conformal_metric, interior_conformal_factor, interior_a_tilde,
+      interior_trace_K, interior_theta, interior_gamma_hat, interior_lapse,
+      interior_shift, interior_auxiliary_shift_b, interior_field_a,
+      interior_field_b, interior_field_d, interior_field_p,
+      interior_u_tensor_minus,
+      interior_boundary_conformal_metric, interior_boundary_conformal_factor,
+      interior_boundary_lapse, interior_boundary_shift,
+      interior_boundary_theta, interior_boundary_z, coords, time,
+      evolve_lapse_and_shift);
+
+  CHECK_FALSE(dt_result.has_value());
+
+  // Reference eq 12a computed with explicit component loops.
+  // When interior == analytic == boundary-integrated, the char-mixed state
+  // equals the analytic state, so we use analytic fields for the reference.
+  //
+  // eq 12a: dt γ̃_{ij} = 2β^k D_{k,i,j} + γ̃_{ki}B_j^k + γ̃_{kj}B_i^k
+  //                      - (2/3) γ̃_{ij} B_k^k - 2α Ã_{ij}
+  const Approx custom_approx = Approx::custom().epsilon(1.0e-10).scale(1.0);
+  tnsr::ii<DataVector, Dim, Frame::Inertial> expected_dt_bcm(num_pts, 0.0);
+  for (size_t s = 0; s < num_pts; ++s) {
+    double cfb = 0.0;
+    for (size_t k = 0; k < Dim; ++k) {
+      cfb += interior_field_b.get(k, k)[s];
+    }
+    for (size_t i = 0; i < Dim; ++i) {
+      for (size_t j = i; j < Dim; ++j) {
+        double val = 0.0;
+        for (size_t k = 0; k < Dim; ++k) {
+          val += 2.0 * interior_shift.get(k)[s] *
+                 interior_field_d.get(k, i, j)[s];
+        }
+        // M_{ij} = γ̃_{ki} B_j^k  (NOT symmetric in i,j)
+        for (size_t k = 0; k < Dim; ++k) {
+          val += interior_conformal_metric.get(k, i)[s] *
+                 interior_field_b.get(j, k)[s];
+        }
+        // M_{ji} = γ̃_{kj} B_i^k
+        for (size_t k = 0; k < Dim; ++k) {
+          val += interior_conformal_metric.get(k, j)[s] *
+                 interior_field_b.get(i, k)[s];
+        }
+        val -= (2.0 / 3.0) * interior_conformal_metric.get(i, j)[s] * cfb;
+        val -= 2.0 * get(interior_lapse)[s] * interior_a_tilde.get(i, j)[s];
+        expected_dt_bcm.get(i, j)[s] = val;
+      }
+    }
+  }
+  CHECK_ITERABLE_CUSTOM_APPROX(dt_bcm, expected_dt_bcm, custom_approx);
+}
+
 SPECTRE_TEST_CASE("Unit.Ccz4.BoundaryConditions.DirichletCharacteristics",
                   "[Unit][Evolution]") {
   test_creation_and_serialization();
@@ -773,5 +962,6 @@ SPECTRE_TEST_CASE("Unit.Ccz4.BoundaryConditions.DirichletCharacteristics",
   test_minkowski();
   test_kerrschild();
   test_kerrschild_perturbed_four_fields();
+  test_kerrschild_dt_boundary_conformal_metric();
 }
 }  // namespace

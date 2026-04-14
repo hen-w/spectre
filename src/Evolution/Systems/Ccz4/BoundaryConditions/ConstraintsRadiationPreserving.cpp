@@ -59,7 +59,7 @@ void compute_dt_second_order_fields(
   Scalar<DataVector> contracted_field_b{};
   ::tenex::evaluate(make_not_null(&contracted_field_b), field_b(ti::k, ti::K));
 
-  tnsr::ii<DataVector, 3, Frame::Inertial> conformal_metric_times_field_b{};
+  tnsr::ij<DataVector, 3, Frame::Inertial> conformal_metric_times_field_b{};
   ::tenex::evaluate<ti::i, ti::j>(
       make_not_null(&conformal_metric_times_field_b),
       conformal_metric(ti::k, ti::i) * field_b(ti::j, ti::K));

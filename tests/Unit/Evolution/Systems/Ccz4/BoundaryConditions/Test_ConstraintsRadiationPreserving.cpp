@@ -353,9 +353,47 @@ void test_kerrschild_use_analytic_for_all() {
     CHECK_ITERABLE_APPROX(component, zero);
   }
 
-  // dt_bcm, dt_bcf, dt_blapse, dt_bshift, dt_btheta, dt_bz are nonzero on
-  // KerrSchild (CRPBC evaluates CCZ4 eq 12a with K_0=0); their values are
-  // tested on Minkowski in a separate test where the formula must produce zero.
+  // Verify dt_bcm against an independent reference computation of CCZ4 eq 12a.
+  // When interior == analytic == boundary-integrated and UseAnalyticForAll=true,
+  // the char-mixed state equals the analytic state, so we can compute the
+  // expected dt_boundary_conformal_metric from the analytic fields directly.
+  //
+  // eq 12a: dt γ̃_{ij} = 2β^k D_{k,i,j} + γ̃_{ki}B_j^k + γ̃_{kj}B_i^k
+  //                      - (2/3) γ̃_{ij} B_k^k - 2α Ã_{ij}
+  //
+  // This catches the tnsr::ii vs tnsr::ij bug: if conformal_metric_times_field_b
+  // were stored as tnsr::ii (symmetric), the M_{ij} + M_{ji} sum would
+  // incorrectly become 2*M_{ij}, losing the antisymmetric part.
+  tnsr::ii<DataVector, Dim, Frame::Inertial> expected_dt_bcm(num_pts, 0.0);
+  for (size_t s = 0; s < num_pts; ++s) {
+    double cfb = 0.0;
+    for (size_t k = 0; k < Dim; ++k) {
+      cfb += interior_field_b.get(k, k)[s];
+    }
+    for (size_t i = 0; i < Dim; ++i) {
+      for (size_t j = i; j < Dim; ++j) {
+        double val = 0.0;
+        for (size_t k = 0; k < Dim; ++k) {
+          val += 2.0 * interior_shift.get(k)[s] *
+                 interior_field_d.get(k, i, j)[s];
+        }
+        // M_{ij} = γ̃_{ki} B_j^k  (NOT symmetric in i,j)
+        for (size_t k = 0; k < Dim; ++k) {
+          val += interior_conformal_metric.get(k, i)[s] *
+                 interior_field_b.get(j, k)[s];
+        }
+        // M_{ji} = γ̃_{kj} B_i^k
+        for (size_t k = 0; k < Dim; ++k) {
+          val += interior_conformal_metric.get(k, j)[s] *
+                 interior_field_b.get(i, k)[s];
+        }
+        val -= (2.0 / 3.0) * interior_conformal_metric.get(i, j)[s] * cfb;
+        val -= 2.0 * get(interior_lapse)[s] * interior_a_tilde.get(i, j)[s];
+        expected_dt_bcm.get(i, j)[s] = val;
+      }
+    }
+  }
+  CHECK_ITERABLE_CUSTOM_APPROX(dt_bcm, expected_dt_bcm, custom_approx);
 }
 
 // Functional test on Minkowski: all fields trivial (lapse=1, metric=delta,
