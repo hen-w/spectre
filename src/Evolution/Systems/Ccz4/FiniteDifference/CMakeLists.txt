@@ -35,6 +35,7 @@ spectre_target_headers(
   ComputeCrpbcBoundaryModeDt.hpp
   ConstraintCharacteristics.hpp
   Derivatives.hpp
+  DetConformalSpatialMetricCompute.hpp
   DummyReconstructor.hpp
   EnforceConstrainedEvolution.hpp
   EnforceTracelessDerivConformalMetric.hpp
@@ -55,6 +56,7 @@ spectre_target_headers(
   SpatialZ4ConstraintUpCompute.hpp
   System.hpp
   Tags.hpp
+  TraceATildeCompute.hpp
   UpdateAuxiliaryVariables.hpp
   )
 

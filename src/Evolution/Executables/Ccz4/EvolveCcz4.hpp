@@ -36,6 +36,7 @@
 #include "Evolution/Systems/Ccz4/FiniteDifference/SpatialZ4ConstraintUpCompute.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/ApplyFilter.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/ComputeCrpbcBoundaryModeDt.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/DetConformalSpatialMetricCompute.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/EnforceConstrainedEvolution.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/EnforceTracelessDerivConformalMetric.hpp"
@@ -51,6 +52,7 @@
 #include "Evolution/Systems/Ccz4/FiniteDifference/SoTimeDerivative.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/TraceATildeCompute.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/UpdateAuxiliaryVariables.hpp"
 #include "Evolution/Systems/Ccz4/Solutions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/ApplyTensorYlmFilter.hpp"
@@ -142,7 +144,9 @@ struct EvolutionMetavars {
   using observe_fields = tmpl::push_back<
       tmpl::append<
           typename system::variables_tag::tags_list, error_tags,
-          tmpl::list<::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>>,
+          tmpl::list<::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>,
+                     ::Ccz4::Tags::DetConformalSpatialMetric<DataVector>,
+                     ::Ccz4::Tags::TraceATilde<DataVector>>,
           typename db::add_tag_prefix<::Tags::dt,
                                       system::variables_tag>::tags_list,
           tmpl::conditional_t<
@@ -186,7 +190,9 @@ struct EvolutionMetavars {
                      ::Events::Tags::ObserverDetInvJacobianCompute<
                          Frame::ElementLogical, Frame::Inertial>>>,
       analytic_compute, error_compute,
-      ::Ccz4::fd::SpatialZ4ConstraintUpCompute>;
+      ::Ccz4::fd::SpatialZ4ConstraintUpCompute,
+      ::Ccz4::fd::DetConformalSpatialMetricCompute,
+      ::Ccz4::fd::TraceATildeCompute>;
 
   struct factory_creation
       : tt::ConformsTo<Options::protocols::FactoryCreation> {
