@@ -555,6 +555,13 @@ CrpbcMixedState crpbc_characteristic_pipeline(
             coeff_phi4() * T_n() +
             2.0 * coeff_conformal_factor_squared() * Z_n());
 
+// temp debug
+u_vector2_minus_field =
+        get<UVector2Minus<DataVector, Dim, Frame::Inertial>>(
+            ghost_char_fields);
+u_scalar2_minus_field =
+        get<UScalar2Minus<DataVector>>(ghost_char_fields);
+
     // 3 gauge modes from ghost char fields
     u_vector3_minus_field =
         get<UVector3Minus<DataVector, Dim, Frame::Inertial>>(
