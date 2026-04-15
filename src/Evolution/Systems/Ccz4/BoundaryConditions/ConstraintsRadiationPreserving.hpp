@@ -70,6 +70,16 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
     using type = bool;
     static type default_value() { return false; }
   };
+  /// \brief Debug flag: if true, set ALL incoming characteristic modes to
+  /// zero (instead of prescribing from the analytic solution or from the
+  /// CRPBC reconstruction). The evolved boundary-mode variables are ignored.
+  struct ZeroAllIncomingModes {
+    static constexpr Options::String help =
+        "If true, set ALL incoming characteristic modes to zero. For "
+        "debugging. Mutually exclusive with UseAnalyticForAll.";
+    using type = bool;
+    static type default_value() { return false; }
+  };
   struct PenaltyMultiplier {
     static constexpr Options::String help =
         "Multiplier for the theta-constraint penalty term at the boundary. "
@@ -89,8 +99,9 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
     using type = bool;
     static type suggested_value() { return false; }
   };
-  using options = tmpl::list<AnalyticPrescription, UseAnalyticForAll,
-                             PenaltyMultiplier, ZeroBoundaryThetaAndZ>;
+  using options =
+      tmpl::list<AnalyticPrescription, UseAnalyticForAll, ZeroAllIncomingModes,
+                 PenaltyMultiplier, ZeroBoundaryThetaAndZ>;
   static constexpr Options::String help{
       "Constraints and radiation preserving boundary conditions. "
       "Uses Ghost BC with time-integrated incoming characteristic modes."};
@@ -107,7 +118,8 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
   explicit ConstraintsRadiationPreserving(
       std::unique_ptr<evolution::initial_data::InitialData>
           analytic_prescription,
-      bool use_analytic_for_all = false, double penalty_multiplier = 1.0,
+      bool use_analytic_for_all = false, bool zero_all_incoming_modes = false,
+      double penalty_multiplier = 1.0,
       bool zero_boundary_theta_and_z = false);
 
   explicit ConstraintsRadiationPreserving(CkMigrateMessage* msg);
@@ -288,6 +300,7 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
  private:
   std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription_;
   bool use_analytic_for_all_{false};
+  bool zero_all_incoming_modes_{false};
   double penalty_multiplier_{1.0};
   bool zero_boundary_theta_and_z_{false};
 };

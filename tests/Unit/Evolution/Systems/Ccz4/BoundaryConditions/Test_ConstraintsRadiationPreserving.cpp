@@ -119,6 +119,7 @@ void test_creation_and_serialization() {
       "  AnalyticPrescription:\n"
       "    Ccz4(Minkowski):\n"
       "  UseAnalyticForAll: false\n"
+      "  ZeroAllIncomingModes: false\n"
       "  PenaltyMultiplier: 1.0\n"
       "  ZeroBoundaryThetaAndZ: false\n");
 
@@ -156,6 +157,7 @@ void test_kerrschild_use_analytic_for_all() {
       "      Center: [0.2, 0.5, 0.1]\n"
       "      Velocity: [0.0, 0.0, 0.0]\n"
       "  UseAnalyticForAll: true\n"
+      "  ZeroAllIncomingModes: false\n"
       "  PenaltyMultiplier: 1.0\n"
       "  ZeroBoundaryThetaAndZ: false\n");
   const auto& bc = dynamic_cast<
@@ -468,6 +470,7 @@ void test_minkowski() {
       "  AnalyticPrescription:\n"
       "    Ccz4(Minkowski):\n"
       "  UseAnalyticForAll: false\n"
+      "  ZeroAllIncomingModes: false\n"
       "  PenaltyMultiplier: 1.0\n"
       "  ZeroBoundaryThetaAndZ: false\n");
   const auto& bc = dynamic_cast<
@@ -705,6 +708,7 @@ void test_kerrschild_roundtrip_t_perp() {
       "      Center: [0.2, 0.5, 0.1]\n"
       "      Velocity: [0.0, 0.0, 0.0]\n"
       "  UseAnalyticForAll: false\n"
+      "  ZeroAllIncomingModes: false\n"
       "  PenaltyMultiplier: 1.0\n"
       "  ZeroBoundaryThetaAndZ: false\n");
   const auto& bc = dynamic_cast<
@@ -932,6 +936,7 @@ void test_theta_and_z_roundtrip() {
       "      Center: [0.2, 0.5, 0.1]\n"
       "      Velocity: [0.0, 0.0, 0.0]\n"
       "  UseAnalyticForAll: false\n"
+      "  ZeroAllIncomingModes: false\n"
       "  PenaltyMultiplier: 1.0\n"
       "  ZeroBoundaryThetaAndZ: false\n");
   const auto& bc = dynamic_cast<

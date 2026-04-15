@@ -162,6 +162,7 @@ CrpbcMixedState crpbc_characteristic_pipeline(
     const tnsr::i<DataVector, 3, Frame::Inertial>& interior_boundary_z,
     const tnsr::I<DataVector, 3, Frame::Inertial>& coords, const double time,
     const double f, const bool use_analytic_for_all,
+    const bool zero_all_incoming_modes,
     const bool zero_boundary_theta_and_z,
     const Mesh<3>& volume_mesh,
     const InverseJacobian<DataVector, 3, Frame::ElementLogical,
@@ -445,6 +446,21 @@ CrpbcMixedState crpbc_characteristic_pipeline(
         get<UScalar4Minus<DataVector>>(ghost_char_fields);
     u_scalar5_minus_field =
         get<UScalar5Minus<DataVector>>(ghost_char_fields);
+  } else if (zero_all_incoming_modes) {
+    // Debug mode: set ALL incoming modes to zero.
+    for (auto& component : u_tnsr_minus) {
+      component = 0.0;
+    }
+    for (auto& component : u_vector2_minus_field) {
+      component = 0.0;
+    }
+    for (auto& component : u_vector3_minus_field) {
+      component = 0.0;
+    }
+    get(u_scalar2_minus_field) = 0.0;
+    get(u_scalar3_minus_field) = 0.0;
+    get(u_scalar4_minus_field) = 0.0;
+    get(u_scalar5_minus_field) = 0.0;
   } else {
     // Normal CRPBC mode:
     //   - UTensorMinus is evolved as a boundary mode.
@@ -572,15 +588,18 @@ u_scalar2_minus_field =
         get<UScalar5Minus<DataVector>>(ghost_char_fields);
   }
 
-  // Zero-speed modes: conditionally from ghost
+  // Zero-speed modes: conditionally from ghost (or zero, if the
+  // zero-all-incoming-modes debug flag is set)
   for (size_t s = 0; s < num_pts; ++s) {
     if (char_speeds[2][s] < 0.0) {
       for (size_t i = 0; i < Dim; ++i) {
-        u_vector1_zero.get(i)[s] = ghost_u_vector1_zero.get(i)[s];
+        u_vector1_zero.get(i)[s] =
+            zero_all_incoming_modes ? 0.0 : ghost_u_vector1_zero.get(i)[s];
       }
     }
     if (char_speeds[7][s] < 0.0) {
-      get(u_scalar1_zero)[s] = get(ghost_u_scalar1_zero)[s];
+      get(u_scalar1_zero)[s] =
+          zero_all_incoming_modes ? 0.0 : get(ghost_u_scalar1_zero)[s];
     }
   }
 
@@ -684,6 +703,7 @@ ConstraintsRadiationPreserving::ConstraintsRadiationPreserving(
     : BoundaryCondition{dynamic_cast<const BoundaryCondition&>(rhs)},
       analytic_prescription_(rhs.analytic_prescription_->get_clone()),
       use_analytic_for_all_(rhs.use_analytic_for_all_),
+      zero_all_incoming_modes_(rhs.zero_all_incoming_modes_),
       penalty_multiplier_(rhs.penalty_multiplier_),
       zero_boundary_theta_and_z_(rhs.zero_boundary_theta_and_z_) {}
 
@@ -694,6 +714,7 @@ ConstraintsRadiationPreserving& ConstraintsRadiationPreserving::operator=(
   }
   analytic_prescription_ = rhs.analytic_prescription_->get_clone();
   use_analytic_for_all_ = rhs.use_analytic_for_all_;
+  zero_all_incoming_modes_ = rhs.zero_all_incoming_modes_;
   penalty_multiplier_ = rhs.penalty_multiplier_;
   zero_boundary_theta_and_z_ = rhs.zero_boundary_theta_and_z_;
   return *this;
@@ -701,12 +722,20 @@ ConstraintsRadiationPreserving& ConstraintsRadiationPreserving::operator=(
 
 ConstraintsRadiationPreserving::ConstraintsRadiationPreserving(
     std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription,
-    bool use_analytic_for_all, double penalty_multiplier,
-    bool zero_boundary_theta_and_z)
+    bool use_analytic_for_all, bool zero_all_incoming_modes,
+    double penalty_multiplier, bool zero_boundary_theta_and_z)
     : analytic_prescription_(std::move(analytic_prescription)),
       use_analytic_for_all_(use_analytic_for_all),
+      zero_all_incoming_modes_(zero_all_incoming_modes),
       penalty_multiplier_(penalty_multiplier),
-      zero_boundary_theta_and_z_(zero_boundary_theta_and_z) {}
+      zero_boundary_theta_and_z_(zero_boundary_theta_and_z) {
+  if (use_analytic_for_all_ and zero_all_incoming_modes_) {
+    ERROR(
+        "ConstraintsRadiationPreserving: UseAnalyticForAll and "
+        "ZeroAllIncomingModes are mutually exclusive; at most one may be "
+        "true.");
+  }
+}
 
 std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>
 ConstraintsRadiationPreserving::get_clone() const {
@@ -717,6 +746,7 @@ void ConstraintsRadiationPreserving::pup(PUP::er& p) {
   BoundaryCondition::pup(p);
   p | analytic_prescription_;
   p | use_analytic_for_all_;
+  p | zero_all_incoming_modes_;
   p | penalty_multiplier_;
   p | zero_boundary_theta_and_z_;
 }
@@ -831,7 +861,8 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
       ghost_unit_normal_one_form, ghost_unit_normal_vector,
       interior_boundary_u_tensor_minus, interior_boundary_theta,
       interior_boundary_z, coords, time, f, use_analytic_for_all_,
-      zero_boundary_theta_and_z_, volume_mesh, volume_inv_jac);
+      zero_all_incoming_modes_, zero_boundary_theta_and_z_, volume_mesh,
+      volume_inv_jac);
 
   // Validate characteristic speed signs
   for (size_t s = 0; s < num_pts; ++s) {
@@ -1057,7 +1088,8 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
       boundary_unit_normal_one_form, boundary_unit_normal_vector,
       interior_boundary_u_tensor_minus, interior_boundary_theta,
       interior_boundary_z, coords, time, f_val, use_analytic_for_all_,
-      zero_boundary_theta_and_z_, volume_mesh, volume_inv_jac);
+      zero_all_incoming_modes_, zero_boundary_theta_and_z_, volume_mesh,
+      volume_inv_jac);
 
   // Extract char-mixed evolved variables
   const auto& mixed_a_tilde =
