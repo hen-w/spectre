@@ -54,8 +54,8 @@ namespace Ccz4::fd {
  * 1. Computes face geometry (metrics, Christoffels, Ricci, Z4 constraint).
  * 2. Writes the advection + damping RHS for the boundary-integrated
  *    fields:
- *      `dt Θ_bdry   = -(α n^k − β^k) ∂_k θ_interior     − τ · Θ_bdry`
- *      `dt Z_i_bdry = -(α n^k − β^k) ∂_k Z_i_interior   − τ · Z_i_bdry`
+ *      `dt Θ_bdry   = −α n^k ∂_k θ_interior   − α Θ_bdry / r`
+ *      `dt Z_i_bdry = −α n^k ∂_k Z_i_interior − α Z_i_bdry / r`
  *    These replace the former direct evolution of UScalar3Minus /
  *    UVector2Minus / UScalar2Minus. The three minus modes are
  *    reconstructed algebraically inside `ConstraintsRadiationPreserving`.
@@ -114,15 +114,6 @@ struct ComputeCrpbcBoundaryModeDt {
     if (crpbc_directions.empty()) {
       return;
     }
-
-    // All CRPBC faces share the same BC object; retrieve penalty multiplier
-    // once.
-    // *** THIS IS A BUG; CANNOT ASSUME SAME PENALTY MULTIPLIER ON ALL FACES.
-    // *** FIX IN FUTURE. ***
-    const auto* crpbc_ptr = dynamic_cast<
-        const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving*>(
-        block_boundary_conditions.at(crpbc_directions[0]).get());
-    const double penalty_multiplier = crpbc_ptr->penalty_multiplier();
 
     ASSERT(evolve_lapse_and_shift,
            "ConstraintsRadiationPreserving BC requires evolving lapse and "
@@ -274,23 +265,6 @@ struct ComputeCrpbcBoundaryModeDt {
         return (face_idx % inner_stride) + inner_stride * layer +
                inner_stride * N_normal * (face_idx / inner_stride);
       };
-
-      // Grid spacing: Euclidean distance between outermost and
-      // second-outermost grid points in the normal direction.
-      const size_t second_outermost_layer =
-          (direction.side() == Side::Upper) ? N_normal - 2 : 1;
-      DataVector dist_sq(num_face_pts, 0.0);
-      for (size_t d = 0; d < Dim; ++d) {
-        for (size_t fp = 0; fp < num_face_pts; ++fp) {
-          const double dx =
-              inertial_coords.get(d)[volume_index(fp, outermost_layer)] -
-              inertial_coords.get(d)[volume_index(fp, second_outermost_layer)];
-          dist_sq[fp] += dx * dx;
-        }
-      }
-      // penalty_strength = penalty_multiplier / h (face-point DataVector)
-      Scalar<DataVector> penalty_strength(num_face_pts);
-      get(penalty_strength) = penalty_multiplier / sqrt(dist_sq);
 
       auto slice_scalar = [&](Scalar<DataVector>& face,
                               const Scalar<DataVector>& vol) {
@@ -564,22 +538,32 @@ struct ComputeCrpbcBoundaryModeDt {
       }
 
       // ----------------------------------------------------------------
-      // BoundaryTheta / BoundaryZ advection + damping RHS
+      // BoundaryTheta / BoundaryZ Sommerfeld RHS
       // ----------------------------------------------------------------
-      // ∂_t Θ_bdry   = -(α n^k - β^k) ∂_k θ_interior   - τ · Θ_bdry
-      // ∂_t Z_i_bdry = -(α n^k - β^k) ∂_k Z_i_interior - τ · Z_i_bdry
+      // ∂_t Θ_bdry   = -α n^k ∂_k θ_interior   - α Θ_bdry / r
+      // ∂_t Z_i_bdry = -α n^k ∂_k Z_i_interior - α Z_i_bdry / r
+
+      // Coordinate radius on the face for Sommerfeld 1/r damping
+      Scalar<DataVector> coord_radius(num_face_pts);
+      get(coord_radius) = 0.0;
+      for (size_t d = 0; d < Dim; ++d) {
+        for (size_t fp = 0; fp < num_face_pts; ++fp) {
+          const double x =
+              inertial_coords.get(d)[volume_index(fp, outermost_layer)];
+          get(coord_radius)[fp] += x * x;
+        }
+      }
+      get(coord_radius) = sqrt(get(coord_radius));
+
       Scalar<DataVector> dn_theta(num_face_pts);
       ::tenex::evaluate(make_not_null(&dn_theta),
                         unit_normal_vector(ti::I) * d_theta_face(ti::i));
 
-      Scalar<DataVector> beta_dot_d_theta(num_face_pts);
-      ::tenex::evaluate(make_not_null(&beta_dot_d_theta),
-                        shift_face(ti::K) * d_theta_face(ti::k));
-
       Scalar<DataVector> dt_boundary_theta_face(num_face_pts);
-      ::tenex::evaluate(make_not_null(&dt_boundary_theta_face),
-                        -lapse_face() * dn_theta() + beta_dot_d_theta() -
-                            penalty_strength() * boundary_theta_face());
+      ::tenex::evaluate(
+          make_not_null(&dt_boundary_theta_face),
+          -lapse_face() * dn_theta() -
+              lapse_face() * boundary_theta_face() / coord_radius());
 
       // d_z4_face(k, i) = ∂_k Z_i
       tnsr::i<DataVector, Dim> n_dot_dZ(num_face_pts);
@@ -587,15 +571,11 @@ struct ComputeCrpbcBoundaryModeDt {
           make_not_null(&n_dot_dZ),
           unit_normal_vector(ti::K) * d_z4_face(ti::k, ti::i));
 
-      tnsr::i<DataVector, Dim> beta_dot_dZ(num_face_pts);
-      ::tenex::evaluate<ti::i>(make_not_null(&beta_dot_dZ),
-                               shift_face(ti::K) * d_z4_face(ti::k, ti::i));
-
       tnsr::i<DataVector, Dim> dt_boundary_z_face(num_face_pts);
       ::tenex::evaluate<ti::i>(
           make_not_null(&dt_boundary_z_face),
-          -lapse_face() * n_dot_dZ(ti::i) + beta_dot_dZ(ti::i) -
-              penalty_strength() * boundary_z_face(ti::i));
+          -lapse_face() * n_dot_dZ(ti::i) -
+              lapse_face() * boundary_z_face(ti::i) / coord_radius());
 
       // ----------------------------------------------------------------
       // Radiation-preserving correction for UTensorMinus
