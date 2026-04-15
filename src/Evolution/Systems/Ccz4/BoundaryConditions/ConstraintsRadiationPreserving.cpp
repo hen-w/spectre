@@ -116,8 +116,8 @@ struct CrpbcMixedState {
 // Performs the full CRPBC characteristic mode-mixing pipeline shared by
 // dg_ghost and dg_time_derivative:
 // 1. Reconstructs interior spatial derivatives from interior auxiliary fields
-// 2. Computes interior unit normal from normal_covector + interior metric
-// 3. Computes interior char speeds and char fields
+// 2+3. Forward char decomposition of interior evolved fields using ghost
+//       unit normal + coeff four fields (same frame as inverse transform)
 // 4. Evaluates analytic solution
 // 5. Reconstructs ghost spatial derivatives (coeff four fields * analytic aux)
 // 6. Computes ghost char fields (ghost unit normal + coeff four fields)
@@ -155,7 +155,16 @@ CrpbcMixedState crpbc_characteristic_pipeline(
     const double f, const bool use_analytic_for_all,
     const bool zero_boundary_theta_and_z) {
   static constexpr size_t Dim = 3;
-  const size_t num_pts = get(interior_conformal_factor).size();
+  const size_t num_pts = get(coeff_conformal_factor).size();
+
+  // These parameters are no longer used after switching the entire pipeline
+  // to ghost normal + coeff four fields (for roundtrip consistency).
+  (void)normal_covector;
+  (void)interior_conformal_metric;
+  (void)interior_conformal_factor;
+  (void)interior_lapse;
+  (void)interior_shift;
+  (void)interior_boundary_u_tensor_minus;
 
   // Step 1: Interior spatial derivatives from auxiliary fields
   tnsr::ijj<DataVector, Dim, Frame::Inertial> d_conformal_metric{};
@@ -166,44 +175,29 @@ CrpbcMixedState crpbc_characteristic_pipeline(
   tnsr::i<DataVector, Dim, Frame::Inertial> d_conformal_factor{};
   ::tenex::evaluate<ti::i>(
       make_not_null(&d_conformal_factor),
-      interior_conformal_factor() * interior_field_p(ti::i));
+      coeff_conformal_factor() * interior_field_p(ti::i));
 
   tnsr::i<DataVector, Dim, Frame::Inertial> d_lapse{};
   ::tenex::evaluate<ti::i>(make_not_null(&d_lapse),
-                           interior_lapse() * interior_field_a(ti::i));
+                           coeff_lapse() * interior_field_a(ti::i));
 
   tnsr::iJ<DataVector, Dim, Frame::Inertial> d_shift{};
   ::tenex::evaluate<ti::i, ti::J>(make_not_null(&d_shift),
                                   interior_field_b(ti::i, ti::J));
 
-  // Step 2: Interior unit normal
-  const auto [det_cm, inv_cm] =
-      determinant_and_inverse(interior_conformal_metric);
-
-  tnsr::II<DataVector, Dim, Frame::Inertial> inv_spatial_metric{};
-  ::tenex::evaluate<ti::I, ti::J>(make_not_null(&inv_spatial_metric),
-                                  interior_conformal_factor() *
-                                      interior_conformal_factor() *
-                                      inv_cm(ti::I, ti::J));
-
-  const Scalar<DataVector> mag_sq =
-      dot_product(normal_covector, normal_covector, inv_spatial_metric);
-  const DataVector inv_mag = 1.0 / sqrt(get(mag_sq));
-
-  tnsr::i<DataVector, Dim, Frame::Inertial> interior_unit_normal_one_form(
-      num_pts);
-  for (size_t i = 0; i < Dim; ++i) {
-    interior_unit_normal_one_form.get(i) = normal_covector.get(i) * inv_mag;
-  }
-
-  // Step 3: Interior char speeds and char fields
+  // Step 2+3: Forward characteristic decomposition of interior evolved fields.
+  // We use the ghost unit normal and coeff four fields (conformal metric,
+  // conformal factor, lapse, shift) so that the forward and inverse transforms
+  // (step 8) use the same geometric "frame".  This guarantees that theta and
+  // Z_i roundtrip through the CRPBC pipeline even when the boundary-integrated
+  // (coeff) four fields differ from the interior four fields.
   auto char_speeds = ::Ccz4::fd::characteristic_speeds(
-      interior_lapse, interior_shift, interior_conformal_factor, f,
-      interior_unit_normal_one_form);
+      coeff_lapse, coeff_shift, coeff_conformal_factor, f,
+      ghost_unit_normal_one_form);
 
   const auto interior_char_fields = ::Ccz4::fd::characteristic_fields(
-      interior_unit_normal_one_form, interior_conformal_metric,
-      interior_conformal_factor, interior_lapse, interior_shift,
+      ghost_unit_normal_one_form, coeff_conformal_metric,
+      coeff_conformal_factor, coeff_lapse, coeff_shift,
       interior_trace_extrinsic_curvature, interior_a_tilde, interior_theta,
       interior_gamma_hat, interior_auxiliary_shift_b, d_conformal_metric,
       d_conformal_factor, d_lapse, d_shift, f);
@@ -393,17 +387,6 @@ CrpbcMixedState crpbc_characteristic_pipeline(
     const auto q_mixed = gr::transverse_projection_operator(
         ghost_unit_normal_vector, ghost_unit_normal_one_form);
 
-    // Interior-side unit normal vector and projector: used to decompose
-    // interior_boundary_z into its normal + transverse parts. Z_i is an
-    // interior-evolved quantity, so its split must match the interior
-    // normal; otherwise interior and ghost Z_i components get mixed.
-    tnsr::I<DataVector, Dim, Frame::Inertial> interior_unit_normal_vector{};
-    ::tenex::evaluate<ti::I>(make_not_null(&interior_unit_normal_vector),
-                             inv_spatial_metric(ti::I, ti::J) *
-                                 interior_unit_normal_one_form(ti::j));
-    const auto q_mixed_interior = gr::transverse_projection_operator(
-        interior_unit_normal_vector, interior_unit_normal_one_form);
-
     // T^i = γ̃^{ij} γ̃^{kl} q^m_l (2·analytic_field_d)_{m,j,k}
     //     = γ̃^{ij} γ̃^{kl} q^m_l · (must be)d_conformal_metric)(m,j,k)
     tnsr::I<DataVector, Dim, Frame::Inertial> T_up{};
@@ -420,13 +403,13 @@ CrpbcMixedState crpbc_characteristic_pipeline(
                                  q_mixed(ti::J, ti::k) * T_up(ti::K) /
                                  coeff_conformal_factor_squared());
 
-    // Z^⊥_i = q^j_i Z_j_bdry   (lower, transverse-projected BoundaryZ).
-    // Use the interior projector because interior_boundary_z is an
-    // interior-side quantity.
+    // Z^⊥_i = q^j_i Z_j_bdry   (transverse-projected BoundaryZ).
+    // Use the ghost projector (same frame as forward/inverse char transform)
+    // so that Z_i roundtrips through the CRPBC pipeline.
     tnsr::i<DataVector, Dim, Frame::Inertial> Z_perp_lo{};
     ::tenex::evaluate<ti::i>(
         make_not_null(&Z_perp_lo),
-        q_mixed_interior(ti::J, ti::i) * effective_boundary_z(ti::j));
+        q_mixed(ti::J, ti::i) * effective_boundary_z(ti::j));
 
     // UVector2Minus_rec_i = -UVector2Plus_i + 4·Z^⊥_i / φ² + 2·T^⊥_i
     ::tenex::evaluate<ti::i>(
@@ -441,11 +424,11 @@ CrpbcMixedState crpbc_characteristic_pipeline(
         make_not_null(&T_n),
         ghost_unit_normal_one_form(ti::i) * T_up(ti::I));
 
-    // Z^n = n^i Z_i_bdry   (interior normal, for the same reason as Z^⊥_i).
+    // Z^n = n^i Z_i_bdry   (ghost normal, same frame as char transforms).
     Scalar<DataVector> Z_n{};
     ::tenex::evaluate(
         make_not_null(&Z_n),
-        interior_unit_normal_vector(ti::I) * effective_boundary_z(ti::i));
+        ghost_unit_normal_vector(ti::I) * effective_boundary_z(ti::i));
 
     // UScalar2Minus_rec = UScalar2Plus
     //   - (φ⁴/2)(UScalar3Plus + UScalar3Minus_rec)

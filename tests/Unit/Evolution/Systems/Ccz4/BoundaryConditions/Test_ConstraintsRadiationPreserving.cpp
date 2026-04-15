@@ -18,11 +18,13 @@
 #include "Evolution/Systems/Ccz4/BoundaryConditions/ConstraintsRadiationPreserving.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/Ccz4WrappedGr.hpp"
+#include "Evolution/Systems/Ccz4/Christoffel.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Characteristics.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Solutions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
+#include "Evolution/Systems/Ccz4/Z4Constraint.hpp"
 #include "Framework/TestCreation.hpp"
 #include "Framework/TestHelpers.hpp"
 #include "Options/Protocols/FactoryCreation.hpp"
@@ -858,6 +860,233 @@ void test_kerrschild_roundtrip_t_perp() {
   CHECK_ITERABLE_CUSTOM_APPROX(ghost_a_tilde, interior_a_tilde, custom_approx);
 }
 
+// Test that the CRPBC pipeline roundtrips boundary theta and Z_i:
+// after prescribing non-zero boundary_theta and boundary_z, constructing
+// incoming characteristic modes, mixing with outgoing ones, and inverse-
+// transforming, the resulting ghost state should reproduce the prescribed
+// theta and Z_i (computed from the ghost gamma_hat and Christoffel symbols).
+void test_theta_and_z_roundtrip() {
+  register_factory_classes_with_charm<Metavariables>();
+
+  const auto bc_ptr = TestHelpers::test_creation<
+      std::unique_ptr<Ccz4::BoundaryConditions::BoundaryCondition>,
+      Metavariables>(
+      "ConstraintsRadiationPreserving:\n"
+      "  AnalyticPrescription:\n"
+      "    Ccz4(KerrSchild):\n"
+      "      Mass: 2.0\n"
+      "      Spin: [0.2, 0.4, 0.8]\n"
+      "      Center: [0.2, 0.5, 0.1]\n"
+      "      Velocity: [0.0, 0.0, 0.0]\n"
+      "  UseAnalyticForAll: false\n"
+      "  PenaltyMultiplier: 1.0\n"
+      "  ZeroBoundaryThetaAndZ: false\n");
+  const auto& bc = dynamic_cast<
+      const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving&>(*bc_ptr);
+
+  static constexpr size_t Dim = 3;
+  const size_t num_pts = 5;
+
+  // Face coordinates well outside the horizon (r ~ 5 >> 2M = 4)
+  tnsr::I<DataVector, Dim, Frame::Inertial> coords(num_pts, 0.0);
+  for (size_t i = 0; i < num_pts; ++i) {
+    coords.get(0)[i] = 5.0 + 0.1 * static_cast<double>(i);
+    coords.get(1)[i] = 0.1 * static_cast<double>(i);
+    coords.get(2)[i] = -0.1 * static_cast<double>(i);
+  }
+
+  const double time = 0.0;
+  const gr::Solutions::KerrSchild kerr_schild(
+      2.0, std::array<double, 3>{{0.2, 0.4, 0.8}},
+      std::array<double, 3>{{0.2, 0.5, 0.1}});
+  const Ccz4::Solutions::Ccz4WrappedGr<gr::Solutions::KerrSchild>
+      wrapped_solution(kerr_schild);
+
+  using all_tags = tmpl::list<
+      Ccz4::Tags::ConformalMetric<DataVector, 3>,
+      Ccz4::Tags::ConformalFactor<DataVector>,
+      Ccz4::Tags::ATilde<DataVector, 3>,
+      gr::Tags::TraceExtrinsicCurvature<DataVector>,
+      Ccz4::Tags::Theta<DataVector>, Ccz4::Tags::GammaHat<DataVector, 3>,
+      gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
+      Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>,
+      Ccz4::Tags::FieldA<DataVector, 3>, Ccz4::Tags::FieldB<DataVector, 3>,
+      Ccz4::Tags::FieldD<DataVector, 3>, Ccz4::Tags::FieldP<DataVector, 3>>;
+  const auto analytic_values =
+      wrapped_solution.variables(coords, time, all_tags{});
+
+  const auto& interior_conformal_metric =
+      get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(analytic_values);
+  const auto& interior_conformal_factor =
+      get<Ccz4::Tags::ConformalFactor<DataVector>>(analytic_values);
+  const auto& interior_a_tilde =
+      get<Ccz4::Tags::ATilde<DataVector, 3>>(analytic_values);
+  const auto& interior_trace_K =
+      get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(analytic_values);
+  const auto& interior_theta =
+      get<Ccz4::Tags::Theta<DataVector>>(analytic_values);
+  const auto& interior_gamma_hat =
+      get<Ccz4::Tags::GammaHat<DataVector, 3>>(analytic_values);
+  const auto& interior_lapse =
+      get<gr::Tags::Lapse<DataVector>>(analytic_values);
+  const auto& interior_shift =
+      get<gr::Tags::Shift<DataVector, 3>>(analytic_values);
+  const auto& interior_auxiliary_shift_b =
+      get<Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(analytic_values);
+  const auto& interior_field_a =
+      get<Ccz4::Tags::FieldA<DataVector, 3>>(analytic_values);
+  const auto& interior_field_b =
+      get<Ccz4::Tags::FieldB<DataVector, 3>>(analytic_values);
+  const auto& interior_field_d =
+      get<Ccz4::Tags::FieldD<DataVector, 3>>(analytic_values);
+  const auto& interior_field_p =
+      get<Ccz4::Tags::FieldP<DataVector, 3>>(analytic_values);
+
+  // Non-axis-aligned normal covector for generality
+  auto normal_covector =
+      make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
+  normal_covector.get(0) = 0.9;
+  normal_covector.get(1) = 0.3;
+  normal_covector.get(2) = -0.2;
+
+  // Boundary-integrated (coeff) four fields: perturbed from interior by 1-2%
+  // to exercise the case where they differ.  The CRPBC pipeline uses coeff
+  // fields consistently for both the forward and inverse char transforms, so
+  // theta and Z_i must still roundtrip exactly.
+  auto interior_boundary_conformal_metric = interior_conformal_metric;
+  for (size_t i = 0; i < interior_boundary_conformal_metric.size(); ++i) {
+    interior_boundary_conformal_metric[i] *= 1.0 + 0.01 * (1.0 + 0.3 * static_cast<double>(i));
+  }
+  auto interior_boundary_conformal_factor = interior_conformal_factor;
+  get(interior_boundary_conformal_factor) *= 1.02;
+  auto interior_boundary_lapse = interior_lapse;
+  get(interior_boundary_lapse) *= 0.98;
+  auto interior_boundary_shift = interior_shift;
+  for (size_t i = 0; i < Dim; ++i) {
+    interior_boundary_shift.get(i) *= 1.0 + 0.015 * static_cast<double>(i + 1);
+  }
+
+  // Non-zero boundary theta and Z_i (small perturbations from the constraint-
+  // satisfying values of zero)
+  Scalar<DataVector> interior_boundary_theta(num_pts);
+  for (size_t s = 0; s < num_pts; ++s) {
+    get(interior_boundary_theta)[s] =
+        0.01 * (1.0 + 0.1 * static_cast<double>(s));
+  }
+
+  tnsr::i<DataVector, Dim, Frame::Inertial> interior_boundary_z(num_pts);
+  for (size_t s = 0; s < num_pts; ++s) {
+    interior_boundary_z.get(0)[s] =
+        0.005 * (1.0 + 0.2 * static_cast<double>(s));
+    interior_boundary_z.get(1)[s] =
+        -0.003 * (1.0 - 0.1 * static_cast<double>(s));
+    interior_boundary_z.get(2)[s] =
+        0.002 * (0.5 + 0.3 * static_cast<double>(s));
+  }
+
+  // U^- tensor minus: not used in UseAnalyticForAll=false path (overridden by
+  // ghost analytic char fields), so set to zero.
+  const auto interior_boundary_u_tensor_minus =
+      make_with_value<tnsr::ii<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
+
+  const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>
+      face_mesh_velocity{};
+  const bool evolve_lapse_and_shift = true;
+
+  // ---- dg_ghost ----
+  auto ghost_conformal_metric =
+      make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_conformal_factor =
+      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto ghost_a_tilde = make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_trace_K = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto ghost_theta = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto ghost_gamma_hat =
+      make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_lapse = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto ghost_shift = make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_auxiliary_shift_b =
+      make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_field_a = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_field_b = make_with_value<tnsr::iJ<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_field_d =
+      make_with_value<tnsr::ijj<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_field_p = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_u_tensor_minus =
+      make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_boundary_conformal_metric =
+      make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_boundary_conformal_factor =
+      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto ghost_boundary_lapse = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto ghost_boundary_shift =
+      make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_boundary_theta =
+      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto ghost_boundary_z =
+      make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
+
+  const auto ghost_result = bc.dg_ghost(
+      make_not_null(&ghost_conformal_metric),
+      make_not_null(&ghost_conformal_factor), make_not_null(&ghost_a_tilde),
+      make_not_null(&ghost_trace_K), make_not_null(&ghost_theta),
+      make_not_null(&ghost_gamma_hat), make_not_null(&ghost_lapse),
+      make_not_null(&ghost_shift), make_not_null(&ghost_auxiliary_shift_b),
+      make_not_null(&ghost_field_a), make_not_null(&ghost_field_b),
+      make_not_null(&ghost_field_d), make_not_null(&ghost_field_p),
+      make_not_null(&ghost_u_tensor_minus),
+      make_not_null(&ghost_boundary_conformal_metric),
+      make_not_null(&ghost_boundary_conformal_factor),
+      make_not_null(&ghost_boundary_lapse),
+      make_not_null(&ghost_boundary_shift),
+      make_not_null(&ghost_boundary_theta),
+      make_not_null(&ghost_boundary_z), face_mesh_velocity, normal_covector,
+      interior_conformal_metric, interior_conformal_factor, interior_a_tilde,
+      interior_trace_K, interior_theta, interior_gamma_hat, interior_lapse,
+      interior_shift, interior_auxiliary_shift_b, interior_field_a,
+      interior_field_b, interior_field_d, interior_field_p,
+      interior_boundary_u_tensor_minus,
+      interior_boundary_conformal_metric, interior_boundary_conformal_factor,
+      interior_boundary_lapse, interior_boundary_shift,
+      interior_boundary_theta, interior_boundary_z,
+      coords, time, evolve_lapse_and_shift);
+
+  CHECK_FALSE(ghost_result.has_value());
+
+  const Approx custom_approx = Approx::custom().epsilon(1.0e-10).scale(1.0);
+
+  // Check 1: ghost theta should match the prescribed boundary theta.
+  // By the inverse char transform: theta = -phi^2/4 * (U3+ - U3-), and the
+  // CRPBC sets U3-_rec = U3+ + 4*theta_bdry/phi^2, giving theta = theta_bdry.
+  CHECK_ITERABLE_CUSTOM_APPROX(ghost_theta, interior_boundary_theta,
+                               custom_approx);
+
+  // Check 2: Compute Z_i from the ghost state and verify it matches the
+  // prescribed boundary Z_i.
+  //   Z_i = (1/2) gamma_tilde_{ij} (gamma_hat^j - Gamma_tilde^j)
+  // where Gamma_tilde^j is the contracted conformal Christoffel computed from
+  // the ghost conformal metric and ghost field_d.
+  const auto [det_ghost_cm, inv_ghost_cm] =
+      determinant_and_inverse(ghost_conformal_metric);
+  (void)det_ghost_cm;
+
+  const auto conformal_christoffel =
+      Ccz4::conformal_christoffel_second_kind(inv_ghost_cm, ghost_field_d);
+  const auto contracted_christoffel =
+      Ccz4::contracted_conformal_christoffel_second_kind(inv_ghost_cm,
+                                                         conformal_christoffel);
+
+  tnsr::I<DataVector, Dim, Frame::Inertial> gamma_hat_minus_christoffel{};
+  ::tenex::evaluate<ti::I>(make_not_null(&gamma_hat_minus_christoffel),
+                           ghost_gamma_hat(ti::I) -
+                               contracted_christoffel(ti::I));
+
+  const auto computed_z = Ccz4::spatial_z4_constraint(
+      ghost_conformal_metric, gamma_hat_minus_christoffel);
+
+  CHECK_ITERABLE_CUSTOM_APPROX(computed_z, interior_boundary_z, custom_approx);
+}
+
 SPECTRE_TEST_CASE("Unit.Ccz4.BoundaryConditions.ConstraintsRadiationPreserving",
                   "[Unit][Evolution]") {
   test_creation_and_serialization();
@@ -865,5 +1094,6 @@ SPECTRE_TEST_CASE("Unit.Ccz4.BoundaryConditions.ConstraintsRadiationPreserving",
   test_minkowski();
   test_kerrschild_use_analytic_for_all();
   test_kerrschild_roundtrip_t_perp();
+  test_theta_and_z_roundtrip();
 }
 }  // namespace
