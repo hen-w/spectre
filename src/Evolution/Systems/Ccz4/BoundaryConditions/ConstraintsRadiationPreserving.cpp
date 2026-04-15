@@ -405,12 +405,12 @@ CrpbcMixedState crpbc_characteristic_pipeline(
         interior_unit_normal_vector, interior_unit_normal_one_form);
 
     // T^i = γ̃^{ij} γ̃^{kl} q^m_l (2·analytic_field_d)_{m,j,k}
-    //     = γ̃^{ij} γ̃^{kl} q^m_l · ghost_d_cm(m,j,k)
+    //     = γ̃^{ij} γ̃^{kl} q^m_l · (must be)d_conformal_metric)(m,j,k)
     tnsr::I<DataVector, Dim, Frame::Inertial> T_up{};
     ::tenex::evaluate<ti::I>(
         make_not_null(&T_up),
         inv_coeff_cm(ti::I, ti::J) * inv_coeff_cm(ti::K, ti::L) *
-            q_mixed(ti::M, ti::l) * ghost_d_cm(ti::m, ti::j, ti::k));
+            q_mixed(ti::M, ti::l) * d_conformal_metric(ti::m, ti::j, ti::k));
 
     // T^⊥_i = q_{ij} T^j = γ_{ij} q^j_k T^k   (physical metric lowering).
     // γ_{ij} = γ̃_{ij} / φ², so divide by φ² after lowering with γ̃.
