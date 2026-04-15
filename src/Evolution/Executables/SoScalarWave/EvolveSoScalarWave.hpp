@@ -55,6 +55,7 @@
 #include "ParallelAlgorithms/Actions/FilterAction.hpp"
 #include "ParallelAlgorithms/Actions/InitializeItems.hpp"
 #include "ParallelAlgorithms/Actions/MutateApply.hpp"
+#include "ParallelAlgorithms/Actions/RandomizeVariables.hpp"
 #include "ParallelAlgorithms/Actions/TerminatePhase.hpp"
 #include "ParallelAlgorithms/Amr/Actions/CollectDataFromChildren.hpp"
 #include "ParallelAlgorithms/Amr/Actions/Component.hpp"
@@ -138,6 +139,9 @@ struct EvolutionMetavars {
   using TimeStepperBase = TimeStepper;
 
   struct FilterEvolvedVariables {};
+
+  // For labeling the yaml option for RandomizeVariables
+  struct RandomizeInitialData {};
 
   static constexpr bool local_time_stepping =
       TimeStepperBase::local_time_stepping;
@@ -289,6 +293,8 @@ struct EvolutionMetavars {
       Initialization::Actions::NonconservativeSystem<system>,
       evolution::Initialization::Actions::SetVariables<
           domain::Tags::Coordinates<Dim, Frame::ElementLogical>>,
+      ::Actions::RandomizeVariables<typename system::variables_tag,
+                                    RandomizeInitialData>,
       Initialization::Actions::AddComputeTags<
           StepChoosers::step_chooser_compute_tags<EvolutionMetavars,
                                                   local_time_stepping>>,
