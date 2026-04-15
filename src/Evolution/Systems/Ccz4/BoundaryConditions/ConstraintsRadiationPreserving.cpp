@@ -15,7 +15,16 @@
 #include "DataStructures/Tensor/EagerMath/Trace.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
+#include "Domain/Structure/Direction.hpp"
+#include "Domain/Structure/Side.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Characteristics.hpp"
+#include "NumericalAlgorithms/DiscontinuousGalerkin/ProjectToBoundary.hpp"
+#include "NumericalAlgorithms/LinearOperators/PartialDerivatives.hpp"
+#include "NumericalAlgorithms/LinearOperators/PartialDerivatives.tpp"
+#include "NumericalAlgorithms/Spectral/Basis.hpp"
+#include "NumericalAlgorithms/Spectral/Mesh.hpp"
+#include "NumericalAlgorithms/SphericalHarmonics/SpherepackCache.hpp"
+#include "NumericalAlgorithms/SphericalHarmonics/Spherepack.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Solutions/Factory.hpp"
@@ -153,18 +162,121 @@ CrpbcMixedState crpbc_characteristic_pipeline(
     const tnsr::i<DataVector, 3, Frame::Inertial>& interior_boundary_z,
     const tnsr::I<DataVector, 3, Frame::Inertial>& coords, const double time,
     const double f, const bool use_analytic_for_all,
-    const bool zero_boundary_theta_and_z) {
+    const bool zero_boundary_theta_and_z,
+    const Mesh<3>& volume_mesh,
+    const InverseJacobian<DataVector, 3, Frame::ElementLogical,
+                          Frame::Inertial>& volume_inv_jac) {
   static constexpr size_t Dim = 3;
   const size_t num_pts = get(coeff_conformal_factor).size();
 
   // These parameters are no longer used after switching the entire pipeline
   // to ghost normal + coeff four fields (for roundtrip consistency).
-  (void)normal_covector;
   (void)interior_conformal_metric;
   (void)interior_conformal_factor;
   (void)interior_lapse;
   (void)interior_shift;
   (void)interior_boundary_u_tensor_minus;
+
+  // Determine face normal logical dimension by transforming the unit normal
+  // vector to the logical frame: n^a_logical = (J^{-1})_{a,i} n^i.
+  // The component with largest absolute value identifies the face dimension.
+  size_t face_dim = 0;
+  {
+    double max_abs = 0.0;
+    for (size_t a = 0; a < Dim; ++a) {
+      double n_logical_a = 0.0;
+      for (size_t i = 0; i < Dim; ++i) {
+        n_logical_a +=
+            volume_inv_jac.get(a, i)[0] * ghost_unit_normal_vector.get(i)[0];
+      }
+      if (std::abs(n_logical_a) > max_abs) {
+        max_abs = std::abs(n_logical_a);
+        face_dim = a;
+      }
+    }
+  }
+  // Determine the side (Upper/Lower) from the sign of the normal covector
+  // relative to the inverse Jacobian row.  The DG framework constructs
+  // unnormalized normal = direction.sign() * (J^{-1})_{d,:}, so a positive
+  // dot product with the unit normal means Upper.
+  double dot_for_side = 0.0;
+  for (size_t i = 0; i < Dim; ++i) {
+    dot_for_side += volume_inv_jac.get(face_dim, i)[0] *
+                    normal_covector.get(i)[0];
+  }
+  const auto side = dot_for_side > 0.0 ? Side::Upper : Side::Lower;
+  const Direction<Dim> direction(face_dim, side);
+  const Mesh<Dim - 1> face_mesh = volume_mesh.slice_away(face_dim);
+
+  // Compute face transverse derivatives of the coeff conformal metric.
+  // Formula: q^j_i d_j gamma_tilde = sum_{b in face_dims}
+  //   (J^{-1}_{vol(b),i} - n_i n^j J^{-1}_{vol(b),j}) * d(gamma)/d(xi^b)
+  // First project the inverse Jacobian to the face.
+  auto face_inv_jac = ::dg::project_tensor_to_boundary(
+      volume_inv_jac, volume_mesh, direction);
+
+  auto volume_dim_of_face = [&face_dim](const size_t b) -> size_t {
+    return b < face_dim ? b : b + 1;
+  };
+
+  // Compute face logical derivatives of each symmetric component of the
+  // coeff conformal metric.  For SphericalHarmonic face meshes, use
+  // ylm::Spherepack::gradient; otherwise use logical_partial_derivative.
+  const bool face_is_spherical =
+      face_mesh.basis(0) == Spectral::Basis::SphericalHarmonic;
+
+  // face_log_deriv[b](ii,jj) = d(coeff_cm_{ii,jj})/d(xi^{face_b})
+  std::array<tnsr::ii<DataVector, Dim, Frame::Inertial>, Dim - 1>
+      face_log_deriv;
+  for (size_t b = 0; b < Dim - 1; ++b) {
+    gsl::at(face_log_deriv, b) =
+        tnsr::ii<DataVector, Dim, Frame::Inertial>(num_pts, 0.0);
+  }
+  for (size_t ii = 0; ii < Dim; ++ii) {
+    for (size_t jj = ii; jj < Dim; ++jj) {
+      if (face_is_spherical) {
+        // Use ylm::Spherepack::gradient which returns
+        // (df/dtheta, csc(theta)*df/dphi) — the logical derivatives
+        // on a SphericalHarmonic mesh.
+        const auto& ylm =
+            ylm::get_spherepack_cache(face_mesh.extents(0) - 1);
+        const auto grad =
+            ylm.gradient(coeff_conformal_metric.get(ii, jj));
+        gsl::at(face_log_deriv, 0).get(ii, jj) = grad.get(0);
+        gsl::at(face_log_deriv, 1).get(ii, jj) = grad.get(1);
+      } else {
+        const Scalar<DataVector> comp(coeff_conformal_metric.get(ii, jj));
+        const auto dcomp = logical_partial_derivative(comp, face_mesh);
+        for (size_t b = 0; b < Dim - 1; ++b) {
+          gsl::at(face_log_deriv, b).get(ii, jj) = dcomp.get(b);
+        }
+      }
+    }
+  }
+
+  // Assemble transverse derivative: sum over face dims b
+  tnsr::ijj<DataVector, Dim, Frame::Inertial> transverse_d_coeff_cm(
+      num_pts, 0.0);
+  for (size_t b = 0; b < Dim - 1; ++b) {
+    const size_t vol_a = volume_dim_of_face(b);
+    // Projected Jacobian row: P_i = J^{-1}_{vol_a,i} - n_i (n^j J^{-1}_{vol_a,j})
+    DataVector n_dot_jac(num_pts, 0.0);
+    for (size_t j = 0; j < Dim; ++j) {
+      n_dot_jac +=
+          ghost_unit_normal_vector.get(j) * face_inv_jac.get(vol_a, j);
+    }
+    for (size_t ii = 0; ii < Dim; ++ii) {
+      for (size_t jj = ii; jj < Dim; ++jj) {
+        const DataVector& dcomp_b = gsl::at(face_log_deriv, b).get(ii, jj);
+        for (size_t i = 0; i < Dim; ++i) {
+          const DataVector proj_jac_i =
+              face_inv_jac.get(vol_a, i) -
+              ghost_unit_normal_one_form.get(i) * n_dot_jac;
+          transverse_d_coeff_cm.get(i, ii, jj) += proj_jac_i * dcomp_b;
+        }
+      }
+    }
+  }
 
   // Step 1: Interior spatial derivatives from auxiliary fields
   tnsr::ijj<DataVector, Dim, Frame::Inertial> d_conformal_metric{};
@@ -382,18 +494,20 @@ CrpbcMixedState crpbc_characteristic_pipeline(
                       u_scalar3_plus_in() + 4.0 * effective_boundary_theta() /
                                                 coeff_conformal_factor_squared());
 
-    // Transverse projector q^I_j from ghost unit normal (used for T^i,
-    // which is built from ghost-side spatial derivatives of gamma-tilde).
+    // Transverse projector q^I_j from ghost unit normal (used for T^perp
+    // lowering and Z^perp projection below).
     const auto q_mixed = gr::transverse_projection_operator(
         ghost_unit_normal_vector, ghost_unit_normal_one_form);
 
-    // T^i = γ̃^{ij} γ̃^{kl} q^m_l (2·analytic_field_d)_{m,j,k}
-    //     = γ̃^{ij} γ̃^{kl} q^m_l · (must be)d_conformal_metric)(m,j,k)
+    // T^i = γ̃^{ij} γ̃^{kl} q^m_l d_m(γ̃)_{jk}
+    // Use the transverse derivative of the coeff conformal metric (from face
+    // spectral differentiation) so that T^i is consistent with the boundary
+    // geometry used in the Z_i mode mixing.
     tnsr::I<DataVector, Dim, Frame::Inertial> T_up{};
     ::tenex::evaluate<ti::I>(
         make_not_null(&T_up),
         inv_coeff_cm(ti::I, ti::J) * inv_coeff_cm(ti::K, ti::L) *
-            q_mixed(ti::M, ti::l) * d_conformal_metric(ti::m, ti::j, ti::k));
+            transverse_d_coeff_cm(ti::l, ti::j, ti::k));
 
     // T^⊥_i = q_{ij} T^j = γ_{ij} q^j_k T^k   (physical metric lowering).
     // γ_{ij} = γ̃_{ij} / φ², so divide by φ² after lowering with γ̃.
@@ -524,16 +638,12 @@ CrpbcMixedState crpbc_characteristic_pipeline(
                             ghost_unit_normal_one_form(ti::i) * dn_cf()) /
                                coeff_conformal_factor());
 
-  tnsr::ii<DataVector, Dim, Frame::Inertial> n_dot_d_cm{};
-  ::tenex::evaluate<ti::j, ti::k>(make_not_null(&n_dot_d_cm),
-                                  ghost_unit_normal_vector(ti::M) *
-                                      d_conformal_metric(ti::m, ti::j, ti::k));
-
+  // Ghost field_d: transverse part from coeff cm (face spectral derivative),
+  // normal part from the characteristic decomposition (dn_cm).
   tnsr::ijj<DataVector, Dim, Frame::Inertial> result_field_d{};
   ::tenex::evaluate<ti::i, ti::j, ti::k>(
       make_not_null(&result_field_d),
-      0.5 * (d_conformal_metric(ti::i, ti::j, ti::k) -
-             ghost_unit_normal_one_form(ti::i) * n_dot_d_cm(ti::j, ti::k) +
+      0.5 * (transverse_d_coeff_cm(ti::i, ti::j, ti::k) +
              ghost_unit_normal_one_form(ti::i) * dn_cm(ti::j, ti::k)));
 
   tnsr::I<DataVector, Dim, Frame::Inertial> n_dot_d_shift{};
@@ -659,7 +769,10 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
     const tnsr::i<DataVector, 3, Frame::Inertial>& interior_boundary_z,
     const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
     [[maybe_unused]] const double time,
-    [[maybe_unused]] const bool evolve_lapse_and_shift) const {
+    [[maybe_unused]] const bool evolve_lapse_and_shift,
+    const Mesh<3>& volume_mesh,
+    const InverseJacobian<DataVector, 3, Frame::ElementLogical,
+                          Frame::Inertial>& volume_inv_jac) const {
   static constexpr size_t Dim = 3;
   static constexpr double f = ::Ccz4::fd::System::f;
 
@@ -711,7 +824,7 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
       ghost_unit_normal_one_form, ghost_unit_normal_vector,
       interior_boundary_u_tensor_minus, interior_boundary_theta,
       interior_boundary_z, coords, time, f, use_analytic_for_all_,
-      zero_boundary_theta_and_z_);
+      zero_boundary_theta_and_z_, volume_mesh, volume_inv_jac);
 
   // Validate characteristic speed signs
   for (size_t s = 0; s < num_pts; ++s) {
@@ -844,7 +957,10 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
     const Scalar<DataVector>& interior_boundary_theta,
     const tnsr::i<DataVector, 3, Frame::Inertial>& interior_boundary_z,
     const tnsr::I<DataVector, 3, Frame::Inertial>& coords, const double time,
-    const bool evolve_lapse_and_shift) const {
+    const bool evolve_lapse_and_shift,
+    const Mesh<3>& volume_mesh,
+    const InverseJacobian<DataVector, 3, Frame::ElementLogical,
+                          Frame::Inertial>& volume_inv_jac) const {
   static constexpr size_t Dim = 3;
   static constexpr double f_val = ::Ccz4::fd::System::f;
   static constexpr bool shifting_shift = ::Ccz4::fd::System::shifting_shift;
@@ -934,7 +1050,7 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
       boundary_unit_normal_one_form, boundary_unit_normal_vector,
       interior_boundary_u_tensor_minus, interior_boundary_theta,
       interior_boundary_z, coords, time, f_val, use_analytic_for_all_,
-      zero_boundary_theta_and_z_);
+      zero_boundary_theta_and_z_, volume_mesh, volume_inv_jac);
 
   // Extract char-mixed evolved variables
   const auto& mixed_a_tilde =

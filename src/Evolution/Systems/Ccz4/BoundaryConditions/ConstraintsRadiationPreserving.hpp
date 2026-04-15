@@ -25,6 +25,8 @@
 #include "Utilities/TMPL.hpp"
 
 /// \cond
+template <size_t Dim>
+class Mesh;
 namespace Tags {
 struct Time;
 }  // namespace Tags
@@ -131,7 +133,10 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
       tmpl::list<domain::Tags::Coordinates<3, Frame::Inertial>>;
   using dg_interior_dt_vars_tags = tmpl::list<>;
   using dg_gridless_tags =
-      tmpl::list<::Tags::Time, ::Ccz4::fd::Tags::EvolveLapseAndShift>;
+      tmpl::list<::Tags::Time, ::Ccz4::fd::Tags::EvolveLapseAndShift,
+                 domain::Tags::Mesh<3>,
+                 domain::Tags::InverseJacobian<3, Frame::ElementLogical,
+                                               Frame::Inertial>>;
 
   std::optional<std::string> dg_ghost(
       // not_null exterior outputs (variables_tag_list order):
@@ -186,7 +191,10 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
       // dg_interior_temporary_tags:
       const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
       // dg_gridless_tags:
-      double time, bool evolve_lapse_and_shift) const;
+      double time, bool evolve_lapse_and_shift,
+      const Mesh<3>& volume_mesh,
+      const InverseJacobian<DataVector, 3, Frame::ElementLogical,
+                            Frame::Inertial>& volume_inv_jac) const;
 
   std::optional<std::string> dg_time_derivative(
       // dt correction outputs (variables_tag_list order):
@@ -256,7 +264,10 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
       // dg_interior_temporary_tags:
       const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
       // dg_gridless_tags:
-      double time, bool evolve_lapse_and_shift) const;
+      double time, bool evolve_lapse_and_shift,
+      const Mesh<3>& volume_mesh,
+      const InverseJacobian<DataVector, 3, Frame::ElementLogical,
+                            Frame::Inertial>& volume_inv_jac) const;
 
   // FD interface: not implemented
   using fd_interior_evolved_variables_tags = tmpl::list<>;

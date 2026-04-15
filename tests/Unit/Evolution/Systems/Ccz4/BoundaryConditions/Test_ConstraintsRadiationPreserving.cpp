@@ -13,6 +13,16 @@
 #include "DataStructures/Tensor/EagerMath/DeterminantAndInverse.hpp"
 #include "DataStructures/Tensor/EagerMath/DotProduct.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
+#include "Domain/Structure/Direction.hpp"
+#include "NumericalAlgorithms/DiscontinuousGalerkin/ProjectToBoundary.hpp"
+#include "NumericalAlgorithms/LinearOperators/PartialDerivatives.hpp"
+#include "NumericalAlgorithms/LinearOperators/PartialDerivatives.tpp"
+#include "NumericalAlgorithms/Spectral/Basis.hpp"
+#include "NumericalAlgorithms/Spectral/Mesh.hpp"
+#include "NumericalAlgorithms/Spectral/LogicalCoordinates.hpp"
+#include "NumericalAlgorithms/Spectral/Quadrature.hpp"
+#include "NumericalAlgorithms/SphericalHarmonics/Spherepack.hpp"
+#include "NumericalAlgorithms/SphericalHarmonics/SpherepackCache.hpp"
 #include "Evolution/BoundaryConditions/Type.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/ConstraintsRadiationPreserving.hpp"
@@ -52,6 +62,53 @@ struct Metavariables {
                    MathFunctions::all_math_functions<1, Frame::Inertial>>>;
   };
 };
+
+// Helper: create a volume mesh, diagonal inverse Jacobian, and face
+// coordinates for tests.  The face is at the upper side of dim=0.
+// The affine map x^i = offset_i + scale_i * xi^i places the face
+// well outside any BH horizon.
+struct TestMeshData {
+  Mesh<3> volume_mesh;
+  InverseJacobian<DataVector, 3, Frame::ElementLogical, Frame::Inertial>
+      volume_inv_jac;
+  tnsr::I<DataVector, 3, Frame::Inertial> face_coords;
+};
+
+TestMeshData make_test_mesh_and_inv_jac(const size_t ny, const size_t nz) {
+  // Volume mesh with face at dim=0 having ny*nz grid points.
+  // Both face dimensions use GaussLobatto so spectral derivatives work.
+  Mesh<3> volume_mesh(
+      {{2, ny, nz}},
+      Spectral::Basis::Legendre,
+      Spectral::Quadrature::GaussLobatto);
+
+  // Affine map: x^i = offset_i + scale_i * xi^i
+  // Places the face at x ~ 5, y in [4.5, 5.5], z in [-0.4, 0.6]
+  const std::array<double, 3> offset{{4.5, 5.0, 0.1}};
+  const std::array<double, 3> scale{{0.5, 0.5, 0.5}};
+
+  const size_t num_vol_pts = volume_mesh.number_of_grid_points();
+  InverseJacobian<DataVector, 3, Frame::ElementLogical, Frame::Inertial>
+      volume_inv_jac(num_vol_pts, 0.0);
+  for (size_t d = 0; d < 3; ++d) {
+    volume_inv_jac.get(d, d) = 1.0 / gsl::at(scale, d);
+  }
+
+  // Face coordinates at the upper side of dim=0 (xi^0 = 1).
+  const size_t num_face_pts = ny * nz;
+  const Mesh<2> face_mesh = volume_mesh.slice_away(0);
+  const auto face_logical = logical_coordinates(face_mesh);
+  tnsr::I<DataVector, 3, Frame::Inertial> face_coords(num_face_pts);
+  // x = offset[0] + scale[0] * 1.0  (upper face)
+  get<0>(face_coords) = offset[0] + scale[0];
+  // y = offset[1] + scale[1] * xi^{face_0}  (face dim 0 = volume dim 1)
+  get<1>(face_coords) = offset[1] + scale[1] * get<0>(face_logical);
+  // z = offset[2] + scale[2] * xi^{face_1}  (face dim 1 = volume dim 2)
+  get<2>(face_coords) = offset[2] + scale[2] * get<1>(face_logical);
+
+  return {std::move(volume_mesh), std::move(volume_inv_jac),
+          std::move(face_coords)};
+}
 
 void test_creation_and_serialization() {
   register_factory_classes_with_charm<Metavariables>();
@@ -105,15 +162,13 @@ void test_kerrschild_use_analytic_for_all() {
       const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving&>(*bc_ptr);
 
   static constexpr size_t Dim = 3;
-  const size_t num_pts = 5;
-
-  // Face coordinates well outside the horizon (r ~ 5 >> 2M = 4)
-  tnsr::I<DataVector, Dim, Frame::Inertial> coords(num_pts, 0.0);
-  for (size_t i = 0; i < num_pts; ++i) {
-    coords.get(0)[i] = 5.0 + 0.1 * static_cast<double>(i);
-    coords.get(1)[i] = 0.1 * static_cast<double>(i);
-    coords.get(2)[i] = -0.1 * static_cast<double>(i);
-  }
+  const size_t ny = 12;
+  const size_t nz = 12;
+  const size_t num_pts = ny * nz;
+  const auto mesh_data = make_test_mesh_and_inv_jac(ny, nz);
+  const auto& volume_mesh = mesh_data.volume_mesh;
+  const auto& volume_inv_jac = mesh_data.volume_inv_jac;
+  const auto& coords = mesh_data.face_coords;
 
   // Evaluate KerrSchild via Ccz4WrappedGr to get data that the BC would
   // internally evaluate from its analytic_prescription.
@@ -245,7 +300,7 @@ void test_kerrschild_use_analytic_for_all() {
       interior_boundary_conformal_metric, interior_boundary_conformal_factor,
       interior_boundary_lapse, interior_boundary_shift,
       interior_boundary_theta, interior_boundary_z,
-      coords, time, evolve_lapse_and_shift);
+      coords, time, evolve_lapse_and_shift, volume_mesh, volume_inv_jac);
 
   CHECK_FALSE(ghost_result.has_value());
 
@@ -309,7 +364,7 @@ void test_kerrschild_use_analytic_for_all() {
       interior_boundary_conformal_metric, interior_boundary_conformal_factor,
       interior_boundary_lapse, interior_boundary_shift,
       interior_boundary_theta, interior_boundary_z,
-      coords, time, evolve_lapse_and_shift);
+      coords, time, evolve_lapse_and_shift, volume_mesh, volume_inv_jac);
 
   CHECK_FALSE(dt_result.has_value());
 
@@ -419,7 +474,12 @@ void test_minkowski() {
       const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving&>(*bc_ptr);
 
   static constexpr size_t Dim = 3;
-  const size_t num_pts = 5;
+  const size_t ny = 3;
+  const size_t nz = 3;
+  const size_t num_pts = ny * nz;
+  const auto mesh_data = make_test_mesh_and_inv_jac(ny, nz);
+  const auto& volume_mesh = mesh_data.volume_mesh;
+  const auto& volume_inv_jac = mesh_data.volume_inv_jac;
 
   auto make_scalar = [&](const double val) {
     return Scalar<DataVector>{DataVector(num_pts, val)};
@@ -459,12 +519,7 @@ void test_minkowski() {
   const auto interior_boundary_theta = make_scalar(0.0);
   const auto interior_boundary_z = make_covector(0.0);
 
-  tnsr::I<DataVector, Dim, Frame::Inertial> coords(num_pts, 0.0);
-  for (size_t i = 0; i < num_pts; ++i) {
-    coords.get(0)[i] = 5.0 + 0.1 * static_cast<double>(i);
-    coords.get(1)[i] = 0.1 * static_cast<double>(i);
-    coords.get(2)[i] = -0.1 * static_cast<double>(i);
-  }
+  const auto& coords = mesh_data.face_coords;
 
   auto normal_covector = make_covector(0.0);
   normal_covector.get(0) = 1.0;
@@ -521,7 +576,7 @@ void test_minkowski() {
       interior_boundary_conformal_metric, interior_boundary_conformal_factor,
       interior_boundary_lapse, interior_boundary_shift,
       interior_boundary_theta, interior_boundary_z,
-      coords, time, evolve_lapse_and_shift);
+      coords, time, evolve_lapse_and_shift, volume_mesh, volume_inv_jac);
 
   CHECK_FALSE(ghost_result.has_value());
 
@@ -584,7 +639,7 @@ void test_minkowski() {
       interior_boundary_conformal_metric, interior_boundary_conformal_factor,
       interior_boundary_lapse, interior_boundary_shift,
       interior_boundary_theta, interior_boundary_z,
-      coords, time, evolve_lapse_and_shift);
+      coords, time, evolve_lapse_and_shift, volume_mesh, volume_inv_jac);
 
   CHECK_FALSE(dt_result.has_value());
 
@@ -656,15 +711,13 @@ void test_kerrschild_roundtrip_t_perp() {
       const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving&>(*bc_ptr);
 
   static constexpr size_t Dim = 3;
-  const size_t num_pts = 5;
-
-  // Face coordinates well outside the horizon (r ~ 5 >> 2M = 4)
-  tnsr::I<DataVector, Dim, Frame::Inertial> coords(num_pts, 0.0);
-  for (size_t i = 0; i < num_pts; ++i) {
-    coords.get(0)[i] = 5.0 + 0.1 * static_cast<double>(i);
-    coords.get(1)[i] = 0.1 * static_cast<double>(i);
-    coords.get(2)[i] = -0.1 * static_cast<double>(i);
-  }
+  const size_t ny = 12;
+  const size_t nz = 12;
+  const size_t num_pts = ny * nz;
+  const auto mesh_data = make_test_mesh_and_inv_jac(ny, nz);
+  const auto& volume_mesh = mesh_data.volume_mesh;
+  const auto& volume_inv_jac = mesh_data.volume_inv_jac;
+  const auto& coords = mesh_data.face_coords;
 
   const double time = 0.0;
   const gr::Solutions::KerrSchild kerr_schild(
@@ -837,7 +890,7 @@ void test_kerrschild_roundtrip_t_perp() {
       interior_boundary_conformal_metric, interior_boundary_conformal_factor,
       interior_boundary_lapse, interior_boundary_shift,
       interior_boundary_theta, interior_boundary_z,
-      coords, time, evolve_lapse_and_shift);
+      coords, time, evolve_lapse_and_shift, volume_mesh, volume_inv_jac);
 
   CHECK_FALSE(ghost_result.has_value());
 
@@ -885,15 +938,13 @@ void test_theta_and_z_roundtrip() {
       const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving&>(*bc_ptr);
 
   static constexpr size_t Dim = 3;
-  const size_t num_pts = 5;
-
-  // Face coordinates well outside the horizon (r ~ 5 >> 2M = 4)
-  tnsr::I<DataVector, Dim, Frame::Inertial> coords(num_pts, 0.0);
-  for (size_t i = 0; i < num_pts; ++i) {
-    coords.get(0)[i] = 5.0 + 0.1 * static_cast<double>(i);
-    coords.get(1)[i] = 0.1 * static_cast<double>(i);
-    coords.get(2)[i] = -0.1 * static_cast<double>(i);
-  }
+  const size_t ny = 12;
+  const size_t nz = 12;
+  const size_t num_pts = ny * nz;
+  const auto mesh_data = make_test_mesh_and_inv_jac(ny, nz);
+  const auto& volume_mesh = mesh_data.volume_mesh;
+  const auto& volume_inv_jac = mesh_data.volume_inv_jac;
+  const auto& coords = mesh_data.face_coords;
 
   const double time = 0.0;
   const gr::Solutions::KerrSchild kerr_schild(
@@ -942,25 +993,34 @@ void test_theta_and_z_roundtrip() {
   const auto& interior_field_p =
       get<Ccz4::Tags::FieldP<DataVector, 3>>(analytic_values);
 
-  // Non-axis-aligned normal covector for generality
+  // Normal covector consistent with the mesh face at dim=0 (unnormalized
+  // normal = J^{-1}_{0,:}).  With our diagonal Jacobian, this is (1/scale, 0, 0).
   auto normal_covector =
       make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
-  normal_covector.get(0) = 0.9;
-  normal_covector.get(1) = 0.3;
-  normal_covector.get(2) = -0.2;
+  normal_covector.get(0) = volume_inv_jac.get(0, 0)[0];
 
-  // Boundary-integrated (coeff) four fields: perturbed from interior by 1-2%
-  // to exercise the case where they differ.  The CRPBC pipeline uses coeff
-  // fields consistently for both the forward and inverse char transforms, so
-  // theta and Z_i must still roundtrip exactly.
+  // Boundary-integrated (coeff) four fields: perturb all of them.
+  // The conformal metric must keep det = 1 (CCZ4 requirement).
   auto interior_boundary_conformal_metric = interior_conformal_metric;
-  for (size_t i = 0; i < interior_boundary_conformal_metric.size(); ++i) {
-    interior_boundary_conformal_metric[i] *= 1.0 + 0.01 * (1.0 + 0.3 * static_cast<double>(i));
+  for (size_t i = 0; i < Dim; ++i) {
+    for (size_t j = i; j < Dim; ++j) {
+      interior_boundary_conformal_metric.get(i, j) *=
+          1.0 + 0.01 * static_cast<double>(i + j + 1);
+    }
+  }
+  // Rescale to enforce det(coeff_cm) = 1
+  const auto det_coeff_cm =
+      get(determinant(interior_boundary_conformal_metric));
+  const auto scale = 1.0 / cbrt(det_coeff_cm);
+  for (size_t i = 0; i < Dim; ++i) {
+    for (size_t j = i; j < Dim; ++j) {
+      interior_boundary_conformal_metric.get(i, j) *= scale;
+    }
   }
   auto interior_boundary_conformal_factor = interior_conformal_factor;
   get(interior_boundary_conformal_factor) *= 1.02;
   auto interior_boundary_lapse = interior_lapse;
-  get(interior_boundary_lapse) *= 0.98;
+  get(interior_boundary_lapse) *= 0.97;
   auto interior_boundary_shift = interior_shift;
   for (size_t i = 0; i < Dim; ++i) {
     interior_boundary_shift.get(i) *= 1.0 + 0.015 * static_cast<double>(i + 1);
@@ -1049,7 +1109,7 @@ void test_theta_and_z_roundtrip() {
       interior_boundary_conformal_metric, interior_boundary_conformal_factor,
       interior_boundary_lapse, interior_boundary_shift,
       interior_boundary_theta, interior_boundary_z,
-      coords, time, evolve_lapse_and_shift);
+      coords, time, evolve_lapse_and_shift, volume_mesh, volume_inv_jac);
 
   CHECK_FALSE(ghost_result.has_value());
 
@@ -1087,6 +1147,439 @@ void test_theta_and_z_roundtrip() {
   CHECK_ITERABLE_CUSTOM_APPROX(computed_z, interior_boundary_z, custom_approx);
 }
 
+// Test that face-tangential spectral derivatives + transverse-projected
+// inverse Jacobian give the same result as projecting the volume transverse
+// derivative to the face.  Uses a non-trivial polynomial conformal metric
+// on a non-orthogonal affine map so the test is sensitive to all terms.
+void test_face_transverse_derivatives() {
+  static constexpr size_t Dim = 3;
+
+  // Volume mesh (GaussLobatto so face projection = slicing)
+  const Mesh<Dim> volume_mesh({{5, 6, 7}}, Spectral::Basis::Legendre,
+                               Spectral::Quadrature::GaussLobatto);
+
+  // Constant non-orthogonal Jacobian: x^i = J^i_a ξ^a + offset
+  // J is non-diagonal and non-symmetric for generality.
+  const std::array<std::array<double, Dim>, Dim> J_matrix{{
+      {{1.0, 0.15, -0.1}},
+      {{0.1, 0.9, 0.12}},
+      {{-0.05, 0.08, 1.1}}}};
+
+  // Compute inverse Jacobian (J^{-1})_{a,i} = ∂ξ^a/∂x^i
+  // For a 3x3 matrix, invert manually via cofactors.
+  auto cofactor = [&](size_t r, size_t c) -> double {
+    const size_t r1 = (r + 1) % 3;
+    const size_t r2 = (r + 2) % 3;
+    const size_t c1 = (c + 1) % 3;
+    const size_t c2 = (c + 2) % 3;
+    return gsl::at(gsl::at(J_matrix, r1), c1) *
+               gsl::at(gsl::at(J_matrix, r2), c2) -
+           gsl::at(gsl::at(J_matrix, r1), c2) *
+               gsl::at(gsl::at(J_matrix, r2), c1);
+  };
+  double det_J = 0.0;
+  for (size_t c = 0; c < Dim; ++c) {
+    det_J += gsl::at(gsl::at(J_matrix, 0), c) * cofactor(0, c);
+  }
+  REQUIRE(det_J > 0.0);
+
+  // inv_J(a, i) = cofactor(i, a) / det_J  (transpose of cofactor / det)
+  std::array<std::array<double, Dim>, Dim> inv_J_matrix{};
+  for (size_t a = 0; a < Dim; ++a) {
+    for (size_t i = 0; i < Dim; ++i) {
+      gsl::at(gsl::at(inv_J_matrix, a), i) = cofactor(i, a) / det_J;
+    }
+  }
+
+  // Logical coordinates on volume mesh
+  const auto logical_coords = logical_coordinates(volume_mesh);
+  const size_t num_vol_pts = volume_mesh.number_of_grid_points();
+
+  // Inertial coordinates: x^i = J^i_a ξ^a  (no offset for simplicity)
+  tnsr::I<DataVector, Dim, Frame::Inertial> inertial_coords(num_vol_pts, 0.0);
+  for (size_t i = 0; i < Dim; ++i) {
+    for (size_t a = 0; a < Dim; ++a) {
+      inertial_coords.get(i) +=
+          gsl::at(gsl::at(J_matrix, i), a) * logical_coords.get(a);
+    }
+  }
+  const auto& x = inertial_coords.get(0);
+  const auto& y = inertial_coords.get(1);
+  const auto& z = inertial_coords.get(2);
+
+  // Non-trivial polynomial conformal metric on the volume.
+  // Must be low-degree enough that the spectral derivative is exact.
+  tnsr::ii<DataVector, Dim, Frame::Inertial> gamma_tilde(num_vol_pts);
+  gamma_tilde.get(0, 0) = 1.0 + 0.1 * x + 0.05 * y + 0.02 * z;
+  gamma_tilde.get(0, 1) = 0.03 * x + 0.02 * y + 0.01 * z;
+  gamma_tilde.get(0, 2) = 0.02 * x - 0.01 * y + 0.015 * z;
+  gamma_tilde.get(1, 1) = 1.0 + 0.08 * y + 0.03 * z;
+  gamma_tilde.get(1, 2) = 0.01 * x + 0.025 * y - 0.015 * z;
+  gamma_tilde.get(2, 2) = 1.0 + 0.06 * z + 0.04 * x;
+
+  // Volume inverse Jacobian (constant, broadcast to volume points)
+  InverseJacobian<DataVector, Dim, Frame::ElementLogical, Frame::Inertial>
+      volume_inv_jac(num_vol_pts);
+  for (size_t a = 0; a < Dim; ++a) {
+    for (size_t i = 0; i < Dim; ++i) {
+      volume_inv_jac.get(a, i) = gsl::at(gsl::at(inv_J_matrix, a), i);
+    }
+  }
+
+  // Volume logical derivative of gamma_tilde: d_logical(a, i, j) on volume
+  const auto vol_logical_deriv =
+      logical_partial_derivative(gamma_tilde, volume_mesh);
+
+  // Volume spatial derivative: d_spatial(k, i, j) = inv_J(a,k) * d_log(a,i,j)
+  tnsr::ijj<DataVector, Dim, Frame::Inertial> vol_d_gamma(num_vol_pts, 0.0);
+  for (size_t k = 0; k < Dim; ++k) {
+    for (size_t i = 0; i < Dim; ++i) {
+      for (size_t j = i; j < Dim; ++j) {
+        for (size_t a = 0; a < Dim; ++a) {
+          vol_d_gamma.get(k, i, j) +=
+              volume_inv_jac.get(a, k) * vol_logical_deriv.get(a, i, j);
+        }
+      }
+    }
+  }
+
+  // Conformal factor for the spatial metric g_{ij} = gamma_tilde_{ij}/phi^2
+  const double phi_val = 1.2;  // constant for simplicity
+
+  const Approx custom_approx = Approx::custom().epsilon(1.0e-12).scale(1.0);
+
+  // Test all 6 face directions
+  for (const auto& direction : Direction<Dim>::all_directions()) {
+    CAPTURE(direction);
+    const size_t face_dim = direction.dimension();
+    const Mesh<Dim - 1> face_mesh = volume_mesh.slice_away(face_dim);
+    const size_t num_face_pts = face_mesh.number_of_grid_points();
+
+    // Project gamma_tilde to face
+    tnsr::ii<DataVector, Dim, Frame::Inertial> face_gamma(num_face_pts);
+    ::dg::project_tensor_to_boundary(make_not_null(&face_gamma), gamma_tilde,
+                                     volume_mesh, direction);
+
+    // Face logical derivative of gamma_tilde, computed via spectral
+    // differentiation on the face mesh.  We differentiate component by
+    // component (as Scalars) because logical_partial_derivative is not
+    // instantiated for tnsr::ii<DV,3> on Mesh<2>.
+    // face_log_deriv[b].get(i,j) = ∂γ̃_{ij}/∂ξ^{face_b}
+    std::array<tnsr::ii<DataVector, Dim, Frame::Inertial>, Dim - 1>
+        face_log_deriv;
+    for (size_t b = 0; b < Dim - 1; ++b) {
+      gsl::at(face_log_deriv, b) =
+          tnsr::ii<DataVector, Dim, Frame::Inertial>(num_face_pts, 0.0);
+    }
+    for (size_t i = 0; i < Dim; ++i) {
+      for (size_t j = i; j < Dim; ++j) {
+        const Scalar<DataVector> comp(face_gamma.get(i, j));
+        const auto dcomp = logical_partial_derivative(comp, face_mesh);
+        for (size_t b = 0; b < Dim - 1; ++b) {
+          gsl::at(face_log_deriv, b).get(i, j) = dcomp.get(b);
+        }
+      }
+    }
+
+    // Map face logical dim b -> volume logical dim
+    auto volume_dim_of_face = [&face_dim](const size_t b) -> size_t {
+      return b < face_dim ? b : b + 1;
+    };
+
+    // Compute unit normal from the face-normal row of the inverse Jacobian.
+    // Unnormalized normal covector: n_i^unnorm = J^{-1}_{d,i}
+    tnsr::i<DataVector, Dim, Frame::Inertial> n_cov(num_face_pts);
+    for (size_t i = 0; i < Dim; ++i) {
+      n_cov.get(i) = gsl::at(gsl::at(inv_J_matrix, face_dim), i);
+    }
+
+    // Inverse spatial metric g^{ij} = phi^2 * gamma_tilde^{ij}
+    // For normalizing, we need g^{ij} on the face.
+    const auto [det_face_gamma, inv_face_gamma] =
+        determinant_and_inverse(face_gamma);
+    tnsr::II<DataVector, Dim, Frame::Inertial> inv_spatial_metric(
+        num_face_pts);
+    for (size_t i = 0; i < Dim; ++i) {
+      for (size_t j = i; j < Dim; ++j) {
+        inv_spatial_metric.get(i, j) =
+            phi_val * phi_val * inv_face_gamma.get(i, j);
+      }
+    }
+
+    // Normalize: n_i = n_i^unnorm / sqrt(g^{jk} n_j n_k)
+    const Scalar<DataVector> mag_sq =
+        dot_product(n_cov, n_cov, inv_spatial_metric);
+    const DataVector inv_mag = 1.0 / sqrt(get(mag_sq));
+    for (size_t i = 0; i < Dim; ++i) {
+      n_cov.get(i) *= inv_mag;
+    }
+
+    // Normal vector: n^i = g^{ij} n_j
+    tnsr::I<DataVector, Dim, Frame::Inertial> n_vec(num_face_pts, 0.0);
+    for (size_t i = 0; i < Dim; ++i) {
+      for (size_t j = 0; j < Dim; ++j) {
+        n_vec.get(i) += inv_spatial_metric.get(i, j) * n_cov.get(j);
+      }
+    }
+
+    // --- Method 1: Face spectral derivative + transverse-projected Jacobian ---
+    // q^j_i d_j gamma = sum_{b in face} (J^{-1}_{vol(b),i} - n_i n^j
+    //     J^{-1}_{vol(b),j}) * d_face_log(b, k, l)
+    tnsr::ijj<DataVector, Dim, Frame::Inertial> transverse_deriv_face(
+        num_face_pts, 0.0);
+    for (size_t b = 0; b < Dim - 1; ++b) {
+      const size_t vol_a = volume_dim_of_face(b);
+      // Compute projected Jacobian row:
+      // P_i = J^{-1}_{vol_a, i} - n_i (n^j J^{-1}_{vol_a, j})
+      DataVector n_dot_jac(num_face_pts, 0.0);
+      for (size_t j = 0; j < Dim; ++j) {
+        n_dot_jac += n_vec.get(j) *
+                     gsl::at(gsl::at(inv_J_matrix, vol_a), j);
+      }
+      for (size_t i = 0; i < Dim; ++i) {
+        const DataVector proj_jac_i =
+            gsl::at(gsl::at(inv_J_matrix, vol_a), i) -
+            n_cov.get(i) * n_dot_jac;
+        for (size_t k = 0; k < Dim; ++k) {
+          for (size_t l = k; l < Dim; ++l) {
+            transverse_deriv_face.get(i, k, l) +=
+                proj_jac_i * gsl::at(face_log_deriv, b).get(k, l);
+          }
+        }
+      }
+    }
+
+    // --- Method 2: Project volume transverse derivative to face ---
+    // First project vol_d_gamma to face, then apply q^j_i.
+    tnsr::ijj<DataVector, Dim, Frame::Inertial> face_vol_d_gamma(num_face_pts);
+    ::dg::project_tensor_to_boundary(make_not_null(&face_vol_d_gamma),
+                                     vol_d_gamma, volume_mesh, direction);
+
+    tnsr::ijj<DataVector, Dim, Frame::Inertial> transverse_deriv_vol(
+        num_face_pts, 0.0);
+    for (size_t i = 0; i < Dim; ++i) {
+      // n_i * n^j
+      for (size_t k = 0; k < Dim; ++k) {
+        for (size_t l = k; l < Dim; ++l) {
+          transverse_deriv_vol.get(i, k, l) = face_vol_d_gamma.get(i, k, l);
+          for (size_t j = 0; j < Dim; ++j) {
+            transverse_deriv_vol.get(i, k, l) -=
+                n_cov.get(i) * n_vec.get(j) * face_vol_d_gamma.get(j, k, l);
+          }
+        }
+      }
+    }
+
+    // Compare
+    CHECK_ITERABLE_CUSTOM_APPROX(transverse_deriv_face, transverse_deriv_vol,
+                                 custom_approx);
+  }
+}
+
+// Same as test_face_transverse_derivatives but on a SphericalHarmonic mesh
+// (as used by Shell/Sphere domain creators).  The outer radial face (dim=0)
+// has a Mesh<2> with SphericalHarmonic basis, so the face derivative must
+// use ylm::Spherepack::gradient instead of the standard differentiation
+// matrix.
+void test_face_transverse_derivatives_spherical() {
+  static constexpr size_t Dim = 3;
+
+  // Volume mesh: radial (Legendre Gauss) x angular (SphericalHarmonic).
+  // Use l_max = 5 so that low-order Ylm are exactly representable.
+  const size_t n_r = 4;
+  const size_t l_max = 5;
+  const Mesh<Dim> volume_mesh{
+      {{n_r, l_max + 1, 2 * l_max + 1}},
+      {{Spectral::Basis::Legendre, Spectral::Basis::SphericalHarmonic,
+        Spectral::Basis::SphericalHarmonic}},
+      {{Spectral::Quadrature::Gauss, Spectral::Quadrature::Gauss,
+        Spectral::Quadrature::Equiangular}}};
+
+  // Logical coordinates: xi^0 = r_logical in [-1,1], xi^1 = theta, xi^2 = phi
+  const auto logical_coords = logical_coordinates(volume_mesh);
+  const size_t num_vol_pts = volume_mesh.number_of_grid_points();
+
+  // Affine map for the radial direction: r = r0 + dr * xi^0
+  // Angular directions: x = r*sin(theta)*cos(phi), etc.
+  // For this test, we use a diagonal Jacobian where
+  //   J^i_0 = dx^i/dr_logical (depends on angles)
+  //   J^i_1 = dx^i/dtheta     (depends on r and angles)
+  //   J^i_2 = dx^i/dphi       (depends on r and angles)
+  // This is position-dependent, so we use the full volume Jacobian.
+  const double r0 = 10.0;  // inner radius (in logical coords)
+  const double dr = 2.0;   // half-width
+  const DataVector r = r0 + dr * logical_coords.get(0);
+  const DataVector& theta = logical_coords.get(1);
+  const DataVector& phi = logical_coords.get(2);
+
+  const DataVector sin_theta = sin(theta);
+  const DataVector cos_theta = cos(theta);
+  const DataVector sin_phi = sin(phi);
+  const DataVector cos_phi = cos(phi);
+
+  // Inverse Jacobian for spherical coordinates:
+  //   (J^{-1})_{0,i} = (1/dr) * (sin_theta cos_phi, sin_theta sin_phi,
+  //                               cos_theta)   [radial]
+  //   (J^{-1})_{1,i} = (1/r) * (cos_theta cos_phi, cos_theta sin_phi,
+  //                              -sin_theta)   [theta]
+  //   (J^{-1})_{2,i} = (1/(r sin_theta)) * (-sin_phi, cos_phi, 0)   [phi]
+  InverseJacobian<DataVector, Dim, Frame::ElementLogical, Frame::Inertial>
+      volume_inv_jac(num_vol_pts, 0.0);
+  // radial row (d xi^0 / d x^i)
+  volume_inv_jac.get(0, 0) = sin_theta * cos_phi / dr;
+  volume_inv_jac.get(0, 1) = sin_theta * sin_phi / dr;
+  volume_inv_jac.get(0, 2) = cos_theta / dr;
+  // theta row (d theta / d x^i)
+  volume_inv_jac.get(1, 0) = cos_theta * cos_phi / r;
+  volume_inv_jac.get(1, 1) = cos_theta * sin_phi / r;
+  volume_inv_jac.get(1, 2) = -sin_theta / r;
+  // phi row (d phi / d x^i) — note: Spherepack returns csc(theta)*d/dphi,
+  // so logical dim 2 already has the 1/sin(theta) absorbed.
+  volume_inv_jac.get(2, 0) = -sin_phi / (r * sin_theta);
+  volume_inv_jac.get(2, 1) = cos_phi / (r * sin_theta);
+  volume_inv_jac.get(2, 2) = 0.0;
+
+  // Construct conformal metric using low-order Ylm so angular derivatives
+  // are exact.  Use Y_1^0 ~ cos(theta) and Y_1^1 ~ sin(theta)*cos(phi).
+  tnsr::ii<DataVector, Dim, Frame::Inertial> gamma_tilde(num_vol_pts);
+  gamma_tilde.get(0, 0) = 1.0 + 0.05 * cos_theta;
+  gamma_tilde.get(0, 1) = 0.02 * sin_theta * cos_phi;
+  gamma_tilde.get(0, 2) = 0.01 * sin_theta * sin_phi;
+  gamma_tilde.get(1, 1) = 1.0 + 0.03 * cos_theta;
+  gamma_tilde.get(1, 2) = 0.015 * cos_theta;
+  gamma_tilde.get(2, 2) = 1.0 - 0.02 * cos_theta;
+
+  // Volume logical derivative (handled by Spherepack internally for dims 1,2)
+  const auto vol_logical_deriv =
+      logical_partial_derivative(gamma_tilde, volume_mesh);
+
+  // Volume spatial derivative: d_spatial(k,i,j) = sum_a inv_J(a,k) *
+  // d_logical(a,i,j)
+  tnsr::ijj<DataVector, Dim, Frame::Inertial> vol_d_gamma(num_vol_pts, 0.0);
+  for (size_t k = 0; k < Dim; ++k) {
+    for (size_t i = 0; i < Dim; ++i) {
+      for (size_t j = i; j < Dim; ++j) {
+        for (size_t a = 0; a < Dim; ++a) {
+          vol_d_gamma.get(k, i, j) +=
+              volume_inv_jac.get(a, k) * vol_logical_deriv.get(a, i, j);
+        }
+      }
+    }
+  }
+
+  // Test the outer radial face (upper side of dim 0).
+  const size_t face_dim = 0;
+  const auto direction = Direction<Dim>(face_dim, Side::Upper);
+  const Mesh<Dim - 1> face_mesh = volume_mesh.slice_away(face_dim);
+  const size_t num_face_pts = face_mesh.number_of_grid_points();
+
+  // Conformal factor for constructing the spatial metric (constant)
+  const double phi_val = 1.3;
+
+  // Project gamma_tilde to face
+  tnsr::ii<DataVector, Dim, Frame::Inertial> face_gamma(num_face_pts);
+  ::dg::project_tensor_to_boundary(make_not_null(&face_gamma), gamma_tilde,
+                                   volume_mesh, direction);
+
+  // Project inverse Jacobian to face
+  auto face_inv_jac = ::dg::project_tensor_to_boundary(
+      volume_inv_jac, volume_mesh, direction);
+
+  // Compute unit normal from the radial row of the inverse Jacobian
+  tnsr::i<DataVector, Dim, Frame::Inertial> n_cov(num_face_pts);
+  for (size_t i = 0; i < Dim; ++i) {
+    n_cov.get(i) = face_inv_jac.get(face_dim, i);
+  }
+  // Inverse spatial metric: g^{ij} = phi^2 * gamma_tilde^{ij}
+  const auto [det_face_gamma, inv_face_gamma] =
+      determinant_and_inverse(face_gamma);
+  tnsr::II<DataVector, Dim, Frame::Inertial> inv_spatial_metric(num_face_pts);
+  for (size_t i = 0; i < Dim; ++i) {
+    for (size_t j = i; j < Dim; ++j) {
+      inv_spatial_metric.get(i, j) =
+          phi_val * phi_val * inv_face_gamma.get(i, j);
+    }
+  }
+  const Scalar<DataVector> mag_sq =
+      dot_product(n_cov, n_cov, inv_spatial_metric);
+  const DataVector inv_mag = 1.0 / sqrt(get(mag_sq));
+  for (size_t i = 0; i < Dim; ++i) {
+    n_cov.get(i) *= inv_mag;
+  }
+  tnsr::I<DataVector, Dim, Frame::Inertial> n_vec(num_face_pts, 0.0);
+  for (size_t i = 0; i < Dim; ++i) {
+    for (size_t j = 0; j < Dim; ++j) {
+      n_vec.get(i) += inv_spatial_metric.get(i, j) * n_cov.get(j);
+    }
+  }
+
+  // --- Method 1: Face spectral derivative (Spherepack) + projected Jacobian ---
+  // face_dim is 0, so volume_dim_of_face(b) = b + 1
+  auto volume_dim_of_face = [](const size_t b) -> size_t {
+    return b + 1;
+  };
+
+  const auto& ylm = ylm::get_spherepack_cache(face_mesh.extents(0) - 1);
+
+  std::array<tnsr::ii<DataVector, Dim, Frame::Inertial>, Dim - 1>
+      face_log_deriv;
+  for (size_t b = 0; b < Dim - 1; ++b) {
+    gsl::at(face_log_deriv, b) =
+        tnsr::ii<DataVector, Dim, Frame::Inertial>(num_face_pts, 0.0);
+  }
+  for (size_t ii = 0; ii < Dim; ++ii) {
+    for (size_t jj = ii; jj < Dim; ++jj) {
+      const auto grad = ylm.gradient(face_gamma.get(ii, jj));
+      gsl::at(face_log_deriv, 0).get(ii, jj) = grad.get(0);
+      gsl::at(face_log_deriv, 1).get(ii, jj) = grad.get(1);
+    }
+  }
+
+  tnsr::ijj<DataVector, Dim, Frame::Inertial> transverse_deriv_face(
+      num_face_pts, 0.0);
+  for (size_t b = 0; b < Dim - 1; ++b) {
+    const size_t vol_a = volume_dim_of_face(b);
+    DataVector n_dot_jac(num_face_pts, 0.0);
+    for (size_t j = 0; j < Dim; ++j) {
+      n_dot_jac += n_vec.get(j) * face_inv_jac.get(vol_a, j);
+    }
+    for (size_t ii = 0; ii < Dim; ++ii) {
+      for (size_t jj = ii; jj < Dim; ++jj) {
+        const DataVector& dcomp_b = gsl::at(face_log_deriv, b).get(ii, jj);
+        for (size_t i = 0; i < Dim; ++i) {
+          const DataVector proj_jac_i =
+              face_inv_jac.get(vol_a, i) - n_cov.get(i) * n_dot_jac;
+          transverse_deriv_face.get(i, ii, jj) += proj_jac_i * dcomp_b;
+        }
+      }
+    }
+  }
+
+  // --- Method 2: Project volume transverse derivative to face ---
+  tnsr::ijj<DataVector, Dim, Frame::Inertial> face_vol_d_gamma(num_face_pts);
+  ::dg::project_tensor_to_boundary(make_not_null(&face_vol_d_gamma),
+                                   vol_d_gamma, volume_mesh, direction);
+
+  tnsr::ijj<DataVector, Dim, Frame::Inertial> transverse_deriv_vol(
+      num_face_pts, 0.0);
+  for (size_t i = 0; i < Dim; ++i) {
+    for (size_t k = 0; k < Dim; ++k) {
+      for (size_t l = k; l < Dim; ++l) {
+        transverse_deriv_vol.get(i, k, l) = face_vol_d_gamma.get(i, k, l);
+        for (size_t j = 0; j < Dim; ++j) {
+          transverse_deriv_vol.get(i, k, l) -=
+              n_cov.get(i) * n_vec.get(j) * face_vol_d_gamma.get(j, k, l);
+        }
+      }
+    }
+  }
+
+  // Compare — SphericalHarmonic is spectral, so expect high accuracy
+  const Approx custom_approx = Approx::custom().epsilon(1.0e-11).scale(1.0);
+  CHECK_ITERABLE_CUSTOM_APPROX(transverse_deriv_face, transverse_deriv_vol,
+                                custom_approx);
+}
+
 SPECTRE_TEST_CASE("Unit.Ccz4.BoundaryConditions.ConstraintsRadiationPreserving",
                   "[Unit][Evolution]") {
   test_creation_and_serialization();
@@ -1095,5 +1588,7 @@ SPECTRE_TEST_CASE("Unit.Ccz4.BoundaryConditions.ConstraintsRadiationPreserving",
   test_kerrschild_use_analytic_for_all();
   test_kerrschild_roundtrip_t_perp();
   test_theta_and_z_roundtrip();
+  test_face_transverse_derivatives();
+  test_face_transverse_derivatives_spherical();
 }
 }  // namespace
