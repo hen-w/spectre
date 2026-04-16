@@ -768,6 +768,19 @@ std::optional<std::string> DirichletCharacteristics::dg_ghost(
   *field_d = std::move(result.field_d);
   *field_p = std::move(result.field_p);
 
+  // Enforce g_tilde^{jk} D_{ijk} = 0 w.r.t. coeff conformal metric
+  // (Jacobi formula for det(g_tilde) = 1)
+  {
+    tnsr::i<DataVector, Dim, Frame::Inertial> residual{};
+    ::tenex::evaluate<ti::k>(
+        make_not_null(&residual),
+        inv_coeff_cm(ti::I, ti::J) * (*field_d)(ti::k, ti::i, ti::j));
+    ::tenex::update<ti::k, ti::i, ti::j>(
+        field_d,
+        (*field_d)(ti::k, ti::i, ti::j) -
+            residual(ti::k) * coeff_conformal_metric(ti::i, ti::j) / 3.0);
+  }
+
   // Boundary mode exterior values: zero
   for (auto& component : *bm_u_tensor_minus) {
     component = 0.0;
@@ -965,6 +978,21 @@ std::optional<std::string> DirichletCharacteristics::dg_time_derivative(
   // K0 = 0 hardcoded (see SetK0.hpp: always set to zero in SO-CCZ4).
   const auto k_0 = make_with_value<Scalar<DataVector>>(
       get(interior_boundary_conformal_factor), 0.0);
+
+  // Enforce g_tilde^{jk} D_{ijk} = 0 w.r.t. boundary conformal metric
+  // (Jacobi formula for det(g_tilde) = 1)
+  {
+    tnsr::i<DataVector, Dim, Frame::Inertial> residual{};
+    ::tenex::evaluate<ti::k>(
+        make_not_null(&residual),
+        inv_bnd_cm(ti::I, ti::J) * result.field_d(ti::k, ti::i, ti::j));
+    ::tenex::update<ti::k, ti::i, ti::j>(
+        make_not_null(&result.field_d),
+        result.field_d(ti::k, ti::i, ti::j) -
+            residual(ti::k) *
+                interior_boundary_conformal_metric(ti::i, ti::j) / 3.0);
+  }
+
   compute_dt_second_order_fields(
       dt_boundary_conformal_metric_correction,
       dt_boundary_conformal_factor_correction, dt_boundary_lapse_correction,

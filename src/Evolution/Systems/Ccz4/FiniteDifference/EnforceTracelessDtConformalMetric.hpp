@@ -32,14 +32,20 @@ struct EnforceTracelessDtConformalMetric
     : tt::ConformsTo<db::protocols::Mutator> {
   static constexpr size_t dim = System::volume_dim;
   using return_tags =
-      tmpl::list<::Tags::dt<::Ccz4::Tags::ConformalMetric<DataVector, dim>>>;
+      tmpl::list<::Tags::dt<::Ccz4::Tags::ConformalMetric<DataVector, dim>>,
+                 ::Tags::dt<
+                     ::Ccz4::Tags::BoundaryConformalMetric<DataVector, dim>>>;
   using argument_tags =
       tmpl::list<::Ccz4::Tags::ConformalMetric<DataVector, dim>,
+                 ::Ccz4::Tags::BoundaryConformalMetric<DataVector, dim>,
                  ::Ccz4::fd::Tags::ConstrainedEvolution>;
 
   static void apply(
       gsl::not_null<tnsr::ii<DataVector, dim>*> dt_conformal_metric,
+      gsl::not_null<tnsr::ii<DataVector, dim>*>
+          dt_boundary_conformal_metric,
       const tnsr::ii<DataVector, dim>& conformal_metric,
+      const tnsr::ii<DataVector, dim>& boundary_conformal_metric,
       bool constrained_evolution);
 };
 }  // namespace Ccz4::fd
