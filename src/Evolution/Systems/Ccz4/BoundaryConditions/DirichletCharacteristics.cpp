@@ -361,6 +361,14 @@ CharMixedState characteristic_decomposition_pipeline(
         }
       });
 
+  const auto& analytic_conformal_metric =
+      get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(analytic_values);
+  const auto& analytic_conformal_factor =
+      get<Ccz4::Tags::ConformalFactor<DataVector>>(analytic_values);
+  const auto& analytic_lapse =
+      get<gr::Tags::Lapse<DataVector>>(analytic_values);
+  const auto& analytic_shift =
+      get<gr::Tags::Shift<DataVector, 3>>(analytic_values);
   const auto& analytic_a_tilde =
       get<Ccz4::Tags::ATilde<DataVector, 3>>(analytic_values);
   const auto& analytic_trace_K =
@@ -381,28 +389,50 @@ CharMixedState characteristic_decomposition_pipeline(
       get<Ccz4::Tags::FieldP<DataVector, 3>>(analytic_values);
 
   // Step 5: Ghost spatial derivatives (coeff four fields * analytic aux)
-  tnsr::ijj<DataVector, Dim, Frame::Inertial> ghost_d_cm{};
+  tnsr::ijj<DataVector, Dim, Frame::Inertial> analytic_d_cm{};
   ::tenex::evaluate<ti::k, ti::i, ti::j>(
-      make_not_null(&ghost_d_cm), 2.0 * analytic_field_d(ti::k, ti::i, ti::j));
+      make_not_null(&analytic_d_cm), 2.0 * analytic_field_d(ti::k, ti::i, ti::j));
 
-  tnsr::i<DataVector, Dim, Frame::Inertial> ghost_d_cf{};
-  ::tenex::evaluate<ti::i>(make_not_null(&ghost_d_cf),
-                           coeff_conformal_factor() * analytic_field_p(ti::i));
+  tnsr::i<DataVector, Dim, Frame::Inertial> analytic_d_cf{};
+  ::tenex::evaluate<ti::i>(make_not_null(&analytic_d_cf),
+                           analytic_conformal_factor() * analytic_field_p(ti::i));
 
-  tnsr::i<DataVector, Dim, Frame::Inertial> ghost_d_lapse{};
-  ::tenex::evaluate<ti::i>(make_not_null(&ghost_d_lapse),
-                           coeff_lapse() * analytic_field_a(ti::i));
+  tnsr::i<DataVector, Dim, Frame::Inertial> analytic_d_lapse{};
+  ::tenex::evaluate<ti::i>(make_not_null(&analytic_d_lapse),
+                           analytic_lapse() * analytic_field_a(ti::i));
 
-  tnsr::iJ<DataVector, Dim, Frame::Inertial> ghost_d_shift{};
-  ::tenex::evaluate<ti::i, ti::J>(make_not_null(&ghost_d_shift),
+  tnsr::iJ<DataVector, Dim, Frame::Inertial> analytic_d_shift{};
+  ::tenex::evaluate<ti::i, ti::J>(make_not_null(&analytic_d_shift),
                                   analytic_field_b(ti::i, ti::J));
 
-  // Step 6: Ghost char fields + mode mixing
+  // Step 6: Compute analytic unit normal for ghost char fields
+  const auto [det_analytic_cm, inv_analytic_cm] =
+      determinant_and_inverse(analytic_conformal_metric);
+
+  tnsr::II<DataVector, Dim, Frame::Inertial> inv_analytic_spatial_metric{};
+  ::tenex::evaluate<ti::I, ti::J>(make_not_null(&inv_analytic_spatial_metric),
+                                  analytic_conformal_factor() *
+                                      analytic_conformal_factor() *
+                                      inv_analytic_cm(ti::I, ti::J));
+
+  const Scalar<DataVector> analytic_mag_sq =
+      dot_product(normal_covector, normal_covector,
+                  inv_analytic_spatial_metric);
+  const DataVector analytic_inv_mag = 1.0 / sqrt(get(analytic_mag_sq));
+
+  tnsr::i<DataVector, Dim, Frame::Inertial> analytic_unit_normal_one_form(
+      num_pts);
+  for (size_t i = 0; i < Dim; ++i) {
+    analytic_unit_normal_one_form.get(i) =
+        normal_covector.get(i) * analytic_inv_mag;
+  }
+
+  // Step 7: Ghost char fields + mode mixing
   const auto ghost_char_fields = ::Ccz4::fd::characteristic_fields(
-      ghost_unit_normal_one_form, coeff_conformal_metric,
-      coeff_conformal_factor, coeff_lapse, coeff_shift, analytic_trace_K,
-      analytic_a_tilde, analytic_theta, analytic_gamma_hat, analytic_b,
-      ghost_d_cm, ghost_d_cf, ghost_d_lapse, ghost_d_shift, f);
+      analytic_unit_normal_one_form, analytic_conformal_metric,
+      analytic_conformal_factor, analytic_lapse, analytic_shift,
+      analytic_trace_K, analytic_a_tilde, analytic_theta, analytic_gamma_hat,
+      analytic_b, analytic_d_cm, analytic_d_cf, analytic_d_lapse, analytic_d_shift, f);
 
   mix_characteristic_modes(char_fields, ghost_char_fields, char_speeds,
                            prescribe_outgoing, num_pts);
