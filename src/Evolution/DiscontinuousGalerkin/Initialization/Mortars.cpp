@@ -137,9 +137,7 @@ template <size_t Dim>
                                  neighbor_orientation(direction.dimension()))},
                      .interface_data_policy =
                          InterfaceDataPolicy::NonconformingSelfInterpolates,
-                     .time_stepping_policy =
-                         local_time_stepping ? TimeSteppingPolicy::Conservative
-                                             : TimeSteppingPolicy::EqualRate}});
+                     .time_stepping_policy = TimeSteppingPolicy::EqualRate}});
           }
         }
         break;
@@ -155,9 +153,7 @@ template <size_t Dim>
             MortarInfo<Dim>{
                 {.interface_data_policy =
                      InterfaceDataPolicy::NonconformingNeighborInterpolates,
-                 .time_stepping_policy = local_time_stepping
-                                             ? TimeSteppingPolicy::Conservative
-                                             : TimeSteppingPolicy::EqualRate}});
+                 .time_stepping_policy = TimeSteppingPolicy::EqualRate}});
         break;
       }
       default:
