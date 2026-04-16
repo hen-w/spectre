@@ -547,7 +547,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       field_a_ext, inverse_conformal_metric_ext, field_d_ext,
       gamma_hat_dot_normal_ext, field_p_ext);
   ::tenex::evaluate(trace_extrinsic_curvature_boundary_correction,
-                    -0.5 * (trace_extrinsic_curvature_flux_dot_normal_ext() +
+                    -0.5 * tau2_ * (trace_extrinsic_curvature_flux_dot_normal_ext() +
                             trace_extrinsic_curvature_flux_dot_normal_int()) -
                         0.5 * tau1_eff() *
                             (trace_extrinsic_curvature_ext() -
@@ -568,7 +568,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       inverse_conformal_metric_dot_normal_ext, inverse_conformal_metric_ext);
   ::tenex::evaluate<ti::i, ti::j>(
       a_tilde_boundary_correction,
-      -0.5 * (a_tilde_flux_dot_normal_ext(ti::i, ti::j) +
+      -0.5 * tau2_ * (a_tilde_flux_dot_normal_ext(ti::i, ti::j) +
               a_tilde_flux_dot_normal_int(ti::i, ti::j)) -
           0.5 * tau1_eff() *
               (a_tilde_ext(ti::i, ti::j) - a_tilde_int(ti::i, ti::j)));
@@ -584,7 +584,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       gamma_hat_dot_normal_ext, field_p_ext, inverse_conformal_metric_ext);
   ::tenex::evaluate(
       theta_boundary_correction,
-      -0.5 * (theta_flux_dot_normal_ext() + theta_flux_dot_normal_int()) -
+      -0.5 * tau2_ * (theta_flux_dot_normal_ext() + theta_flux_dot_normal_int()) -
           0.5 * tau1_eff() * (theta_ext() - theta_int()));
 
   // compute boundary correction for gamma_hat
@@ -600,7 +600,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       normal_covector_ext);
   ::tenex::evaluate<ti::I>(
       gamma_hat_boundary_correction,
-      -0.5 * (gamma_hat_flux_dot_normal_ext(ti::I) +
+      -0.5 * tau2_ * (gamma_hat_flux_dot_normal_ext(ti::I) +
               gamma_hat_flux_dot_normal_int(ti::I)) -
           0.5 * tau1_eff() * (gamma_hat_ext(ti::I) - gamma_hat_int(ti::I)));
 
@@ -617,7 +617,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       normal_covector_ext);
   ::tenex::evaluate<ti::I>(
       auxiliary_shift_b_boundary_correction,
-      -0.5 * (b_flux_dot_normal_ext(ti::I) + b_flux_dot_normal_int(ti::I)) -
+      -0.5 * tau2_ * (b_flux_dot_normal_ext(ti::I) + b_flux_dot_normal_int(ti::I)) -
           0.5 * tau1_eff() *
               (auxiliary_shift_b_ext(ti::I) - auxiliary_shift_b_int(ti::I)));
 
@@ -630,7 +630,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       theta_ext, normal_covector_ext);
   ::tenex::evaluate<ti::k>(
       field_a_boundary_correction,
-      -0.5 * (field_a_flux_dot_normal_int(ti::k) +
+      -0.5 * tau2_ * (field_a_flux_dot_normal_int(ti::k) +
               field_a_flux_dot_normal_ext(ti::k)) -
           0.5 * tau1_eff() * (field_a_ext(ti::k) - field_a_int(ti::k)));
 
@@ -643,7 +643,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
                               auxiliary_shift_b_ext, normal_covector_ext);
   ::tenex::evaluate<ti::k, ti::I>(
       field_b_boundary_correction,
-      -0.5 * (field_b_flux_dot_normal_int(ti::k, ti::I) +
+      -0.5 * tau2_ * (field_b_flux_dot_normal_int(ti::k, ti::I) +
               field_b_flux_dot_normal_ext(ti::k, ti::I)) -
           0.5 * tau1_eff() *
               (field_b_ext(ti::k, ti::I) - field_b_int(ti::k, ti::I)));
@@ -657,7 +657,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       normal_covector_ext, lapse_ext, a_tilde_ext);
   ::tenex::evaluate<ti::k, ti::i, ti::j>(
       field_d_boundary_correction,
-      -0.5 * (field_d_flux_dot_normal_int(ti::k, ti::i, ti::j) +
+      -0.5 * tau2_ * (field_d_flux_dot_normal_int(ti::k, ti::i, ti::j) +
               field_d_flux_dot_normal_ext(ti::k, ti::i, ti::j)) -
           0.5 * tau1_eff() *
               (field_d_ext(ti::k, ti::i, ti::j) -
@@ -672,7 +672,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       trace_extrinsic_curvature_ext, field_b_ext, normal_covector_ext);
   ::tenex::evaluate<ti::k>(
       field_p_boundary_correction,
-      -0.5 * (field_p_flux_dot_normal_int(ti::k) +
+      -0.5 * tau2_ * (field_p_flux_dot_normal_int(ti::k) +
               field_p_flux_dot_normal_ext(ti::k)) -
           0.5 * tau1_eff() * (field_p_ext(ti::k) - field_p_int(ti::k)));
 }
@@ -813,8 +813,6 @@ void LaxFriedrichs<Dim>::dg_auxiliary_boundary_terms(
     const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p_ext,
 
     dg::Formulation /*dg_formulation*/) const {
-  const DataVector tau2_eff =
-      make_with_value<DataVector>(get(inverse_grid_spacing_int).size(), tau2_);
   // only auxiliary reduction variables have nonzero boundary corrections
   *conformal_metric_boundary_correction =
       make_with_value<tnsr::ii<DataVector, Dim, Frame::Inertial>>(
@@ -868,8 +866,7 @@ void LaxFriedrichs<Dim>::dg_auxiliary_boundary_terms(
   for (size_t i = 0; i < Dim; ++i) {
     field_a_boundary_correction->get(i) =
         0.5 * (get(log_lapse_int) * normal_covector_int.get(i) +
-               get(log_lapse_ext) * normal_covector_ext.get(i)) -
-        0.5 * tau2_eff * (field_a_ext.get(i) - field_a_int.get(i));
+               get(log_lapse_ext) * normal_covector_ext.get(i));
   }
 
   // compute auxiliary boundary correction for field_b = d_shift
@@ -877,8 +874,7 @@ void LaxFriedrichs<Dim>::dg_auxiliary_boundary_terms(
     for (size_t j = 0; j < Dim; ++j) {
       field_b_boundary_correction->get(i, j) =
           0.5 * (shift_int.get(j) * normal_covector_int.get(i) +
-                 shift_ext.get(j) * normal_covector_ext.get(i)) -
-          0.5 * tau2_eff * (field_b_ext.get(i, j) - field_b_int.get(i, j));
+                 shift_ext.get(j) * normal_covector_ext.get(i));
     }
   }
 
@@ -891,9 +887,7 @@ void LaxFriedrichs<Dim>::dg_auxiliary_boundary_terms(
             0.5 * (0.5 * conformal_metric_int.get(j, k) *
                        normal_covector_int.get(i) +
                    0.5 * conformal_metric_ext.get(j, k) *
-                       normal_covector_ext.get(i)) -
-            0.5 * tau2_eff *
-                (field_d_ext.get(i, j, k) - field_d_int.get(i, j, k));
+                       normal_covector_ext.get(i));
       }
     }
   }
@@ -906,8 +900,7 @@ void LaxFriedrichs<Dim>::dg_auxiliary_boundary_terms(
   for (size_t i = 0; i < Dim; ++i) {
     field_p_boundary_correction->get(i) =
         0.5 * (get(log_conformal_factor_int) * normal_covector_int.get(i) +
-               get(log_conformal_factor_ext) * normal_covector_ext.get(i)) -
-        0.5 * tau2_eff * (field_p_ext.get(i) - field_p_int.get(i));
+               get(log_conformal_factor_ext) * normal_covector_ext.get(i));
   }
 }
 
