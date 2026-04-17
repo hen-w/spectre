@@ -237,18 +237,17 @@ struct CharMixedState {
 // Performs the full characteristic mode-mixing pipeline shared by dg_ghost
 // and dg_time_derivative:
 // 1. Reconstructs interior spatial derivatives from interior auxiliary fields
-// 2. Computes interior unit normal from normal_covector + interior metric
-// 3. Computes interior char speeds and char fields
-// 4. Evaluates analytic solution
-// 5. Reconstructs ghost spatial derivatives (coeff four fields * analytic aux)
-// 6. Computes ghost char fields
-// 7. Mode mixes (incoming from ghost, outgoing from interior)
-// 8. Inverse char transform (ghost unit normal + coeff four fields)
-// 9. Reconstructs auxiliary fields from normal derivatives
+// 2. Evaluates analytic solution
+// 3. Computes analytic unit normal (one form + vector)
+// 4. Reconstructs analytic spatial derivatives
+// 5. Computes char speeds (interior lapse/shift/cf, analytic unit normal)
+// 6. Interior forward char transform (analytic four fields, interior evolved/deriv)
+// 7. Ghost forward char transform + mode mixing
+// 8. Inverse char transform (analytic four fields + analytic unit normal)
+// 9. Reconstructs auxiliary fields (analytic unit normal, boundary-integrated lapse/cf)
 CharMixedState characteristic_decomposition_pipeline(
     const evolution::initial_data::InitialData& analytic_prescription,
     const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
-    const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_conformal_metric,
     const Scalar<DataVector>& interior_conformal_factor,
     const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_a_tilde,
     const Scalar<DataVector>& interior_trace_extrinsic_curvature,
@@ -261,12 +260,8 @@ CharMixedState characteristic_decomposition_pipeline(
     const tnsr::iJ<DataVector, 3, Frame::Inertial>& interior_field_b,
     const tnsr::ijj<DataVector, 3, Frame::Inertial>& interior_field_d,
     const tnsr::i<DataVector, 3, Frame::Inertial>& interior_field_p,
-    const tnsr::ii<DataVector, 3, Frame::Inertial>& coeff_conformal_metric,
-    const Scalar<DataVector>& coeff_conformal_factor,
-    const Scalar<DataVector>& coeff_lapse,
-    const tnsr::I<DataVector, 3, Frame::Inertial>& coeff_shift,
-    const tnsr::i<DataVector, 3, Frame::Inertial>& ghost_unit_normal_one_form,
-    const tnsr::I<DataVector, 3, Frame::Inertial>& ghost_unit_normal_vector,
+    const Scalar<DataVector>& boundary_integrated_lapse,
+    const Scalar<DataVector>& boundary_integrated_conformal_factor,
     const tnsr::I<DataVector, 3, Frame::Inertial>& coords, const double time,
     const double f, const bool prescribe_outgoing) {
   static constexpr size_t Dim = 3;
@@ -290,40 +285,9 @@ CharMixedState characteristic_decomposition_pipeline(
   ::tenex::evaluate<ti::i, ti::J>(make_not_null(&d_shift),
                                   interior_field_b(ti::i, ti::J));
 
-  // Step 2: Compute interior unit normal
-  const auto [det_cm, inv_cm] =
-      determinant_and_inverse(interior_conformal_metric);
-
-  tnsr::II<DataVector, Dim, Frame::Inertial> inv_spatial_metric{};
-  ::tenex::evaluate<ti::I, ti::J>(make_not_null(&inv_spatial_metric),
-                                  interior_conformal_factor() *
-                                      interior_conformal_factor() *
-                                      inv_cm(ti::I, ti::J));
-
-  const Scalar<DataVector> mag_sq =
-      dot_product(normal_covector, normal_covector, inv_spatial_metric);
-  const DataVector inv_mag = 1.0 / sqrt(get(mag_sq));
-
   const size_t num_pts = get(interior_conformal_factor).size();
-  tnsr::i<DataVector, Dim, Frame::Inertial> interior_unit_normal_one_form(
-      num_pts);
-  for (size_t i = 0; i < Dim; ++i) {
-    interior_unit_normal_one_form.get(i) = normal_covector.get(i) * inv_mag;
-  }
 
-  // Step 3: Char speeds and interior char fields
-  auto char_speeds = ::Ccz4::fd::characteristic_speeds(
-      interior_lapse, interior_shift, interior_conformal_factor, f,
-      interior_unit_normal_one_form);
-
-  auto char_fields = ::Ccz4::fd::characteristic_fields(
-      interior_unit_normal_one_form, interior_conformal_metric,
-      interior_conformal_factor, interior_lapse, interior_shift,
-      interior_trace_extrinsic_curvature, interior_a_tilde, interior_theta,
-      interior_gamma_hat, interior_auxiliary_shift_b, d_conformal_metric,
-      d_conformal_factor, d_lapse, d_shift, f);
-
-  // Step 4: Evaluate analytic solution
+  // Step 2: Evaluate analytic solution
   using all_tags = tmpl::list<
       Ccz4::Tags::ConformalMetric<DataVector, 3>,
       Ccz4::Tags::ConformalFactor<DataVector>,
@@ -388,24 +352,7 @@ CharMixedState characteristic_decomposition_pipeline(
   const auto& analytic_field_p =
       get<Ccz4::Tags::FieldP<DataVector, 3>>(analytic_values);
 
-  // Step 5: Ghost spatial derivatives (coeff four fields * analytic aux)
-  tnsr::ijj<DataVector, Dim, Frame::Inertial> analytic_d_cm{};
-  ::tenex::evaluate<ti::k, ti::i, ti::j>(
-      make_not_null(&analytic_d_cm), 2.0 * analytic_field_d(ti::k, ti::i, ti::j));
-
-  tnsr::i<DataVector, Dim, Frame::Inertial> analytic_d_cf{};
-  ::tenex::evaluate<ti::i>(make_not_null(&analytic_d_cf),
-                           analytic_conformal_factor() * analytic_field_p(ti::i));
-
-  tnsr::i<DataVector, Dim, Frame::Inertial> analytic_d_lapse{};
-  ::tenex::evaluate<ti::i>(make_not_null(&analytic_d_lapse),
-                           analytic_lapse() * analytic_field_a(ti::i));
-
-  tnsr::iJ<DataVector, Dim, Frame::Inertial> analytic_d_shift{};
-  ::tenex::evaluate<ti::i, ti::J>(make_not_null(&analytic_d_shift),
-                                  analytic_field_b(ti::i, ti::J));
-
-  // Step 6: Compute analytic unit normal for ghost char fields
+  // Step 3: Compute analytic unit normal (one form + vector)
   const auto [det_analytic_cm, inv_analytic_cm] =
       determinant_and_inverse(analytic_conformal_metric);
 
@@ -426,6 +373,44 @@ CharMixedState characteristic_decomposition_pipeline(
     analytic_unit_normal_one_form.get(i) =
         normal_covector.get(i) * analytic_inv_mag;
   }
+
+  tnsr::I<DataVector, Dim, Frame::Inertial> analytic_unit_normal_vector{};
+  ::tenex::evaluate<ti::I>(make_not_null(&analytic_unit_normal_vector),
+                           inv_analytic_spatial_metric(ti::I, ti::J) *
+                               analytic_unit_normal_one_form(ti::j));
+
+  // Step 4: Analytic spatial derivatives
+  tnsr::ijj<DataVector, Dim, Frame::Inertial> analytic_d_cm{};
+  ::tenex::evaluate<ti::k, ti::i, ti::j>(
+      make_not_null(&analytic_d_cm),
+      2.0 * analytic_field_d(ti::k, ti::i, ti::j));
+
+  tnsr::i<DataVector, Dim, Frame::Inertial> analytic_d_cf{};
+  ::tenex::evaluate<ti::i>(
+      make_not_null(&analytic_d_cf),
+      analytic_conformal_factor() * analytic_field_p(ti::i));
+
+  tnsr::i<DataVector, Dim, Frame::Inertial> analytic_d_lapse{};
+  ::tenex::evaluate<ti::i>(make_not_null(&analytic_d_lapse),
+                           analytic_lapse() * analytic_field_a(ti::i));
+
+  tnsr::iJ<DataVector, Dim, Frame::Inertial> analytic_d_shift{};
+  ::tenex::evaluate<ti::i, ti::J>(make_not_null(&analytic_d_shift),
+                                  analytic_field_b(ti::i, ti::J));
+
+  // Step 5: Char speeds (interior lapse/shift/cf, analytic unit normal)
+  auto char_speeds = ::Ccz4::fd::characteristic_speeds(
+      interior_lapse, interior_shift, interior_conformal_factor, f,
+      analytic_unit_normal_one_form);
+
+  // Step 6: Interior forward char transform (analytic four fields for
+  // metric/gauge coefficients, interior evolved vars and derivatives)
+  auto char_fields = ::Ccz4::fd::characteristic_fields(
+      analytic_unit_normal_one_form, analytic_conformal_metric,
+      analytic_conformal_factor, analytic_lapse, analytic_shift,
+      interior_trace_extrinsic_curvature, interior_a_tilde, interior_theta,
+      interior_gamma_hat, interior_auxiliary_shift_b, d_conformal_metric,
+      d_conformal_factor, d_lapse, d_shift, f);
 
   // Step 7: Ghost char fields + mode mixing
   const auto ghost_char_fields = ::Ccz4::fd::characteristic_fields(
@@ -483,8 +468,8 @@ CharMixedState characteristic_decomposition_pipeline(
       u_vector2_minus, u_vector3_plus, u_vector3_minus, u_scalar1_zero,
       u_scalar2_plus, u_scalar2_minus, u_scalar3_plus, u_scalar3_minus,
       u_scalar4_plus, u_scalar4_minus, u_scalar5_plus, u_scalar5_minus,
-      ghost_unit_normal_one_form, coeff_conformal_metric,
-      coeff_conformal_factor, coeff_lapse, coeff_shift, f);
+      analytic_unit_normal_one_form, analytic_conformal_metric,
+      analytic_conformal_factor, analytic_lapse, analytic_shift, f);
 
   // Step 8: Auxiliary field reconstruction from normal derivatives
   using DnCM =
@@ -500,50 +485,50 @@ CharMixedState characteristic_decomposition_pipeline(
 
   Scalar<DataVector> n_dot_d_lapse{};
   ::tenex::evaluate(make_not_null(&n_dot_d_lapse),
-                    ghost_unit_normal_vector(ti::I) * d_lapse(ti::i));
+                    analytic_unit_normal_vector(ti::I) * d_lapse(ti::i));
 
   Scalar<DataVector> n_dot_d_cf{};
   ::tenex::evaluate(
       make_not_null(&n_dot_d_cf),
-      ghost_unit_normal_vector(ti::I) * d_conformal_factor(ti::i));
+      analytic_unit_normal_vector(ti::I) * d_conformal_factor(ti::i));
 
   tnsr::i<DataVector, Dim, Frame::Inertial> result_field_a{};
   ::tenex::evaluate<ti::i>(
       make_not_null(&result_field_a),
-      (d_lapse(ti::i) - ghost_unit_normal_one_form(ti::i) * n_dot_d_lapse() +
-       ghost_unit_normal_one_form(ti::i) * dn_lapse()) /
-          coeff_lapse());
+      (d_lapse(ti::i) - analytic_unit_normal_one_form(ti::i) * n_dot_d_lapse() +
+       analytic_unit_normal_one_form(ti::i) * dn_lapse()) /
+          boundary_integrated_lapse());
 
   tnsr::i<DataVector, Dim, Frame::Inertial> result_field_p{};
   ::tenex::evaluate<ti::i>(make_not_null(&result_field_p),
                            (d_conformal_factor(ti::i) -
-                            ghost_unit_normal_one_form(ti::i) * n_dot_d_cf() +
-                            ghost_unit_normal_one_form(ti::i) * dn_cf()) /
-                               coeff_conformal_factor());
+                            analytic_unit_normal_one_form(ti::i) * n_dot_d_cf() +
+                            analytic_unit_normal_one_form(ti::i) * dn_cf()) /
+                               boundary_integrated_conformal_factor());
 
   tnsr::ii<DataVector, Dim, Frame::Inertial> n_dot_d_cm{};
   ::tenex::evaluate<ti::j, ti::k>(make_not_null(&n_dot_d_cm),
-                                  ghost_unit_normal_vector(ti::M) *
+                                  analytic_unit_normal_vector(ti::M) *
                                       d_conformal_metric(ti::m, ti::j, ti::k));
 
   tnsr::ijj<DataVector, Dim, Frame::Inertial> result_field_d{};
   ::tenex::evaluate<ti::i, ti::j, ti::k>(
       make_not_null(&result_field_d),
       0.5 * (d_conformal_metric(ti::i, ti::j, ti::k) -
-             ghost_unit_normal_one_form(ti::i) * n_dot_d_cm(ti::j, ti::k) +
-             ghost_unit_normal_one_form(ti::i) * dn_cm(ti::j, ti::k)));
+             analytic_unit_normal_one_form(ti::i) * n_dot_d_cm(ti::j, ti::k) +
+             analytic_unit_normal_one_form(ti::i) * dn_cm(ti::j, ti::k)));
 
   tnsr::I<DataVector, Dim, Frame::Inertial> n_dot_d_shift{};
   ::tenex::evaluate<ti::J>(
       make_not_null(&n_dot_d_shift),
-      ghost_unit_normal_vector(ti::M) * d_shift(ti::m, ti::J));
+      analytic_unit_normal_vector(ti::M) * d_shift(ti::m, ti::J));
 
   tnsr::iJ<DataVector, Dim, Frame::Inertial> result_field_b{};
   ::tenex::evaluate<ti::i, ti::J>(
       make_not_null(&result_field_b),
       d_shift(ti::i, ti::J) -
-          ghost_unit_normal_one_form(ti::i) * n_dot_d_shift(ti::J) +
-          ghost_unit_normal_one_form(ti::i) * dn_shift(ti::J));
+          analytic_unit_normal_one_form(ti::i) * n_dot_d_shift(ti::J) +
+          analytic_unit_normal_one_form(ti::i) * dn_shift(ti::J));
 
   return {std::move(char_speeds),    std::move(evolved_space),
           std::move(result_field_a), std::move(result_field_b),
@@ -561,9 +546,7 @@ DirichletCharacteristics::DirichletCharacteristics(
     const DirichletCharacteristics& rhs)
     : BoundaryCondition{dynamic_cast<const BoundaryCondition&>(rhs)},
       analytic_prescription_(rhs.analytic_prescription_->get_clone()),
-      prescribe_outgoing_(rhs.prescribe_outgoing_),
-      copy_second_order_fields_from_interior_(
-          rhs.copy_second_order_fields_from_interior_) {}
+      prescribe_outgoing_(rhs.prescribe_outgoing_) {}
 
 DirichletCharacteristics& DirichletCharacteristics::operator=(
     const DirichletCharacteristics& rhs) {
@@ -572,18 +555,14 @@ DirichletCharacteristics& DirichletCharacteristics::operator=(
   }
   analytic_prescription_ = rhs.analytic_prescription_->get_clone();
   prescribe_outgoing_ = rhs.prescribe_outgoing_;
-  copy_second_order_fields_from_interior_ =
-      rhs.copy_second_order_fields_from_interior_;
   return *this;
 }
 
 DirichletCharacteristics::DirichletCharacteristics(
     std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription,
-    bool prescribe_outgoing, bool copy_second_order_fields_from_interior)
+    bool prescribe_outgoing)
     : analytic_prescription_(std::move(analytic_prescription)),
-      prescribe_outgoing_(prescribe_outgoing),
-      copy_second_order_fields_from_interior_(
-          copy_second_order_fields_from_interior) {}
+      prescribe_outgoing_(prescribe_outgoing) {}
 
 std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>
 DirichletCharacteristics::get_clone() const {
@@ -594,7 +573,6 @@ void DirichletCharacteristics::pup(PUP::er& p) {
   BoundaryCondition::pup(p);
   p | analytic_prescription_;
   p | prescribe_outgoing_;
-  p | copy_second_order_fields_from_interior_;
 }
 // NOLINTNEXTLINE
 PUP::able::PUP_ID DirichletCharacteristics::my_PUP_ID = 0;
@@ -628,7 +606,7 @@ std::optional<std::string> DirichletCharacteristics::dg_ghost(
     const std::optional<
         tnsr::I<DataVector, 3, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
-    const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_conformal_metric,
+    const tnsr::ii<DataVector, 3, Frame::Inertial>& /*interior_conformal_metric*/,
     const Scalar<DataVector>& interior_conformal_factor,
     const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_a_tilde,
     const Scalar<DataVector>& interior_trace_extrinsic_curvature,
@@ -660,59 +638,15 @@ std::optional<std::string> DirichletCharacteristics::dg_ghost(
          " is only weakly hyperbolic in that case");
   const size_t num_pts = get(interior_conformal_factor).size();
 
-  // Determine which four fields to use as characteristic coefficients and
-  // for the ghost state's metric/gauge sector.
-  // When copy_second_order_fields_from_interior_: use interior values.
-  // Otherwise: use boundary-integrated values.
-  const auto& coeff_conformal_metric = copy_second_order_fields_from_interior_
-                                           ? interior_conformal_metric
-                                           : interior_boundary_conformal_metric;
-  const auto& coeff_conformal_factor = copy_second_order_fields_from_interior_
-                                           ? interior_conformal_factor
-                                           : interior_boundary_conformal_factor;
-  const auto& coeff_lapse = copy_second_order_fields_from_interior_
-                                ? interior_lapse
-                                : interior_boundary_lapse;
-  const auto& coeff_shift = copy_second_order_fields_from_interior_
-                                ? interior_shift
-                                : interior_boundary_shift;
-
-  // Compute ghost-side unit normal from coeff four fields.
-  // When copy_second_order_fields_from_interior_: coeff = interior, so this
-  // equals the interior unit normal. Otherwise uses boundary-integrated metric.
-  const auto [det_coeff_cm, inv_coeff_cm] =
-      determinant_and_inverse(coeff_conformal_metric);
-
-  tnsr::II<DataVector, Dim, Frame::Inertial> inv_coeff_spatial_metric{};
-  ::tenex::evaluate<ti::I, ti::J>(make_not_null(&inv_coeff_spatial_metric),
-                                  coeff_conformal_factor() *
-                                      coeff_conformal_factor() *
-                                      inv_coeff_cm(ti::I, ti::J));
-
-  const Scalar<DataVector> coeff_mag_sq =
-      dot_product(normal_covector, normal_covector, inv_coeff_spatial_metric);
-  const DataVector coeff_inv_mag = 1.0 / sqrt(get(coeff_mag_sq));
-
-  tnsr::i<DataVector, Dim, Frame::Inertial> ghost_unit_normal_one_form(num_pts);
-  for (size_t i = 0; i < Dim; ++i) {
-    ghost_unit_normal_one_form.get(i) = normal_covector.get(i) * coeff_inv_mag;
-  }
-
-  tnsr::I<DataVector, Dim, Frame::Inertial> ghost_unit_normal_vector{};
-  ::tenex::evaluate<ti::I>(make_not_null(&ghost_unit_normal_vector),
-                           inv_coeff_spatial_metric(ti::I, ti::J) *
-                               ghost_unit_normal_one_form(ti::j));
-
   // Run the full characteristic decomposition pipeline
   auto result = characteristic_decomposition_pipeline(
-      *analytic_prescription_, normal_covector, interior_conformal_metric,
+      *analytic_prescription_, normal_covector,
       interior_conformal_factor, interior_a_tilde,
       interior_trace_extrinsic_curvature, interior_theta, interior_gamma_hat,
       interior_lapse, interior_shift, interior_auxiliary_shift_b,
       interior_field_a, interior_field_b, interior_field_d, interior_field_p,
-      coeff_conformal_metric, coeff_conformal_factor, coeff_lapse, coeff_shift,
-      ghost_unit_normal_one_form, ghost_unit_normal_vector, coords, time, f,
-      prescribe_outgoing_);
+      interior_boundary_lapse, interior_boundary_conformal_factor, coords, time,
+      f, prescribe_outgoing_);
 
   // Validate characteristic speed signs
   for (size_t s = 0; s < num_pts; ++s) {
@@ -744,11 +678,11 @@ std::optional<std::string> DirichletCharacteristics::dg_ghost(
   }
 
   // Write exterior ghost state
-  // Ghost four fields = coeff four fields
-  *conformal_metric = coeff_conformal_metric;
-  *conformal_factor = coeff_conformal_factor;
-  *lapse = coeff_lapse;
-  *shift = coeff_shift;
+  // Ghost four fields = boundary-integrated
+  *conformal_metric = interior_boundary_conformal_metric;
+  *conformal_factor = interior_boundary_conformal_factor;
+  *lapse = interior_boundary_lapse;
+  *shift = interior_boundary_shift;
 
   // Evolved variables from inverse transform
   *a_tilde = get<::Ccz4::Tags::ATilde<DataVector, Dim, Frame::Inertial>>(
@@ -768,17 +702,20 @@ std::optional<std::string> DirichletCharacteristics::dg_ghost(
   *field_d = std::move(result.field_d);
   *field_p = std::move(result.field_p);
 
-  // Enforce g_tilde^{jk} D_{ijk} = 0 w.r.t. coeff conformal metric
+  // Enforce g_tilde^{jk} D_{ijk} = 0 w.r.t. boundary-integrated conformal metric
   // (Jacobi formula for det(g_tilde) = 1)
   {
+    const auto [det_bnd_cm, inv_bnd_cm] =
+        determinant_and_inverse(interior_boundary_conformal_metric);
     tnsr::i<DataVector, Dim, Frame::Inertial> residual{};
     ::tenex::evaluate<ti::k>(
         make_not_null(&residual),
-        inv_coeff_cm(ti::I, ti::J) * (*field_d)(ti::k, ti::i, ti::j));
+        inv_bnd_cm(ti::I, ti::J) * (*field_d)(ti::k, ti::i, ti::j));
     ::tenex::update<ti::k, ti::i, ti::j>(
         field_d,
         (*field_d)(ti::k, ti::i, ti::j) -
-            residual(ti::k) * coeff_conformal_metric(ti::i, ti::j) / 3.0);
+            residual(ti::k) *
+                interior_boundary_conformal_metric(ti::i, ti::j) / 3.0);
   }
 
   // Boundary mode exterior values: zero
@@ -836,7 +773,7 @@ std::optional<std::string> DirichletCharacteristics::dg_time_derivative(
     const std::optional<
         tnsr::I<DataVector, 3, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
-    const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_conformal_metric,
+    const tnsr::ii<DataVector, 3, Frame::Inertial>& /*interior_conformal_metric*/,
     const Scalar<DataVector>& interior_conformal_factor,
     const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_a_tilde,
     const Scalar<DataVector>& interior_trace_extrinsic_curvature,
@@ -904,62 +841,14 @@ std::optional<std::string> DirichletCharacteristics::dg_time_derivative(
     component = 0.0;
   }
 
-  if (copy_second_order_fields_from_interior_) {
-    // No boundary-integrated evolution: zero all boundary dt corrections
-    for (auto& component : *dt_boundary_conformal_metric_correction) {
-      component = 0.0;
-    }
-    get(*dt_boundary_conformal_factor_correction) = 0.0;
-    get(*dt_boundary_lapse_correction) = 0.0;
-    for (auto& component : *dt_boundary_shift_correction) {
-      component = 0.0;
-    }
-    get(*dt_boundary_theta_correction) = 0.0;
-    for (auto& component : *dt_boundary_z_correction) {
-      component = 0.0;
-    }
-    return {};
-  }
-
-  // Boundary-integrated evolution: redo characteristic decomposition with
-  // boundary-integrated four fields as coefficients, then compute dt.
-
-  // Compute boundary unit normal from boundary-integrated metric
-  const auto [det_bnd_cm, inv_bnd_cm] =
-      determinant_and_inverse(interior_boundary_conformal_metric);
-
-  tnsr::II<DataVector, Dim, Frame::Inertial> inv_bnd_spatial_metric{};
-  ::tenex::evaluate<ti::I, ti::J>(make_not_null(&inv_bnd_spatial_metric),
-                                  interior_boundary_conformal_factor() *
-                                      interior_boundary_conformal_factor() *
-                                      inv_bnd_cm(ti::I, ti::J));
-
-  const size_t num_pts = get(interior_conformal_factor).size();
-  const Scalar<DataVector> bnd_mag_sq =
-      dot_product(normal_covector, normal_covector, inv_bnd_spatial_metric);
-  const DataVector bnd_inv_mag = 1.0 / sqrt(get(bnd_mag_sq));
-
-  tnsr::i<DataVector, Dim, Frame::Inertial> boundary_unit_normal_one_form(
-      num_pts);
-  for (size_t i = 0; i < Dim; ++i) {
-    boundary_unit_normal_one_form.get(i) = normal_covector.get(i) * bnd_inv_mag;
-  }
-
-  tnsr::I<DataVector, Dim, Frame::Inertial> boundary_unit_normal_vector{};
-  ::tenex::evaluate<ti::I>(make_not_null(&boundary_unit_normal_vector),
-                           inv_bnd_spatial_metric(ti::I, ti::J) *
-                               boundary_unit_normal_one_form(ti::j));
-
   // Run the full characteristic decomposition pipeline
   auto result = characteristic_decomposition_pipeline(
-      *analytic_prescription_, normal_covector, interior_conformal_metric,
+      *analytic_prescription_, normal_covector,
       interior_conformal_factor, interior_a_tilde,
       interior_trace_extrinsic_curvature, interior_theta, interior_gamma_hat,
       interior_lapse, interior_shift, interior_auxiliary_shift_b,
       interior_field_a, interior_field_b, interior_field_d, interior_field_p,
-      interior_boundary_conformal_metric, interior_boundary_conformal_factor,
-      interior_boundary_lapse, interior_boundary_shift,
-      boundary_unit_normal_one_form, boundary_unit_normal_vector, coords, time,
+      interior_boundary_lapse, interior_boundary_conformal_factor, coords, time,
       f_val, prescribe_outgoing_);
 
   // Extract char-mixed evolved variables
@@ -981,6 +870,8 @@ std::optional<std::string> DirichletCharacteristics::dg_time_derivative(
 
   // Enforce g_tilde^{jk} D_{ijk} = 0 w.r.t. boundary conformal metric
   // (Jacobi formula for det(g_tilde) = 1)
+  const auto [det_bnd_cm, inv_bnd_cm] =
+      determinant_and_inverse(interior_boundary_conformal_metric);
   {
     tnsr::i<DataVector, Dim, Frame::Inertial> residual{};
     ::tenex::evaluate<ti::k>(
