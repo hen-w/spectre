@@ -18,15 +18,12 @@
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Options/String.hpp"
-#include "PointwiseFunctions/GeneralRelativity/Tags.hpp"
 #include "PointwiseFunctions/InitialDataUtilities/InitialData.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/Serialization/CharmPupable.hpp"
 #include "Utilities/TMPL.hpp"
 
 /// \cond
-template <size_t Dim>
-class Mesh;
 namespace Tags {
 struct Time;
 }  // namespace Tags
@@ -38,73 +35,45 @@ struct Coordinates;
 
 namespace Ccz4::BoundaryConditions {
 /*!
- * \brief Ghost boundary condition that applies constraints and
- * radiation preserving boundary conditions (CRPBC) for SoCcz4.
+ * \brief Constraints and radiation preserving boundary conditions via
+ * characteristic decomposition.
  *
- * \details This is a `Ghost`-type boundary condition. The incoming
- * characteristic modes (UScalar3Minus, UVector2Minus, UScalar2Minus,
- * UTensorMinus) are evolved as independent variables whose dt is
- * computed algebraically from the CRPBC equations (in LdgTimeDerivative).
- * Their time-integrated values are used in `dg_ghost` to construct the
- * exterior state via inverse characteristic transform.
- *
- * Gauge modes (UVector3Minus, UScalar4Minus, UScalar5Minus) and
- * zero-speed modes (UVector1Zero, UScalar1Zero) are set from an
- * analytic prescription.
+ * This boundary condition is identical to DirichletCharacteristics, except that
+ * the analytic solution is evaluated at a fixed "initial time" rather than the
+ * current simulation time. This freezes the boundary data at the analytic
+ * values corresponding to the initial time while still using the characteristic
+ * mode-mixing machinery to replace incoming modes.
  */
 class ConstraintsRadiationPreserving final : public BoundaryCondition {
  public:
-  /// \brief What analytic solution/data to prescribe for gauge modes.
+  /// \brief What analytic solution/data to prescribe.
   struct AnalyticPrescription {
     static constexpr Options::String help =
-        "What analytic solution/data to prescribe for gauge modes.";
+        "What analytic solution/data to prescribe.";
     using type = std::unique_ptr<evolution::initial_data::InitialData>;
   };
-  /// \brief Debug flag: if true, prescribe ALL incoming modes from analytic
-  /// solution (same behavior as DirichletCharacteristics). The evolved
-  /// boundary-mode variables are ignored.
-  struct UseAnalyticForAll {
+  /// \brief Debug kill switch: prescribe analytic data on outgoing modes
+  /// instead of incoming ones.
+  struct PrescribeOutgoing {
     static constexpr Options::String help =
-        "If true, prescribe ALL incoming characteristic modes from the "
-        "analytic solution (like DirichletCharacteristics). For debugging.";
+        "If true, prescribe analytic values on OUTGOING modes (and leave "
+        "incoming modes at interior values). For debugging only.";
     using type = bool;
-    static type default_value() { return false; }
   };
-  /// \brief Debug flag: if true, set ALL incoming characteristic modes to
-  /// zero (instead of prescribing from the analytic solution or from the
-  /// CRPBC reconstruction). The evolved boundary-mode variables are ignored.
-  struct ZeroAllIncomingModes {
+  /// \brief The time at which to evaluate the analytic solution for the
+  /// boundary data.
+  struct InitialTime {
     static constexpr Options::String help =
-        "If true, set ALL incoming characteristic modes to zero. For "
-        "debugging. Mutually exclusive with UseAnalyticForAll.";
-    using type = bool;
-    static type default_value() { return false; }
-  };
-  struct PenaltyMultiplier {
-    static constexpr Options::String help =
-        "Multiplier for the theta-constraint penalty term at the boundary. "
-        "The effective penalty coefficient is PenaltyMultiplier / h, where h "
-        "is the grid spacing in the outward normal direction.";
+        "Time at which to evaluate the analytic solution for boundary data. "
+        "Set to 0.0 to freeze the boundary at initial data.";
     using type = double;
-    static type default_value() { return 1.0; }
-  };
-  /// \brief If true, treat boundary-integrated Theta and Z_i as exactly zero
-  /// in the CRPBC characteristic mode mixing.
-  struct ZeroBoundaryThetaAndZ {
-    static constexpr Options::String help =
-        "If true, treat boundary-integrated Theta and Z_i as zero in the "
-        "CRPBC mode reconstruction (UScalar3Minus, UVector2Minus, "
-        "UScalar2Minus). For testing whether constraint fields drive "
-        "instability.";
-    using type = bool;
-    static type suggested_value() { return false; }
   };
   using options =
-      tmpl::list<AnalyticPrescription, UseAnalyticForAll, ZeroAllIncomingModes,
-                 PenaltyMultiplier, ZeroBoundaryThetaAndZ>;
+      tmpl::list<AnalyticPrescription, PrescribeOutgoing, InitialTime>;
   static constexpr Options::String help{
       "Constraints and radiation preserving boundary conditions. "
-      "Uses Ghost BC with time-integrated incoming characteristic modes."};
+      "Like DirichletCharacteristics but evaluates the analytic solution at "
+      "a fixed initial time rather than the current simulation time."};
 
   ConstraintsRadiationPreserving() = default;
   ConstraintsRadiationPreserving(ConstraintsRadiationPreserving&&) = default;
@@ -115,14 +84,12 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
       const ConstraintsRadiationPreserving&);
   ~ConstraintsRadiationPreserving() override = default;
 
+  explicit ConstraintsRadiationPreserving(CkMigrateMessage* msg);
+
   explicit ConstraintsRadiationPreserving(
       std::unique_ptr<evolution::initial_data::InitialData>
           analytic_prescription,
-      bool use_analytic_for_all = false, bool zero_all_incoming_modes = false,
-      double penalty_multiplier = 1.0,
-      bool zero_boundary_theta_and_z = false);
-
-  explicit ConstraintsRadiationPreserving(CkMigrateMessage* msg);
+      bool prescribe_outgoing, double initial_time);
 
   WRAPPED_PUPable_decl_base_template(
       domain::BoundaryConditions::BoundaryCondition,
@@ -136,19 +103,16 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
 
   void pup(PUP::er& p) override;
 
-  double penalty_multiplier() const { return penalty_multiplier_; }
-
-  // DG interface: Ghost BC providing external state
+  // DG interface: Ghost BC providing external state for LDG boundary
+  // corrections. Incoming characteristic modes are replaced with analytic
+  // target values evaluated at the initial time.
   using dg_interior_evolved_variables_tags =
       ::Ccz4::fd::System::variables_tag_list;
   using dg_interior_temporary_tags =
       tmpl::list<domain::Tags::Coordinates<3, Frame::Inertial>>;
   using dg_interior_dt_vars_tags = tmpl::list<>;
   using dg_gridless_tags =
-      tmpl::list<::Tags::Time, ::Ccz4::fd::Tags::EvolveLapseAndShift,
-                 domain::Tags::Mesh<3>,
-                 domain::Tags::InverseJacobian<3, Frame::ElementLogical,
-                                               Frame::Inertial>>;
+      tmpl::list<::Tags::Time, ::Ccz4::fd::Tags::EvolveLapseAndShift>;
 
   std::optional<std::string> dg_ghost(
       // not_null exterior outputs (variables_tag_list order):
@@ -177,7 +141,7 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
       const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&
           face_mesh_velocity,
       const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
-      // dg_interior_evolved_variables_tags (all 17 interior vars):
+      // dg_interior_evolved_variables_tags (all interior vars):
       const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_conformal_metric,
       const Scalar<DataVector>& interior_conformal_factor,
       const tnsr::ii<DataVector, 3, Frame::Inertial>& interior_a_tilde,
@@ -203,10 +167,7 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
       // dg_interior_temporary_tags:
       const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
       // dg_gridless_tags:
-      double time, bool evolve_lapse_and_shift,
-      const Mesh<3>& volume_mesh,
-      const InverseJacobian<DataVector, 3, Frame::ElementLogical,
-                            Frame::Inertial>& volume_inv_jac) const;
+      double time, bool evolve_lapse_and_shift) const;
 
   std::optional<std::string> dg_time_derivative(
       // dt correction outputs (variables_tag_list order):
@@ -258,8 +219,7 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
       const tnsr::I<DataVector, 3, Frame::Inertial>& interior_gamma_hat,
       const Scalar<DataVector>& interior_lapse,
       const tnsr::I<DataVector, 3, Frame::Inertial>& interior_shift,
-      const tnsr::I<DataVector, 3, Frame::Inertial>&
-          interior_auxiliary_shift_b,
+      const tnsr::I<DataVector, 3, Frame::Inertial>& interior_auxiliary_shift_b,
       const tnsr::i<DataVector, 3, Frame::Inertial>& interior_field_a,
       const tnsr::iJ<DataVector, 3, Frame::Inertial>& interior_field_b,
       const tnsr::ijj<DataVector, 3, Frame::Inertial>& interior_field_d,
@@ -276,10 +236,7 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
       // dg_interior_temporary_tags:
       const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
       // dg_gridless_tags:
-      double time, bool evolve_lapse_and_shift,
-      const Mesh<3>& volume_mesh,
-      const InverseJacobian<DataVector, 3, Frame::ElementLogical,
-                            Frame::Inertial>& volume_inv_jac) const;
+      double time, bool evolve_lapse_and_shift) const;
 
   // FD interface: not implemented
   using fd_interior_evolved_variables_tags = tmpl::list<>;
@@ -299,9 +256,7 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
 
  private:
   std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription_;
-  bool use_analytic_for_all_{false};
-  bool zero_all_incoming_modes_{false};
-  double penalty_multiplier_{1.0};
-  bool zero_boundary_theta_and_z_{false};
+  bool prescribe_outgoing_{false};
+  double initial_time_{0.0};
 };
 }  // namespace Ccz4::BoundaryConditions

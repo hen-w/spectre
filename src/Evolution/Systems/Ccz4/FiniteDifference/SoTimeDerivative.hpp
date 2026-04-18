@@ -1044,7 +1044,7 @@ struct SoTimeDerivative {
                                   ConstraintsRadiationPreserving*>(
                      external_bcs.at(Direction<Dim>::upper_zeta()).get());
              crpbc_ptr != nullptr) {
-      const double penalty_multiplier = crpbc_ptr->penalty_multiplier();
+      const double penalty_multiplier = 1.0;
       db::mutate<dt_variables_tag>(
           [&](const auto dt_vars_ptr, const auto& inertial_coords,
               const auto& evolved_vars,
