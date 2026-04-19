@@ -8,6 +8,7 @@ set(LIBRARY_SOURCES
   Test_AddSimpleTags.cpp
   Test_Goto.cpp
   Test_InitializeItems.cpp
+  Test_LocalizedPerturbation.cpp
   Test_MutateApply.cpp
   Test_RandomizeVariables.cpp
   Test_SetData.cpp

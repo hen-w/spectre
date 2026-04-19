@@ -18,6 +18,7 @@ spectre_target_headers(
   Goto.hpp
   InitializeItems.hpp
   LimiterActions.hpp
+  LocalizedPerturbation.hpp
   MutateApply.hpp
   RandomizeVariables.hpp
   SetData.hpp

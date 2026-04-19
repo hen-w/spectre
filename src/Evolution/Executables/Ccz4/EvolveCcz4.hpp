@@ -78,6 +78,7 @@
 #include "ParallelAlgorithms/Actions/FilterAction.hpp"
 #include "ParallelAlgorithms/Actions/InitializeItems.hpp"
 #include "ParallelAlgorithms/Actions/MutateApply.hpp"
+#include "ParallelAlgorithms/Actions/LocalizedPerturbation.hpp"
 #include "ParallelAlgorithms/Actions/RandomizeVariables.hpp"
 #include "ParallelAlgorithms/Actions/TerminatePhase.hpp"
 #include "ParallelAlgorithms/Events/Completion.hpp"
@@ -129,6 +130,8 @@ struct EvolutionMetavars {
 
   // For labeling the yaml option for RandomizeVariables
   struct RandomizeInitialData {};
+  // For labeling the yaml option for LocalizedPerturbation
+  struct PerturbInitialData {};
 
   struct FilterEvolvedVariables {};
 
@@ -349,6 +352,8 @@ struct EvolutionMetavars {
           domain::Tags::Coordinates<volume_dim, Frame::ElementLogical>>,
       ::Actions::RandomizeVariables<typename system::variables_tag,
                                     RandomizeInitialData>,
+      ::Actions::LocalizedPerturbation<typename system::variables_tag,
+                                       PerturbInitialData>,
 
       tmpl::conditional_t<
           use_dg_subcell,
