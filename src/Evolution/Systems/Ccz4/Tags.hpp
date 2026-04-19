@@ -549,5 +549,15 @@ template <typename DataType, size_t Dim, typename Frame>
 struct BoundaryZ : db::SimpleTag {
   using type = tnsr::i<DataType, Dim, Frame>;
 };
+/// \brief Pointwise constraint energy monitor for the CCZ4 system.
+///
+/// \details Defined as
+/// \f$\sqrt{\Theta^2 + \gamma^{ij} Z_i Z_j + \mathcal{H}^2
+///   + \gamma_{ij} \mathcal{M}^i \mathcal{M}^j}\f$
+/// where contractions use the physical spatial metric.
+template <typename DataType>
+struct ConstraintEnergy : db::SimpleTag {
+  using type = Scalar<DataType>;
+};
 }  // namespace Tags
 }  // namespace Ccz4

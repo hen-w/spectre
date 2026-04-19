@@ -9,6 +9,9 @@ set(LIBRARY_SOURCES
   # BoundaryConditions/Test_DirichletAnalytic.cpp
   BoundaryConditions/Test_ConstraintsRadiationPreserving.cpp
   # BoundaryConditions/Test_Sommerfeld.cpp
+  FiniteDifference/Test_ConstraintEnergyCompute.cpp
+  FiniteDifference/Test_HamiltonianConstraintCompute.cpp
+  FiniteDifference/Test_MomentumConstraintCompute.cpp
   FiniteDifference/Test_SpatialZ4ConstraintUpCompute.cpp
   # FiniteDifference/Test_ApplyFilter.cpp
   # FiniteDifference/Test_BoundaryConditionGhostData.cpp

@@ -33,6 +33,9 @@
 #include "Evolution/Initialization/SetVariables.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryCorrections/Factory.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/ConstraintEnergyCompute.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/HamiltonianConstraintCompute.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/MomentumConstraintCompute.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/SpatialZ4ConstraintUpCompute.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/ApplyFilter.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/ComputeCrpbcBoundaryModeDt.hpp"
@@ -146,7 +149,11 @@ struct EvolutionMetavars {
           typename system::variables_tag::tags_list, error_tags,
           tmpl::list<::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>,
                      ::Ccz4::Tags::DetConformalSpatialMetric<DataVector>,
-                     ::Ccz4::Tags::TraceATilde<DataVector>>,
+                     ::Ccz4::Tags::TraceATilde<DataVector>,
+                     gr::Tags::HamiltonianConstraint<DataVector>,
+                     gr::Tags::MomentumConstraint<DataVector, 3,
+                                                  Frame::Inertial>,
+                     ::Ccz4::Tags::ConstraintEnergy<DataVector>>,
           typename db::add_tag_prefix<::Tags::dt,
                                       system::variables_tag>::tags_list,
           tmpl::conditional_t<
@@ -192,7 +199,10 @@ struct EvolutionMetavars {
       analytic_compute, error_compute,
       ::Ccz4::fd::SpatialZ4ConstraintUpCompute,
       ::Ccz4::fd::DetConformalSpatialMetricCompute,
-      ::Ccz4::fd::TraceATildeCompute>;
+      ::Ccz4::fd::TraceATildeCompute,
+      ::Ccz4::fd::HamiltonianConstraintCompute,
+      ::Ccz4::fd::MomentumConstraintCompute,
+      ::Ccz4::fd::ConstraintEnergyCompute>;
 
   struct factory_creation
       : tt::ConformsTo<Options::protocols::FactoryCreation> {

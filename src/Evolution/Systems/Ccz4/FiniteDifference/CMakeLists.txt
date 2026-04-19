@@ -41,8 +41,11 @@ spectre_target_headers(
   EnforceTracelessDerivConformalMetric.hpp
   EnforceTracelessDtConformalMetric.hpp
   Filter.hpp
+  ConstraintEnergyCompute.hpp
   GhostData.hpp
+  HamiltonianConstraintCompute.hpp
   LdgTimeDerivative.hpp
+  MomentumConstraintCompute.hpp
   OverwriteExternalBoundaryDt.hpp
   OverwriteExternalBoundaryDtDirichlet.hpp
   RadiationCharacteristics.hpp
