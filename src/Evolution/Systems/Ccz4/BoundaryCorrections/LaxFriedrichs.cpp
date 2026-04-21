@@ -145,6 +145,7 @@ double LaxFriedrichs<Dim>::dg_package_data(
 }
 
 template <size_t Dim>
+template <bool ForExternalBoundary>
 void LaxFriedrichs<Dim>::dg_boundary_terms(
     gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
         conformal_metric_boundary_correction,
@@ -252,9 +253,11 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
           conformal_factor_int, 0.0);
 
   constexpr double f_param = ::Ccz4::fd::System::f;
+  const double effective_tau1 = ForExternalBoundary ? 0.0 : tau1_;
+  const double effective_tau2 = ForExternalBoundary ? 1.0 : tau2_;
   Scalar<DataVector> tau1_eff;
   get(tau1_eff) =
-      tau1_ * max(get(inverse_grid_spacing_int), get(inverse_grid_spacing_ext));
+      effective_tau1 * max(get(inverse_grid_spacing_int), get(inverse_grid_spacing_ext));
   // boundary corrections for conformal metric, conformal factor, lapse,
   // and shift are identically zero.
   *conformal_metric_boundary_correction =
@@ -547,7 +550,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       field_a_ext, inverse_conformal_metric_ext, field_d_ext,
       gamma_hat_dot_normal_ext, field_p_ext);
   ::tenex::evaluate(trace_extrinsic_curvature_boundary_correction,
-                    -0.5 * tau2_ * (trace_extrinsic_curvature_flux_dot_normal_ext() +
+                    -0.5 * effective_tau2 * (trace_extrinsic_curvature_flux_dot_normal_ext() +
                             trace_extrinsic_curvature_flux_dot_normal_int()) -
                         0.5 * tau1_eff() *
                             (trace_extrinsic_curvature_ext() -
@@ -568,7 +571,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       inverse_conformal_metric_dot_normal_ext, inverse_conformal_metric_ext);
   ::tenex::evaluate<ti::i, ti::j>(
       a_tilde_boundary_correction,
-      -0.5 * tau2_ * (a_tilde_flux_dot_normal_ext(ti::i, ti::j) +
+      -0.5 * effective_tau2 * (a_tilde_flux_dot_normal_ext(ti::i, ti::j) +
               a_tilde_flux_dot_normal_int(ti::i, ti::j)) -
           0.5 * tau1_eff() *
               (a_tilde_ext(ti::i, ti::j) - a_tilde_int(ti::i, ti::j)));
@@ -584,7 +587,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       gamma_hat_dot_normal_ext, field_p_ext, inverse_conformal_metric_ext);
   ::tenex::evaluate(
       theta_boundary_correction,
-      -0.5 * tau2_ * (theta_flux_dot_normal_ext() + theta_flux_dot_normal_int()) -
+      -0.5 * effective_tau2 * (theta_flux_dot_normal_ext() + theta_flux_dot_normal_int()) -
           0.5 * tau1_eff() * (theta_ext() - theta_int()));
 
   // compute boundary correction for gamma_hat
@@ -600,7 +603,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       normal_covector_ext);
   ::tenex::evaluate<ti::I>(
       gamma_hat_boundary_correction,
-      -0.5 * tau2_ * (gamma_hat_flux_dot_normal_ext(ti::I) +
+      -0.5 * effective_tau2 * (gamma_hat_flux_dot_normal_ext(ti::I) +
               gamma_hat_flux_dot_normal_int(ti::I)) -
           0.5 * tau1_eff() * (gamma_hat_ext(ti::I) - gamma_hat_int(ti::I)));
 
@@ -617,7 +620,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       normal_covector_ext);
   ::tenex::evaluate<ti::I>(
       auxiliary_shift_b_boundary_correction,
-      -0.5 * tau2_ * (b_flux_dot_normal_ext(ti::I) + b_flux_dot_normal_int(ti::I)) -
+      -0.5 * effective_tau2 * (b_flux_dot_normal_ext(ti::I) + b_flux_dot_normal_int(ti::I)) -
           0.5 * tau1_eff() *
               (auxiliary_shift_b_ext(ti::I) - auxiliary_shift_b_int(ti::I)));
 
@@ -630,7 +633,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       theta_ext, normal_covector_ext);
   ::tenex::evaluate<ti::k>(
       field_a_boundary_correction,
-      -0.5 * tau2_ * (field_a_flux_dot_normal_int(ti::k) +
+      -0.5 * effective_tau2 * (field_a_flux_dot_normal_int(ti::k) +
               field_a_flux_dot_normal_ext(ti::k)) -
           0.5 * tau1_eff() * (field_a_ext(ti::k) - field_a_int(ti::k)));
 
@@ -643,7 +646,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
                               auxiliary_shift_b_ext, normal_covector_ext);
   ::tenex::evaluate<ti::k, ti::I>(
       field_b_boundary_correction,
-      -0.5 * tau2_ * (field_b_flux_dot_normal_int(ti::k, ti::I) +
+      -0.5 * effective_tau2 * (field_b_flux_dot_normal_int(ti::k, ti::I) +
               field_b_flux_dot_normal_ext(ti::k, ti::I)) -
           0.5 * tau1_eff() *
               (field_b_ext(ti::k, ti::I) - field_b_int(ti::k, ti::I)));
@@ -657,7 +660,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       normal_covector_ext, lapse_ext, a_tilde_ext);
   ::tenex::evaluate<ti::k, ti::i, ti::j>(
       field_d_boundary_correction,
-      -0.5 * tau2_ * (field_d_flux_dot_normal_int(ti::k, ti::i, ti::j) +
+      -0.5 * effective_tau2 * (field_d_flux_dot_normal_int(ti::k, ti::i, ti::j) +
               field_d_flux_dot_normal_ext(ti::k, ti::i, ti::j)) -
           0.5 * tau1_eff() *
               (field_d_ext(ti::k, ti::i, ti::j) -
@@ -672,7 +675,7 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
       trace_extrinsic_curvature_ext, field_b_ext, normal_covector_ext);
   ::tenex::evaluate<ti::k>(
       field_p_boundary_correction,
-      -0.5 * tau2_ * (field_p_flux_dot_normal_int(ti::k) +
+      -0.5 * effective_tau2 * (field_p_flux_dot_normal_int(ti::k) +
               field_p_flux_dot_normal_ext(ti::k)) -
           0.5 * tau1_eff() * (field_p_ext(ti::k) - field_p_int(ti::k)));
 }
@@ -910,7 +913,130 @@ PUP::able::PUP_ID LaxFriedrichs<Dim>::my_PUP_ID = 0;
 
 #define DIM(data) BOOST_PP_TUPLE_ELEM(0, data)
 
-#define INSTANTIATION(_, data) template class LaxFriedrichs<DIM(data)>;
+#define INSTANTIATION(_, data)                                                \
+  template class LaxFriedrichs<DIM(data)>;                                     \
+  template void LaxFriedrichs<DIM(data)>::dg_boundary_terms<false>(            \
+      gsl::not_null<tnsr::ii<DataVector, DIM(data), Frame::Inertial>*>,        \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<tnsr::ii<DataVector, DIM(data), Frame::Inertial>*>,        \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<tnsr::I<DataVector, DIM(data), Frame::Inertial>*>,         \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<tnsr::I<DataVector, DIM(data), Frame::Inertial>*>,         \
+      gsl::not_null<tnsr::I<DataVector, DIM(data), Frame::Inertial>*>,         \
+      gsl::not_null<tnsr::i<DataVector, DIM(data), Frame::Inertial>*>,         \
+      gsl::not_null<tnsr::iJ<DataVector, DIM(data), Frame::Inertial>*>,        \
+      gsl::not_null<tnsr::ijj<DataVector, DIM(data), Frame::Inertial>*>,       \
+      gsl::not_null<tnsr::i<DataVector, DIM(data), Frame::Inertial>*>,         \
+      gsl::not_null<tnsr::ii<DataVector, DIM(data), Frame::Inertial>*>,        \
+      gsl::not_null<tnsr::ii<DataVector, DIM(data), Frame::Inertial>*>,        \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<tnsr::I<DataVector, DIM(data), Frame::Inertial>*>,         \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<tnsr::i<DataVector, DIM(data), Frame::Inertial>*>,         \
+      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const Scalar<DataVector>&,                                               \
+      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const Scalar<DataVector>&, const Scalar<DataVector>&,                    \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const Scalar<DataVector>&,                                               \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::iJ<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const tnsr::ijj<DataVector, DIM(data), Frame::Inertial>&,               \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const Scalar<DataVector>&, const Scalar<DataVector>&,                    \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const Scalar<DataVector>&,                                               \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const Scalar<DataVector>&,                                               \
+      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const Scalar<DataVector>&,                                               \
+      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const Scalar<DataVector>&, const Scalar<DataVector>&,                    \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const Scalar<DataVector>&,                                               \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::iJ<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const tnsr::ijj<DataVector, DIM(data), Frame::Inertial>&,               \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const Scalar<DataVector>&, const Scalar<DataVector>&,                    \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const Scalar<DataVector>&,                                               \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const Scalar<DataVector>&, dg::Formulation) const;                       \
+  template void LaxFriedrichs<DIM(data)>::dg_boundary_terms<true>(             \
+      gsl::not_null<tnsr::ii<DataVector, DIM(data), Frame::Inertial>*>,        \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<tnsr::ii<DataVector, DIM(data), Frame::Inertial>*>,        \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<tnsr::I<DataVector, DIM(data), Frame::Inertial>*>,         \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<tnsr::I<DataVector, DIM(data), Frame::Inertial>*>,         \
+      gsl::not_null<tnsr::I<DataVector, DIM(data), Frame::Inertial>*>,         \
+      gsl::not_null<tnsr::i<DataVector, DIM(data), Frame::Inertial>*>,         \
+      gsl::not_null<tnsr::iJ<DataVector, DIM(data), Frame::Inertial>*>,        \
+      gsl::not_null<tnsr::ijj<DataVector, DIM(data), Frame::Inertial>*>,       \
+      gsl::not_null<tnsr::i<DataVector, DIM(data), Frame::Inertial>*>,         \
+      gsl::not_null<tnsr::ii<DataVector, DIM(data), Frame::Inertial>*>,        \
+      gsl::not_null<tnsr::ii<DataVector, DIM(data), Frame::Inertial>*>,        \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<tnsr::I<DataVector, DIM(data), Frame::Inertial>*>,         \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<tnsr::i<DataVector, DIM(data), Frame::Inertial>*>,         \
+      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const Scalar<DataVector>&,                                               \
+      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const Scalar<DataVector>&, const Scalar<DataVector>&,                    \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const Scalar<DataVector>&,                                               \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::iJ<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const tnsr::ijj<DataVector, DIM(data), Frame::Inertial>&,               \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const Scalar<DataVector>&, const Scalar<DataVector>&,                    \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const Scalar<DataVector>&,                                               \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const Scalar<DataVector>&,                                               \
+      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const Scalar<DataVector>&,                                               \
+      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const Scalar<DataVector>&, const Scalar<DataVector>&,                    \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const Scalar<DataVector>&,                                               \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::iJ<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const tnsr::ijj<DataVector, DIM(data), Frame::Inertial>&,               \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
+      const Scalar<DataVector>&, const Scalar<DataVector>&,                    \
+      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const Scalar<DataVector>&,                                               \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
+      const Scalar<DataVector>&, dg::Formulation) const;
 
 GENERATE_INSTANTIATIONS(INSTANTIATION, (3))
 

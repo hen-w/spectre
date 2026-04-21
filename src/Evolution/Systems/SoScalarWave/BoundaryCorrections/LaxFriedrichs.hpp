@@ -93,6 +93,7 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       const std::optional<Scalar<DataVector>>& /*normal_dot_mesh_velocity*/,
       const Direction<Dim>& /*face_direction*/) const;
 
+  template <bool ForExternalBoundary = false>
   void dg_boundary_terms(
       gsl::not_null<Scalar<DataVector>*> psi_boundary_correction,
       gsl::not_null<Scalar<DataVector>*> pi_boundary_correction,

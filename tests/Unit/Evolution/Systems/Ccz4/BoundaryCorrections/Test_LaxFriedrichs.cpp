@@ -765,7 +765,7 @@ void test_dg_boundary_terms() {
 
   auto expected_corr_K =
       make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  get(expected_corr_K) = -0.5 * (k_flux_ext + k_flux_int) -
+  get(expected_corr_K) = -0.5 * tau2 * (k_flux_ext + k_flux_int) -
                          0.5 * tau1_eff *
                              (get(trace_extrinsic_curvature_ext) -
                               get(trace_extrinsic_curvature_int));
@@ -810,7 +810,7 @@ void test_dg_boundary_terms() {
 
   auto expected_corr_theta =
       make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  get(expected_corr_theta) = -0.5 * (theta_flux_ext + theta_flux_int) -
+  get(expected_corr_theta) = -0.5 * tau2 * (theta_flux_ext + theta_flux_int) -
                              0.5 * tau1_eff * (get(theta_ext) - get(theta_int));
   CHECK_ITERABLE_APPROX(corr_theta, expected_corr_theta);
 
@@ -906,7 +906,7 @@ void test_dg_boundary_terms() {
   for (size_t i = 0; i < 3; ++i) {
     for (size_t j = i; j < 3; ++j) {
       expected_corr_a_tilde.get(i, j) =
-          -0.5 * (at_flux_ext.get(i, j) + at_flux_int.get(i, j)) -
+          -0.5 * tau2 * (at_flux_ext.get(i, j) + at_flux_int.get(i, j)) -
           0.5 * tau1_eff * (a_tilde_ext.get(i, j) - a_tilde_int.get(i, j));
     }
   }
@@ -963,7 +963,7 @@ void test_dg_boundary_terms() {
           DataVector(face_size), 0.0);
   for (size_t I = 0; I < 3; ++I) {
     expected_corr_gamma_hat.get(I) =
-        -0.5 * (gh_flux_ext.get(I) + gh_flux_int.get(I)) -
+        -0.5 * tau2 * (gh_flux_ext.get(I) + gh_flux_int.get(I)) -
         0.5 * tau1_eff * (gamma_hat_ext.get(I) - gamma_hat_int.get(I));
   }
   CHECK_ITERABLE_APPROX(corr_gamma_hat, expected_corr_gamma_hat);
@@ -975,7 +975,7 @@ void test_dg_boundary_terms() {
           DataVector(face_size), 0.0);
   for (size_t I = 0; I < 3; ++I) {
     expected_corr_b.get(I) =
-        -0.5 * (gh_flux_ext.get(I) + gh_flux_int.get(I)) -
+        -0.5 * tau2 * (gh_flux_ext.get(I) + gh_flux_int.get(I)) -
         0.5 * tau1_eff *
             (auxiliary_shift_b_ext.get(I) - auxiliary_shift_b_int.get(I));
   }
@@ -1007,7 +1007,7 @@ void test_dg_boundary_terms() {
           DataVector(face_size), 0.0);
   for (size_t k = 0; k < 3; ++k) {
     expected_corr_field_a.get(k) =
-        -0.5 * (fa_flux_ext.get(k) + fa_flux_int.get(k)) -
+        -0.5 * tau2 * (fa_flux_ext.get(k) + fa_flux_int.get(k)) -
         0.5 * tau1_eff * (field_a_ext.get(k) - field_a_int.get(k));
   }
   CHECK_ITERABLE_APPROX(corr_field_a, expected_corr_field_a);
@@ -1044,7 +1044,7 @@ void test_dg_boundary_terms() {
   for (size_t k = 0; k < 3; ++k) {
     for (size_t I = 0; I < 3; ++I) {
       expected_corr_field_b.get(k, I) =
-          -0.5 * (fb_flux_ext.get(k, I) + fb_flux_int.get(k, I)) -
+          -0.5 * tau2 * (fb_flux_ext.get(k, I) + fb_flux_int.get(k, I)) -
           0.5 * tau1_eff * (field_b_ext.get(k, I) - field_b_int.get(k, I));
     }
   }
@@ -1106,7 +1106,8 @@ void test_dg_boundary_terms() {
     for (size_t i = 0; i < 3; ++i) {
       for (size_t j = i; j < 3; ++j) {
         expected_corr_field_d.get(k, i, j) =
-            -0.5 * (fd_flux_ext.get(k, i, j) + fd_flux_int.get(k, i, j)) -
+            -0.5 * tau2 *
+                (fd_flux_ext.get(k, i, j) + fd_flux_int.get(k, i, j)) -
             0.5 * tau1_eff *
                 (field_d_ext.get(k, i, j) - field_d_int.get(k, i, j));
       }
@@ -1149,7 +1150,7 @@ void test_dg_boundary_terms() {
           DataVector(face_size), 0.0);
   for (size_t k = 0; k < 3; ++k) {
     expected_corr_field_p.get(k) =
-        -0.5 * (fp_flux_ext.get(k) + fp_flux_int.get(k)) -
+        -0.5 * tau2 * (fp_flux_ext.get(k) + fp_flux_int.get(k)) -
         0.5 * tau1_eff * (field_p_ext.get(k) - field_p_int.get(k));
   }
   CHECK_ITERABLE_APPROX(corr_field_p, expected_corr_field_p);
@@ -1311,8 +1312,7 @@ void test_dg_auxiliary_boundary_terms() {
   CHECK_ITERABLE_APPROX(corr_auxiliary_shift_b, zero_I);
 
   // --- Check nonzero auxiliary corrections ---
-  // tau2_eff is just tau2 (no grid spacing multiplication in production code)
-  const double tau2_eff = tau2;
+  // The auxiliary pass uses pure central flux (no tau1/tau2 penalties).
 
   const DataVector log_lapse_int = log(get(lapse_int));
   const DataVector log_lapse_ext = log(get(lapse_ext));
@@ -1326,8 +1326,7 @@ void test_dg_auxiliary_boundary_terms() {
   for (size_t i = 0; i < 3; ++i) {
     expected_corr_field_a.get(i) =
         0.5 * (log_lapse_int * normal_covector_int.get(i) +
-               log_lapse_ext * normal_covector_ext.get(i)) -
-        0.5 * tau2_eff * (field_a_ext.get(i) - field_a_int.get(i));
+               log_lapse_ext * normal_covector_ext.get(i));
   }
   CHECK_ITERABLE_APPROX(corr_field_a, expected_corr_field_a);
 
@@ -1339,8 +1338,7 @@ void test_dg_auxiliary_boundary_terms() {
     for (size_t J = 0; J < 3; ++J) {
       expected_corr_field_b.get(i, J) =
           0.5 * (shift_int.get(J) * normal_covector_int.get(i) +
-                 shift_ext.get(J) * normal_covector_ext.get(i)) -
-          0.5 * tau2_eff * (field_b_ext.get(i, J) - field_b_int.get(i, J));
+                 shift_ext.get(J) * normal_covector_ext.get(i));
     }
   }
   CHECK_ITERABLE_APPROX(corr_field_b, expected_corr_field_b);
@@ -1357,9 +1355,7 @@ void test_dg_auxiliary_boundary_terms() {
             0.5 * (0.5 * conformal_metric_int.get(j, k) *
                        normal_covector_int.get(i) +
                    0.5 * conformal_metric_ext.get(j, k) *
-                       normal_covector_ext.get(i)) -
-            0.5 * tau2_eff *
-                (field_d_ext.get(i, j, k) - field_d_int.get(i, j, k));
+                       normal_covector_ext.get(i));
       }
     }
   }
@@ -1373,8 +1369,7 @@ void test_dg_auxiliary_boundary_terms() {
   for (size_t i = 0; i < 3; ++i) {
     expected_corr_field_p.get(i) =
         0.5 * (log_cf_int * normal_covector_int.get(i) +
-               log_cf_ext * normal_covector_ext.get(i)) -
-        0.5 * tau2_eff * (field_p_ext.get(i) - field_p_int.get(i));
+               log_cf_ext * normal_covector_ext.get(i));
   }
   CHECK_ITERABLE_APPROX(corr_field_p, expected_corr_field_p);
 }

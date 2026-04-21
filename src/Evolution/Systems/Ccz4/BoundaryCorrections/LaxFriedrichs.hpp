@@ -178,6 +178,7 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       const Direction<Dim>& face_direction, const Mesh<Dim>& volume_mesh,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& volume_coords) const;
 
+  template <bool ForExternalBoundary = false>
   void dg_boundary_terms(
       gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
           conformal_metric_boundary_correction,

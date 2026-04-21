@@ -611,7 +611,7 @@ void apply_boundary_condition_on_face(
           get<PackageFieldTags>(external_packaged_data)..., dg_formulation,
           get<BoundaryTermsVolumeTags>(*box)...);
     } else {
-      boundary_correction.dg_boundary_terms(
+      boundary_correction.template dg_boundary_terms<true>(
           make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
               boundary_corrections_on_face))...,
           get<PackageFieldTags>(internal_packaged_data)...,

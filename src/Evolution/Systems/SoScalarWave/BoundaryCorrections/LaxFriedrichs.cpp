@@ -65,6 +65,7 @@ double LaxFriedrichs<Dim>::dg_package_data(
 }
 
 template <size_t Dim>
+template <bool ForExternalBoundary>
 void LaxFriedrichs<Dim>::dg_boundary_terms(
     const gsl::not_null<Scalar<DataVector>*> psi_boundary_correction,
     const gsl::not_null<Scalar<DataVector>*> pi_boundary_correction,
@@ -143,7 +144,24 @@ PUP::able::PUP_ID LaxFriedrichs<Dim>::my_PUP_ID = 0;
 
 #define DIM(data) BOOST_PP_TUPLE_ELEM(0, data)
 
-#define INSTANTIATION(_, data) template class LaxFriedrichs<DIM(data)>;
+#define INSTANTIATION(_, data)                                                \
+  template class LaxFriedrichs<DIM(data)>;                                     \
+  template void LaxFriedrichs<DIM(data)>::dg_boundary_terms<false>(            \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<tnsr::i<DataVector, DIM(data), Frame::Inertial>*>,         \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      const Scalar<DataVector>&, const Scalar<DataVector>&,                    \
+      const Scalar<DataVector>&, const Scalar<DataVector>&,                    \
+      dg::Formulation) const;                                                  \
+  template void LaxFriedrichs<DIM(data)>::dg_boundary_terms<true>(             \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      gsl::not_null<tnsr::i<DataVector, DIM(data), Frame::Inertial>*>,         \
+      gsl::not_null<Scalar<DataVector>*>,                                      \
+      const Scalar<DataVector>&, const Scalar<DataVector>&,                    \
+      const Scalar<DataVector>&, const Scalar<DataVector>&,                    \
+      dg::Formulation) const;
 
 GENERATE_INSTANTIATIONS(INSTANTIATION, (1, 2, 3))
 

@@ -1205,7 +1205,7 @@ struct ApplyBoundaryCorrections {
       const tuples::TaggedTuple<detail::TemporaryReference<AllVolumeArgs>...>&
           volume_args_tuple,
       tmpl::list<VolumeTagsForCorrection...> /*meta*/) {
-    boundary_correction.dg_boundary_terms(
+    boundary_correction.template dg_boundary_terms<false>(
         make_not_null(
             &get<BoundaryCorrectionTags>(*boundary_corrections_on_mortar))...,
         get<Tags>(local_boundary_data)..., get<Tags>(neighbor_boundary_data)...,
