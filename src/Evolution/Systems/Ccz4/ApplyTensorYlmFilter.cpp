@@ -5,6 +5,8 @@
 
 #include <cstddef>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/EagerMath/DeterminantAndInverse.hpp"
@@ -13,7 +15,9 @@
 #include "NumericalAlgorithms/SphericalHarmonics/Spherepack.hpp"
 #include "NumericalAlgorithms/SphericalHarmonics/SpherepackCache.hpp"
 #include "NumericalAlgorithms/SphericalHarmonics/TensorYlmFilter.hpp"
+#include "Options/Options.hpp"
 #include "Utilities/ErrorHandling/Assert.hpp"
+#include "Utilities/Serialization/PupStlCpp17.hpp"
 #include "Utilities/TMPL.hpp"
 
 #include "NumericalAlgorithms/SphericalHarmonics/ApplyTensorYlmFilter.tpp"
@@ -235,12 +239,14 @@ TensorYlmFilter::TensorYlmFilter(CkMigrateMessage* msg)
 TensorYlmFilter::TensorYlmFilter(const TensorYlmFilter& rhs)
     : Filters::Filter(rhs),
       num_modes_to_kill_(rhs.num_modes_to_kill_),
-      half_power_(rhs.half_power_) {}
+      half_power_(rhs.half_power_),
+      blocks_to_filter_(rhs.blocks_to_filter_) {}
 
 TensorYlmFilter& TensorYlmFilter::operator=(const TensorYlmFilter& rhs) {
   if (this != &rhs) {
     num_modes_to_kill_ = rhs.num_modes_to_kill_;
     half_power_ = rhs.half_power_;
+    blocks_to_filter_ = rhs.blocks_to_filter_;
     cached_l_max_ = 0;
   }
   return *this;
@@ -249,25 +255,43 @@ TensorYlmFilter& TensorYlmFilter::operator=(const TensorYlmFilter& rhs) {
 TensorYlmFilter::TensorYlmFilter(TensorYlmFilter&& rhs)
     : Filters::Filter(std::move(rhs)),
       num_modes_to_kill_(rhs.num_modes_to_kill_),
-      half_power_(std::move(rhs.half_power_)) {}
+      half_power_(std::move(rhs.half_power_)),
+      blocks_to_filter_(std::move(rhs.blocks_to_filter_)) {}
 
 TensorYlmFilter& TensorYlmFilter::operator=(TensorYlmFilter&& rhs) {
   if (this != &rhs) {
     num_modes_to_kill_ = rhs.num_modes_to_kill_;
     half_power_ = std::move(rhs.half_power_);
+    blocks_to_filter_ = std::move(rhs.blocks_to_filter_);
     cached_l_max_ = 0;
   }
   return *this;
 }
 
-TensorYlmFilter::TensorYlmFilter(const size_t num_modes_to_kill,
-                                 std::optional<size_t> half_power)
-    : num_modes_to_kill_(num_modes_to_kill), half_power_(half_power) {}
+TensorYlmFilter::TensorYlmFilter(
+    const size_t num_modes_to_kill, std::optional<size_t> half_power,
+    const std::optional<std::vector<std::string>>& blocks_to_filter,
+    const Options::Context& context)
+    : num_modes_to_kill_(num_modes_to_kill), half_power_(half_power) {
+  if (blocks_to_filter.has_value()) {
+    blocks_to_filter_ = std::unordered_set<std::string>{};
+    for (const std::string& block_name : blocks_to_filter.value()) {
+      if (blocks_to_filter_->count(block_name) != 0) {
+        PARSE_ERROR(context,
+                    "Duplicate block name '"
+                        << block_name
+                        << "' found when creating a TensorYlmFilter.");
+      }
+      blocks_to_filter_->emplace(block_name);
+    }
+  }
+}
 
 void TensorYlmFilter::pup(PUP::er& p) {
   Filters::Filter::pup(p);
   p | num_modes_to_kill_;
   p | half_power_;
+  p | blocks_to_filter_;
   // The filter matrices and temp storage are lazily initialized,
   // so we don't pup them.
 }
@@ -332,7 +356,8 @@ void TensorYlmFilter::operator()(
 
 bool operator==(const TensorYlmFilter& lhs, const TensorYlmFilter& rhs) {
   return lhs.num_modes_to_kill_ == rhs.num_modes_to_kill_ and
-         lhs.half_power_ == rhs.half_power_;
+         lhs.half_power_ == rhs.half_power_ and
+         lhs.blocks_to_filter_ == rhs.blocks_to_filter_;
 }
 
 bool operator!=(const TensorYlmFilter& lhs, const TensorYlmFilter& rhs) {

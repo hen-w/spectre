@@ -148,11 +148,13 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.ApplyTensorYlmFilter",
                   "[NumericalAlgorithms][Unit]") {
   register_factory_classes_with_charm<Metavariables>();
 
+  // Test creation with BlocksToFilter: All
   const auto created_filter = TestHelpers::test_creation<
       std::unique_ptr<Filters::Filter>, Metavariables>(
       "TensorYlmFilter:\n"
       "  NumModesToKill: 2\n"
-      "  HalfPower: 5");
+      "  HalfPower: 5\n"
+      "  BlocksToFilter: All");
   const auto& concrete_filter =
       dynamic_cast<const TensorYlmFilter&>(*created_filter);
   CHECK(concrete_filter == TensorYlmFilter{2, 5});
@@ -161,6 +163,31 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.ApplyTensorYlmFilter",
   const auto deserialized_filter = serialize_and_deserialize(created_filter);
   CHECK(dynamic_cast<const TensorYlmFilter&>(*deserialized_filter) ==
         concrete_filter);
+
+  // Test creation with specific blocks
+  const auto block_filter = TestHelpers::test_creation<
+      std::unique_ptr<Filters::Filter>, Metavariables>(
+      "TensorYlmFilter:\n"
+      "  NumModesToKill: 3\n"
+      "  HalfPower: None\n"
+      "  BlocksToFilter:\n"
+      "    - InnerShell\n"
+      "    - OuterShell");
+  const auto& concrete_block_filter =
+      dynamic_cast<const TensorYlmFilter&>(*block_filter);
+  CHECK(concrete_block_filter ==
+        TensorYlmFilter{3, std::nullopt,
+                        std::vector<std::string>{"InnerShell", "OuterShell"}});
+  CHECK(concrete_block_filter.blocks_to_filter().has_value());
+  CHECK(concrete_block_filter.blocks_to_filter()->size() == 2);
+  CHECK(concrete_block_filter.blocks_to_filter()->count("InnerShell") == 1);
+  CHECK(concrete_block_filter.blocks_to_filter()->count("OuterShell") == 1);
+
+  // Test serialization with blocks
+  const auto deserialized_block_filter =
+      serialize_and_deserialize(block_filter);
+  CHECK(dynamic_cast<const TensorYlmFilter&>(*deserialized_block_filter) ==
+        concrete_block_filter);
 
   test_transform_spatial_tensors_to_different_frame();
   test_modal_nodal_invertibility();

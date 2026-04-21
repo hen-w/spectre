@@ -9,6 +9,7 @@
 #include <tuple>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "DataStructures/SimpleSparseMatrix.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
@@ -149,7 +150,15 @@ class TensorYlmFilter : public Filters::Filter {
         "The half-power sigma for more complicated filtering. "
         "If None, implements a Heaviside filter.";
   };
-  using options = tmpl::list<NumModesToKill, HalfPower>;
+  struct BlocksToFilter {
+    using type =
+        Options::Auto<std::vector<std::string>, Options::AutoLabel::All>;
+    static constexpr Options::String help = {
+        "List of blocks or block groups to apply filtering to. All other "
+        "blocks will have no filtering. You can also specify 'All' to do "
+        "filtering in all blocks of the domain."};
+  };
+  using options = tmpl::list<NumModesToKill, HalfPower, BlocksToFilter>;
   static constexpr Options::String help = {"Tensor Ylm filter."};
 
   TensorYlmFilter();
@@ -162,11 +171,14 @@ class TensorYlmFilter : public Filters::Filter {
   WRAPPED_PUPable_decl_template(TensorYlmFilter);  // NOLINT
   explicit TensorYlmFilter(CkMigrateMessage* msg);
 
-  TensorYlmFilter(size_t num_modes_to_kill, std::optional<size_t> half_power);
+  TensorYlmFilter(size_t num_modes_to_kill, std::optional<size_t> half_power,
+                   const std::optional<std::vector<std::string>>&
+                       blocks_to_filter = std::nullopt,
+                   const Options::Context& context = {});
 
   std::optional<std::unordered_set<std::string>> blocks_to_filter()
       const override {
-    return std::nullopt;
+    return blocks_to_filter_;
   }
 
   // NOLINTNEXTLINE(google-runtime-references)
@@ -242,6 +254,7 @@ class TensorYlmFilter : public Filters::Filter {
 
   size_t num_modes_to_kill_{0};
   std::optional<size_t> half_power_{std::nullopt};
+  std::optional<std::unordered_set<std::string>> blocks_to_filter_{};
   // Use Spherepack normalization because the variables are stored as Spherepack
   // modes
   static constexpr ylm::TensorYlm::CoefficientNormalization normalization_ =
