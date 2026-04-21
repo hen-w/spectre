@@ -12,6 +12,8 @@
 #include "DataStructures/Tensor/EagerMath/DeterminantAndInverse.hpp"
 #include "DataStructures/Tensor/Structure.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
+#include "Domain/Structure/Direction.hpp"
+#include "Domain/Structure/Element.hpp"
 #include "NumericalAlgorithms/SphericalHarmonics/Spherepack.hpp"
 #include "NumericalAlgorithms/SphericalHarmonics/SpherepackCache.hpp"
 #include "NumericalAlgorithms/SphericalHarmonics/TensorYlmFilter.hpp"
@@ -108,7 +110,8 @@ void apply_tensor_ylm_filter(
     const SimpleSparseMatrix& filter_matrix_scalar,
     const SimpleSparseMatrix& filter_matrix_i,
     const SimpleSparseMatrix& filter_matrix_ii, const size_t ell_max,
-    const size_t radial_extents) {
+    const size_t radial_extents, const bool skip_first_radial_slice,
+    const bool skip_last_radial_slice) {
   const auto& ylm = ylm::get_spherepack_cache(ell_max);
   ASSERT(
       radial_extents * ylm.physical_size() ==
@@ -159,8 +162,8 @@ void apply_tensor_ylm_filter(
   // using temp_grid_vars as temp storage for each tensor
   tmpl::for_each<filter_detail::ccz4_vars_list<Frame::Grid>>(
       [&ccz4_spectral_vars, &temp_grid_vars, radial_extents, &filter_matrix_i,
-       &filter_matrix_ii,
-       &filter_matrix_scalar]<class Tag>(const tmpl::type_<Tag> /*meta*/) {
+       &filter_matrix_ii, &filter_matrix_scalar, skip_first_radial_slice,
+       skip_last_radial_slice]<class Tag>(const tmpl::type_<Tag> /*meta*/) {
         (void)radial_extents;
         constexpr size_t num_independent_components =
             Tag::type::structure::size();
@@ -189,6 +192,14 @@ void apply_tensor_ylm_filter(
             num_independent_components * dest_tensor.number_of_grid_points());
         const size_t stride = radial_extents;
         for (size_t offset = 0; offset < stride; ++offset) {
+          // Skip radial slices on external boundary faces.
+          // offset=0 is the lower_xi face (inner boundary),
+          // offset=stride-1 is the upper_xi face (outer boundary).
+          // Skipped slices keep dest = src (no filtering).
+          if ((offset == 0 and skip_first_radial_slice) or
+              (offset == stride - 1 and skip_last_radial_slice)) {
+            continue;
+          }
           // Dispatch by tensor symmetry:
           // Symmetry<1> for tnsr::I (and tnsr::i) -> filter_matrix_i
           // Symmetry<1,1> for tnsr::ii -> filter_matrix_ii
@@ -240,13 +251,15 @@ TensorYlmFilter::TensorYlmFilter(const TensorYlmFilter& rhs)
     : Filters::Filter(rhs),
       num_modes_to_kill_(rhs.num_modes_to_kill_),
       half_power_(rhs.half_power_),
-      blocks_to_filter_(rhs.blocks_to_filter_) {}
+      blocks_to_filter_(rhs.blocks_to_filter_),
+      skip_external_boundary_faces_(rhs.skip_external_boundary_faces_) {}
 
 TensorYlmFilter& TensorYlmFilter::operator=(const TensorYlmFilter& rhs) {
   if (this != &rhs) {
     num_modes_to_kill_ = rhs.num_modes_to_kill_;
     half_power_ = rhs.half_power_;
     blocks_to_filter_ = rhs.blocks_to_filter_;
+    skip_external_boundary_faces_ = rhs.skip_external_boundary_faces_;
     cached_l_max_ = 0;
   }
   return *this;
@@ -256,13 +269,15 @@ TensorYlmFilter::TensorYlmFilter(TensorYlmFilter&& rhs)
     : Filters::Filter(std::move(rhs)),
       num_modes_to_kill_(rhs.num_modes_to_kill_),
       half_power_(std::move(rhs.half_power_)),
-      blocks_to_filter_(std::move(rhs.blocks_to_filter_)) {}
+      blocks_to_filter_(std::move(rhs.blocks_to_filter_)),
+      skip_external_boundary_faces_(rhs.skip_external_boundary_faces_) {}
 
 TensorYlmFilter& TensorYlmFilter::operator=(TensorYlmFilter&& rhs) {
   if (this != &rhs) {
     num_modes_to_kill_ = rhs.num_modes_to_kill_;
     half_power_ = std::move(rhs.half_power_);
     blocks_to_filter_ = std::move(rhs.blocks_to_filter_);
+    skip_external_boundary_faces_ = rhs.skip_external_boundary_faces_;
     cached_l_max_ = 0;
   }
   return *this;
@@ -271,8 +286,10 @@ TensorYlmFilter& TensorYlmFilter::operator=(TensorYlmFilter&& rhs) {
 TensorYlmFilter::TensorYlmFilter(
     const size_t num_modes_to_kill, std::optional<size_t> half_power,
     const std::optional<std::vector<std::string>>& blocks_to_filter,
-    const Options::Context& context)
-    : num_modes_to_kill_(num_modes_to_kill), half_power_(half_power) {
+    const bool skip_external_boundary_faces, const Options::Context& context)
+    : num_modes_to_kill_(num_modes_to_kill),
+      half_power_(half_power),
+      skip_external_boundary_faces_(skip_external_boundary_faces) {
   if (blocks_to_filter.has_value()) {
     blocks_to_filter_ = std::unordered_set<std::string>{};
     for (const std::string& block_name : blocks_to_filter.value()) {
@@ -292,6 +309,7 @@ void TensorYlmFilter::pup(PUP::er& p) {
   p | num_modes_to_kill_;
   p | half_power_;
   p | blocks_to_filter_;
+  p | skip_external_boundary_faces_;
   // The filter matrices and temp storage are lazily initialized,
   // so we don't pup them.
 }
@@ -300,7 +318,7 @@ void TensorYlmFilter::operator()(
     const gsl::not_null<
         Variables<filter_detail::ccz4_vars_list<Frame::Inertial>>*>
         ccz4_vars,
-    const Mesh<3>& mesh,
+    const Mesh<3>& mesh, const Element<3>& element,
     const std::optional<std::tuple<
         tnsr::I<DataVector, 3, Frame::Inertial>,
         InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>,
@@ -315,6 +333,24 @@ void TensorYlmFilter::operator()(
          "angular directions.");
   const size_t radial_extents = mesh.extents(0);
   const size_t l_max = mesh.extents(1) - 1;
+
+  // Determine which boundary radial slices to skip
+  bool skip_first_radial_slice = false;
+  bool skip_last_radial_slice = false;
+  if (skip_external_boundary_faces_) {
+    for (const auto& dir : element.external_boundaries()) {
+      ASSERT(dir.dimension() == 0,
+             "TensorYlmFilter: SkipExternalBoundaryFaces requires external "
+             "boundaries only in the radial (xi) direction, but found "
+             "external boundary in direction "
+                 << dir);
+      if (dir == Direction<3>::lower_xi()) {
+        skip_first_radial_slice = true;
+      } else if (dir == Direction<3>::upper_xi()) {
+        skip_last_radial_slice = true;
+      }
+    }
+  }
 
   // Cache the filter matrices
   if (cached_l_max_ != l_max) {
@@ -351,13 +387,16 @@ void TensorYlmFilter::operator()(
   apply_tensor_ylm_filter(ccz4_vars, make_not_null(&temp_storage_),
                           jac_inertial_to_grid, jac_grid_to_inertial,
                           filter_matrix_scalar_, filter_matrix_i_,
-                          filter_matrix_ii_, l_max, radial_extents);
+                          filter_matrix_ii_, l_max, radial_extents,
+                          skip_first_radial_slice, skip_last_radial_slice);
 }
 
 bool operator==(const TensorYlmFilter& lhs, const TensorYlmFilter& rhs) {
   return lhs.num_modes_to_kill_ == rhs.num_modes_to_kill_ and
          lhs.half_power_ == rhs.half_power_ and
-         lhs.blocks_to_filter_ == rhs.blocks_to_filter_;
+         lhs.blocks_to_filter_ == rhs.blocks_to_filter_ and
+         lhs.skip_external_boundary_faces_ ==
+             rhs.skip_external_boundary_faces_;
 }
 
 bool operator!=(const TensorYlmFilter& lhs, const TensorYlmFilter& rhs) {

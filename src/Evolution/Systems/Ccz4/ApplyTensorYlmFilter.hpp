@@ -131,7 +131,8 @@ void apply_tensor_ylm_filter(
     const SimpleSparseMatrix& filter_matrix_scalar,
     const SimpleSparseMatrix& filter_matrix_i,
     const SimpleSparseMatrix& filter_matrix_ii, size_t ell_max,
-    size_t radial_extents);
+    size_t radial_extents, bool skip_first_radial_slice = false,
+    bool skip_last_radial_slice = false);
 
 /*!
  * \brief DataBox mutator that applies a TensorYlm filter to the CCZ4 variables
@@ -158,7 +159,17 @@ class TensorYlmFilter : public Filters::Filter {
         "blocks will have no filtering. You can also specify 'All' to do "
         "filtering in all blocks of the domain."};
   };
-  using options = tmpl::list<NumModesToKill, HalfPower, BlocksToFilter>;
+  struct SkipExternalBoundaryFaces {
+    using type = bool;
+    static constexpr Options::String help = {
+        "If true, do not apply the YLM angular filter on radial slices that "
+        "coincide with external boundary faces. This preserves boundary data "
+        "consistency for boundary conditions like "
+        "ConstraintsRadiationPreserving."};
+  };
+  using options =
+      tmpl::list<NumModesToKill, HalfPower, BlocksToFilter,
+                 SkipExternalBoundaryFaces>;
   static constexpr Options::String help = {"Tensor Ylm filter."};
 
   TensorYlmFilter();
@@ -174,6 +185,7 @@ class TensorYlmFilter : public Filters::Filter {
   TensorYlmFilter(size_t num_modes_to_kill, std::optional<size_t> half_power,
                    const std::optional<std::vector<std::string>>&
                        blocks_to_filter = std::nullopt,
+                   bool skip_external_boundary_faces = false,
                    const Options::Context& context = {});
 
   std::optional<std::unordered_set<std::string>> blocks_to_filter()
@@ -186,14 +198,14 @@ class TensorYlmFilter : public Filters::Filter {
 
  public:  // DataBox-mutator protocol
   using argument_tags = tmpl::list<
-      domain::Tags::Mesh<3>,
+      domain::Tags::Mesh<3>, domain::Tags::Element<3>,
       domain::Tags::CoordinatesMeshVelocityAndJacobians<3>>;
 
   void operator()(
       gsl::not_null<
           Variables<filter_detail::ccz4_vars_list<Frame::Inertial>>*>
           ccz4_vars,
-      const Mesh<3>& mesh,
+      const Mesh<3>& mesh, const Element<3>& element,
       const std::optional<std::tuple<
           tnsr::I<DataVector, 3, Frame::Inertial>,
           InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>,
@@ -208,7 +220,7 @@ class TensorYlmFilter : public Filters::Filter {
     requires((not tt::is_a_v<Variables, std::decay_t<TensorTypes>>) and ...)
   void operator()(
       const std::tuple<gsl::not_null<TensorTypes*>...>& tensors,
-      const Mesh<3>& mesh,
+      const Mesh<3>& mesh, const Element<3>& element,
       const std::optional<std::tuple<
           tnsr::I<DataVector, 3, Frame::Inertial>,
           InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>,
@@ -233,7 +245,8 @@ class TensorYlmFilter : public Filters::Filter {
     shift = *std::get<7>(tensors);
     aux_shift = *std::get<8>(tensors);
 
-    (*this)(make_not_null(&ccz4_vars), mesh, grid_to_inertial_quantities);
+    (*this)(make_not_null(&ccz4_vars), mesh, element,
+            grid_to_inertial_quantities);
 
     // Copy filtered results back to tuple (can't move: structured bindings
     // into Variables are non-owning)
@@ -255,6 +268,7 @@ class TensorYlmFilter : public Filters::Filter {
   size_t num_modes_to_kill_{0};
   std::optional<size_t> half_power_{std::nullopt};
   std::optional<std::unordered_set<std::string>> blocks_to_filter_{};
+  bool skip_external_boundary_faces_{false};
   // Use Spherepack normalization because the variables are stored as Spherepack
   // modes
   static constexpr ylm::TensorYlm::CoefficientNormalization normalization_ =
