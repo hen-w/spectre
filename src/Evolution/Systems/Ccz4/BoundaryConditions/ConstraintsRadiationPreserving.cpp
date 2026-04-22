@@ -14,6 +14,7 @@
 #include "DataStructures/Tensor/EagerMath/DotProduct.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
+#include "Evolution/Systems/Ccz4/ApplyTensorYlmFilter.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Characteristics.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
@@ -21,10 +22,14 @@
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Evolution/TypeTraits.hpp"
 #include "PointwiseFunctions/AnalyticSolutions/GeneralRelativity/Factory.hpp"
+#include "NumericalAlgorithms/SphericalHarmonics/Spherepack.hpp"
+#include "NumericalAlgorithms/SphericalHarmonics/SpherepackCache.hpp"
+#include "NumericalAlgorithms/SphericalHarmonics/TensorYlmFilter.hpp"
 #include "Utilities/CallWithDynamicType.hpp"
 #include "Utilities/ErrorHandling/Error.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/MakeWithValue.hpp"
+#include "Utilities/Serialization/PupStlCpp17.hpp"
 
 namespace {
 // Helper: compute time derivatives of the four second-order fields
@@ -543,7 +548,9 @@ ConstraintsRadiationPreserving::ConstraintsRadiationPreserving(
     : BoundaryCondition{dynamic_cast<const BoundaryCondition&>(rhs)},
       analytic_prescription_(rhs.analytic_prescription_->get_clone()),
       prescribe_outgoing_(rhs.prescribe_outgoing_),
-      initial_time_(rhs.initial_time_) {}
+      initial_time_(rhs.initial_time_),
+      ylm_filter_num_modes_to_kill_(rhs.ylm_filter_num_modes_to_kill_),
+      ylm_filter_half_power_(rhs.ylm_filter_half_power_) {}
 
 ConstraintsRadiationPreserving& ConstraintsRadiationPreserving::operator=(
     const ConstraintsRadiationPreserving& rhs) {
@@ -553,15 +560,22 @@ ConstraintsRadiationPreserving& ConstraintsRadiationPreserving::operator=(
   analytic_prescription_ = rhs.analytic_prescription_->get_clone();
   prescribe_outgoing_ = rhs.prescribe_outgoing_;
   initial_time_ = rhs.initial_time_;
+  ylm_filter_num_modes_to_kill_ = rhs.ylm_filter_num_modes_to_kill_;
+  ylm_filter_half_power_ = rhs.ylm_filter_half_power_;
+  cached_ghost_l_max_ = 0;
   return *this;
 }
 
 ConstraintsRadiationPreserving::ConstraintsRadiationPreserving(
     std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription,
-    bool prescribe_outgoing, double initial_time)
+    bool prescribe_outgoing, double initial_time,
+    std::optional<size_t> ylm_filter_num_modes_to_kill,
+    std::optional<size_t> ylm_filter_half_power)
     : analytic_prescription_(std::move(analytic_prescription)),
       prescribe_outgoing_(prescribe_outgoing),
-      initial_time_(initial_time) {}
+      initial_time_(initial_time),
+      ylm_filter_num_modes_to_kill_(ylm_filter_num_modes_to_kill),
+      ylm_filter_half_power_(ylm_filter_half_power) {}
 
 std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>
 ConstraintsRadiationPreserving::get_clone() const {
@@ -573,9 +587,134 @@ void ConstraintsRadiationPreserving::pup(PUP::er& p) {
   p | analytic_prescription_;
   p | prescribe_outgoing_;
   p | initial_time_;
+  p | ylm_filter_num_modes_to_kill_;
+  p | ylm_filter_half_power_;
+  // Mutable caches are lazily initialized, not pupped.
 }
 // NOLINTNEXTLINE
 PUP::able::PUP_ID ConstraintsRadiationPreserving::my_PUP_ID = 0;
+
+void ConstraintsRadiationPreserving::apply_ghost_ylm_filter_impl(
+    const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
+        conformal_metric,
+    const gsl::not_null<Scalar<DataVector>*> conformal_factor,
+    const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> a_tilde,
+    const gsl::not_null<Scalar<DataVector>*> trace_extrinsic_curvature,
+    const gsl::not_null<Scalar<DataVector>*> theta,
+    const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> gamma_hat,
+    const gsl::not_null<Scalar<DataVector>*> lapse,
+    const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> shift,
+    const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
+        auxiliary_shift_b,
+    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> field_a,
+    const gsl::not_null<tnsr::iJ<DataVector, 3, Frame::Inertial>*> field_b,
+    const gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*> field_d,
+    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> field_p)
+    const {
+  if (not ylm_filter_num_modes_to_kill_.has_value()) {
+    return;
+  }
+
+  const size_t num_pts = get(*conformal_factor).size();
+
+  // Determine l_max from number of face points:
+  // num_pts = (l_max + 1) * (2*l_max + 1)  =>  l_max = (-3 + sqrt(8N+1))/4
+  const size_t l_max = static_cast<size_t>(
+      (-3.0 + sqrt(8.0 * static_cast<double>(num_pts) + 1.0)) / 4.0);
+  static constexpr ylm::TensorYlm::CoefficientNormalization normalization =
+      ylm::TensorYlm::CoefficientNormalization::Spherepack;
+
+  // Cache filter matrices if l_max changed
+  if (cached_ghost_l_max_ != l_max) {
+    ylm::TensorYlm::fill_filter<Scalar<DataVector>::structure>(
+        make_not_null(&ghost_filter_scalar_), l_max,
+        *ylm_filter_num_modes_to_kill_, ylm_filter_half_power_, normalization);
+    ylm::TensorYlm::fill_filter<tnsr::i<DataVector, 3>::structure>(
+        make_not_null(&ghost_filter_i_), l_max,
+        *ylm_filter_num_modes_to_kill_, ylm_filter_half_power_, normalization);
+    ylm::TensorYlm::fill_filter<tnsr::ii<DataVector, 3>::structure>(
+        make_not_null(&ghost_filter_ii_), l_max,
+        *ylm_filter_num_modes_to_kill_, ylm_filter_half_power_, normalization);
+    ylm::TensorYlm::fill_filter<tnsr::ij<DataVector, 3>::structure>(
+        make_not_null(&ghost_filter_ij_), l_max,
+        *ylm_filter_num_modes_to_kill_, ylm_filter_half_power_, normalization);
+    ylm::TensorYlm::fill_filter<tnsr::ijj<DataVector, 3>::structure>(
+        make_not_null(&ghost_filter_kii_), l_max,
+        *ylm_filter_num_modes_to_kill_, ylm_filter_half_power_, normalization);
+    cached_ghost_l_max_ = l_max;
+  }
+
+  // Identity Jacobians (CRPBC is on static outer boundary: grid == inertial)
+  InverseJacobian<DataVector, 3, Frame::Inertial, Frame::Grid>
+      jac_inertial_to_grid(num_pts, 0.0);
+  InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>
+      jac_grid_to_inertial(num_pts, 0.0);
+  for (size_t d = 0; d < 3; ++d) {
+    jac_inertial_to_grid.get(d, d) = 1.0;
+    jac_grid_to_inertial.get(d, d) = 1.0;
+  }
+
+  // Pack the 13 ghost tensors into a Variables
+  using ghost_vars_list =
+      ::Ccz4::filter_detail::ccz4_ghost_vars_list<Frame::Inertial>;
+  Variables<ghost_vars_list> ghost_vars(num_pts);
+  get<::Ccz4::Tags::ConformalMetric<DataVector, 3, Frame::Inertial>>(
+      ghost_vars) = *conformal_metric;
+  get<::Ccz4::Tags::ConformalFactor<DataVector>>(ghost_vars) =
+      *conformal_factor;
+  get<::Ccz4::Tags::ATilde<DataVector, 3, Frame::Inertial>>(ghost_vars) =
+      *a_tilde;
+  get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(ghost_vars) =
+      *trace_extrinsic_curvature;
+  get<::Ccz4::Tags::Theta<DataVector>>(ghost_vars) = *theta;
+  get<::Ccz4::Tags::GammaHat<DataVector, 3, Frame::Inertial>>(ghost_vars) =
+      *gamma_hat;
+  get<gr::Tags::Lapse<DataVector>>(ghost_vars) = *lapse;
+  get<gr::Tags::Shift<DataVector, 3, Frame::Inertial>>(ghost_vars) = *shift;
+  get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3, Frame::Inertial>>(
+      ghost_vars) = *auxiliary_shift_b;
+  get<::Ccz4::Tags::FieldA<DataVector, 3, Frame::Inertial>>(ghost_vars) =
+      *field_a;
+  get<::Ccz4::Tags::FieldB<DataVector, 3, Frame::Inertial>>(ghost_vars) =
+      *field_b;
+  get<::Ccz4::Tags::FieldD<DataVector, 3, Frame::Inertial>>(ghost_vars) =
+      *field_d;
+  get<::Ccz4::Tags::FieldP<DataVector, 3, Frame::Inertial>>(ghost_vars) =
+      *field_p;
+
+  ::Ccz4::apply_tensor_ylm_filter_ghost(
+      make_not_null(&ghost_vars), make_not_null(&ghost_filter_temp_),
+      jac_inertial_to_grid, jac_grid_to_inertial, ghost_filter_scalar_,
+      ghost_filter_i_, ghost_filter_ii_, ghost_filter_ij_, ghost_filter_kii_,
+      l_max, /*radial_extents=*/1);
+
+  // Unpack back to output arguments
+  *conformal_metric =
+      get<::Ccz4::Tags::ConformalMetric<DataVector, 3, Frame::Inertial>>(
+          ghost_vars);
+  *conformal_factor =
+      get<::Ccz4::Tags::ConformalFactor<DataVector>>(ghost_vars);
+  *a_tilde = get<::Ccz4::Tags::ATilde<DataVector, 3, Frame::Inertial>>(
+      ghost_vars);
+  *trace_extrinsic_curvature =
+      get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(ghost_vars);
+  *theta = get<::Ccz4::Tags::Theta<DataVector>>(ghost_vars);
+  *gamma_hat =
+      get<::Ccz4::Tags::GammaHat<DataVector, 3, Frame::Inertial>>(ghost_vars);
+  *lapse = get<gr::Tags::Lapse<DataVector>>(ghost_vars);
+  *shift = get<gr::Tags::Shift<DataVector, 3, Frame::Inertial>>(ghost_vars);
+  *auxiliary_shift_b =
+      get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3, Frame::Inertial>>(
+          ghost_vars);
+  *field_a = get<::Ccz4::Tags::FieldA<DataVector, 3, Frame::Inertial>>(
+      ghost_vars);
+  *field_b = get<::Ccz4::Tags::FieldB<DataVector, 3, Frame::Inertial>>(
+      ghost_vars);
+  *field_d = get<::Ccz4::Tags::FieldD<DataVector, 3, Frame::Inertial>>(
+      ghost_vars);
+  *field_p = get<::Ccz4::Tags::FieldP<DataVector, 3, Frame::Inertial>>(
+      ghost_vars);
+}
 
 std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
@@ -702,6 +841,12 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
   *field_b = std::move(result.field_b);
   *field_d = std::move(result.field_d);
   *field_p = std::move(result.field_p);
+
+  // Apply YLM ghost filter if enabled (before trace constraint enforcement)
+  apply_ghost_ylm_filter_impl(conformal_metric, conformal_factor, a_tilde,
+                              trace_extrinsic_curvature, theta, gamma_hat,
+                              lapse, shift, auxiliary_shift_b, field_a, field_b,
+                              field_d, field_p);
 
   // Enforce g_tilde^{jk} D_{ijk} = 0 w.r.t. boundary-integrated conformal metric
   // (Jacobi formula for det(g_tilde) = 1)
@@ -853,19 +998,41 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
       interior_boundary_lapse, interior_boundary_conformal_factor, coords,
       initial_time_, f_val, prescribe_outgoing_);
 
-  // Extract char-mixed evolved variables
-  const auto& mixed_a_tilde =
+  // Create mutable copies of pipeline results + boundary fields for filtering
+  // (must match exactly what dg_ghost does: filter → trace constraint)
+  auto filtered_conformal_metric = interior_boundary_conformal_metric;
+  auto filtered_conformal_factor = interior_boundary_conformal_factor;
+  auto filtered_a_tilde =
       get<::Ccz4::Tags::ATilde<DataVector, Dim, Frame::Inertial>>(
           result.evolved_space);
-  const auto& mixed_K =
+  auto filtered_K =
       get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(result.evolved_space);
-  const auto& mixed_theta =
+  auto filtered_theta =
       get<::Ccz4::Tags::Theta<DataVector>>(result.evolved_space);
-  const auto& mixed_b =
+  auto filtered_gamma_hat =
+      get<::Ccz4::Tags::GammaHat<DataVector, Dim, Frame::Inertial>>(
+          result.evolved_space);
+  auto filtered_lapse = interior_boundary_lapse;
+  auto filtered_shift = interior_boundary_shift;
+  auto filtered_b =
       get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, Dim, Frame::Inertial>>(
           result.evolved_space);
+  auto filtered_field_a = std::move(result.field_a);
+  auto filtered_field_b = std::move(result.field_b);
+  auto filtered_field_d = std::move(result.field_d);
+  auto filtered_field_p = std::move(result.field_p);
 
-  // Compute dt of second-order fields using char-mixed state.
+  // Apply YLM ghost filter (same as dg_ghost, before trace constraint)
+  apply_ghost_ylm_filter_impl(
+      make_not_null(&filtered_conformal_metric),
+      make_not_null(&filtered_conformal_factor),
+      make_not_null(&filtered_a_tilde), make_not_null(&filtered_K),
+      make_not_null(&filtered_theta), make_not_null(&filtered_gamma_hat),
+      make_not_null(&filtered_lapse), make_not_null(&filtered_shift),
+      make_not_null(&filtered_b), make_not_null(&filtered_field_a),
+      make_not_null(&filtered_field_b), make_not_null(&filtered_field_d),
+      make_not_null(&filtered_field_p));
+
   // K0 = 0 hardcoded (see SetK0.hpp: always set to zero in SO-CCZ4).
   const auto k_0 = make_with_value<Scalar<DataVector>>(
       get(interior_boundary_conformal_factor), 0.0);
@@ -878,10 +1045,11 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
     tnsr::i<DataVector, Dim, Frame::Inertial> residual{};
     ::tenex::evaluate<ti::k>(
         make_not_null(&residual),
-        inv_bnd_cm(ti::I, ti::J) * result.field_d(ti::k, ti::i, ti::j));
+        inv_bnd_cm(ti::I, ti::J) *
+            filtered_field_d(ti::k, ti::i, ti::j));
     ::tenex::update<ti::k, ti::i, ti::j>(
-        make_not_null(&result.field_d),
-        result.field_d(ti::k, ti::i, ti::j) -
+        make_not_null(&filtered_field_d),
+        filtered_field_d(ti::k, ti::i, ti::j) -
             residual(ti::k) *
                 interior_boundary_conformal_metric(ti::i, ti::j) / 3.0);
   }
@@ -889,11 +1057,11 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
   compute_dt_second_order_fields(
       dt_boundary_conformal_metric_correction,
       dt_boundary_conformal_factor_correction, dt_boundary_lapse_correction,
-      dt_boundary_shift_correction, interior_boundary_conformal_metric,
-      interior_boundary_conformal_factor, interior_boundary_lapse,
-      interior_boundary_shift, mixed_a_tilde, mixed_K, mixed_theta, mixed_b,
-      result.field_a, result.field_b, result.field_d, result.field_p, k_0,
-      f_val, shifting_shift);
+      dt_boundary_shift_correction, filtered_conformal_metric,
+      filtered_conformal_factor, filtered_lapse, filtered_shift,
+      filtered_a_tilde, filtered_K, filtered_theta, filtered_b,
+      filtered_field_a, filtered_field_b, filtered_field_d, filtered_field_p,
+      k_0, f_val, shifting_shift);
 
   // Zero boundary theta/z dt corrections (not evolved by this BC)
   get(*dt_boundary_theta_correction) = 0.0;

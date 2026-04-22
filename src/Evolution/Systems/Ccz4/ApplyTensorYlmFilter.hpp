@@ -85,7 +85,77 @@ void transform_spatial_tensors_to_different_frame_without_hessians(
     const InverseJacobian<DataVector, 3, DestFrame, SrcFrame>&
         inv_jac_for_upper);
 
+/// The 13 CCZ4 ghost variable tags (9 original + 4 auxiliary), templated on
+/// Frame. These are the variables produced by dg_ghost that need YLM
+/// filtering to match the volume filter applied to interior data.
+template <typename Frame>
+using ccz4_ghost_vars_list =
+    tmpl::list<Tags::ConformalMetric<DataVector, 3, Frame>,
+               Tags::ConformalFactor<DataVector>,
+               Tags::ATilde<DataVector, 3, Frame>,
+               gr::Tags::TraceExtrinsicCurvature<DataVector>,
+               Tags::Theta<DataVector>,
+               Tags::GammaHat<DataVector, 3, Frame>,
+               gr::Tags::Lapse<DataVector>,
+               gr::Tags::Shift<DataVector, 3, Frame>,
+               Tags::AuxiliaryShiftB<DataVector, 3, Frame>,
+               Tags::FieldA<DataVector, 3, Frame>,
+               Tags::FieldB<DataVector, 3, Frame>,
+               Tags::FieldD<DataVector, 3, Frame>,
+               Tags::FieldP<DataVector, 3, Frame>>;
+
+/*!
+ * \brief Transforms the 13 ghost variable tensors between frames using
+ * Jacobian contractions.
+ *
+ * Extends the 9-variable transform with handlers for:
+ * - tnsr::i (FieldA, FieldP): single lower-index contraction
+ * - tnsr::iJ (FieldB): mixed contraction
+ * - tnsr::ijj (FieldD): triple lower contraction with symmetry on last 2
+ */
+template <typename SrcFrame, typename DestFrame>
+void transform_ghost_tensors_to_different_frame(
+    gsl::not_null<Variables<ccz4_ghost_vars_list<DestFrame>>*> dest,
+    const Variables<ccz4_ghost_vars_list<SrcFrame>>& src,
+    const InverseJacobian<DataVector, 3, SrcFrame, DestFrame>& jac_for_lower,
+    const InverseJacobian<DataVector, 3, DestFrame, SrcFrame>&
+        inv_jac_for_upper);
+
 }  // namespace filter_detail
+
+/*!
+ * \brief Applies TensorYlm filter in place to CCZ4 ghost variables (13 vars).
+ *
+ * Same 5-step pipeline as apply_tensor_ylm_filter but for the 13-variable
+ * ghost list (9 original + 4 auxiliary fields).
+ *
+ * \param ghost_vars Ghost variables at collocation points (modified in place).
+ * \param temp_storage Temporary storage buffer.
+ * \param jac_inertial_to_grid Jacobian for inertial → grid transform.
+ * \param jac_grid_to_inertial Jacobian for grid → inertial transform.
+ * \param filter_matrix_scalar Scalar filter matrix.
+ * \param filter_matrix_i Rank-1 filter matrix (tnsr::i / tnsr::I).
+ * \param filter_matrix_ii Symmetric rank-2 filter matrix (tnsr::ii).
+ * \param filter_matrix_ij Non-symmetric rank-2 filter matrix (tnsr::iJ).
+ * \param filter_matrix_kii Rank-3 filter matrix (tnsr::ijj).
+ * \param ell_max The maximum ylm ell.
+ * \param radial_extents Number of radial grid points (1 for face slices).
+ */
+void apply_tensor_ylm_filter_ghost(
+    gsl::not_null<Variables<filter_detail::ccz4_ghost_vars_list<Frame::Inertial>>*>
+        ghost_vars,
+    gsl::not_null<Variables<filter_detail::ccz4_ghost_vars_list<Frame::Inertial>>*>
+        temp_storage,
+    const InverseJacobian<DataVector, 3, Frame::Inertial, Frame::Grid>&
+        jac_inertial_to_grid,
+    const InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>&
+        jac_grid_to_inertial,
+    const SimpleSparseMatrix& filter_matrix_scalar,
+    const SimpleSparseMatrix& filter_matrix_i,
+    const SimpleSparseMatrix& filter_matrix_ii,
+    const SimpleSparseMatrix& filter_matrix_ij,
+    const SimpleSparseMatrix& filter_matrix_kii,
+    size_t ell_max, size_t radial_extents);
 
 /*!
  * \brief Applies TensorYlm filter in place to CCZ4 variables.

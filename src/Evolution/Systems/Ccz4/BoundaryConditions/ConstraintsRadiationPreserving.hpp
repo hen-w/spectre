@@ -3,20 +3,25 @@
 
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <pup.h>
 #include <string>
 
 #include "DataStructures/DataVector.hpp"
+#include "DataStructures/SimpleSparseMatrix.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
+#include "DataStructures/Variables.hpp"
 #include "Domain/Structure/Direction.hpp"
 #include "Domain/Tags.hpp"
 #include "Evolution/BoundaryConditions/Type.hpp"
+#include "Evolution/Systems/Ccz4/ApplyTensorYlmFilter.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
+#include "Options/Auto.hpp"
 #include "Options/String.hpp"
 #include "PointwiseFunctions/InitialDataUtilities/InitialData.hpp"
 #include "Utilities/Gsl.hpp"
@@ -68,8 +73,25 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
         "Set to 0.0 to freeze the boundary at initial data.";
     using type = double;
   };
+  /// \brief Number of top ell modes to kill in the ghost-state YLM filter.
+  /// Set to None to disable ghost filtering.
+  struct YlmFilterNumModesToKill {
+    using type = Options::Auto<size_t, Options::AutoLabel::None>;
+    static constexpr Options::String help =
+        "Number of top ell modes to kill in the ghost-state YLM filter. "
+        "Set to None to disable ghost filtering.";
+  };
+  /// \brief Half-power sigma for the ghost-state YLM filter.
+  /// Set to None for a Heaviside (hard cutoff) filter.
+  struct YlmFilterHalfPower {
+    using type = Options::Auto<size_t, Options::AutoLabel::None>;
+    static constexpr Options::String help =
+        "Half-power sigma for the ghost-state YLM filter. "
+        "Set to None for a Heaviside (hard cutoff) filter.";
+  };
   using options =
-      tmpl::list<AnalyticPrescription, PrescribeOutgoing, InitialTime>;
+      tmpl::list<AnalyticPrescription, PrescribeOutgoing, InitialTime,
+                 YlmFilterNumModesToKill, YlmFilterHalfPower>;
   static constexpr Options::String help{
       "Constraints and radiation preserving boundary conditions. "
       "Like DirichletCharacteristics but evaluates the analytic solution at "
@@ -89,7 +111,9 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
   explicit ConstraintsRadiationPreserving(
       std::unique_ptr<evolution::initial_data::InitialData>
           analytic_prescription,
-      bool prescribe_outgoing, double initial_time);
+      bool prescribe_outgoing, double initial_time,
+      std::optional<size_t> ylm_filter_num_modes_to_kill = std::nullopt,
+      std::optional<size_t> ylm_filter_half_power = std::nullopt);
 
   WRAPPED_PUPable_decl_base_template(
       domain::BoundaryConditions::BoundaryCondition,
@@ -258,5 +282,40 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
   std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription_;
   bool prescribe_outgoing_{false};
   double initial_time_{0.0};
+  std::optional<size_t> ylm_filter_num_modes_to_kill_{};
+  std::optional<size_t> ylm_filter_half_power_{};
+  // Mutable filter caches (lazy init, not pupped)
+  // NOLINTNEXTLINE(spectre-mutable)
+  mutable size_t cached_ghost_l_max_{0};
+  // NOLINTNEXTLINE(spectre-mutable)
+  mutable SimpleSparseMatrix ghost_filter_scalar_{};
+  // NOLINTNEXTLINE(spectre-mutable)
+  mutable SimpleSparseMatrix ghost_filter_i_{};
+  // NOLINTNEXTLINE(spectre-mutable)
+  mutable SimpleSparseMatrix ghost_filter_ii_{};
+  // NOLINTNEXTLINE(spectre-mutable)
+  mutable SimpleSparseMatrix ghost_filter_ij_{};
+  // NOLINTNEXTLINE(spectre-mutable)
+  mutable SimpleSparseMatrix ghost_filter_kii_{};
+  // NOLINTNEXTLINE(spectre-mutable)
+  mutable Variables<filter_detail::ccz4_ghost_vars_list<Frame::Inertial>>
+      ghost_filter_temp_{};
+
+  // Helper: apply YLM ghost filter to the 13 ghost-state tensors in-place.
+  // No-op if the filter is disabled.
+  void apply_ghost_ylm_filter_impl(
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> conformal_metric,
+      gsl::not_null<Scalar<DataVector>*> conformal_factor,
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> a_tilde,
+      gsl::not_null<Scalar<DataVector>*> trace_extrinsic_curvature,
+      gsl::not_null<Scalar<DataVector>*> theta,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> gamma_hat,
+      gsl::not_null<Scalar<DataVector>*> lapse,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> shift,
+      gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> auxiliary_shift_b,
+      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> field_a,
+      gsl::not_null<tnsr::iJ<DataVector, 3, Frame::Inertial>*> field_b,
+      gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*> field_d,
+      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> field_p) const;
 };
 }  // namespace Ccz4::BoundaryConditions

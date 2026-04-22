@@ -8,6 +8,7 @@
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/EagerMath/DeterminantAndInverse.hpp"
+#include "DataStructures/Tensor/EagerMath/FrameTransform.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
 #include "Domain/Structure/Direction.hpp"
@@ -311,6 +312,124 @@ void test_skip_external_boundary_faces() {
   CHECK(boundary_differs);
 }
 
+// Test that the ghost tensor frame transform is correct by comparing
+// against transform::to_different_frame (independently written and tested
+// in SpECTRE's core library) for each new tensor type.
+void test_transform_ghost_tensors_to_different_frame() {
+  constexpr size_t mesh_size = 10;
+
+  Variables<filter_detail::ccz4_ghost_vars_list<Frame::Inertial>>
+      inertial_vars(mesh_size);
+
+  // Fill inertial_vars with random numbers
+  MAKE_GENERATOR(generator);
+  std::uniform_real_distribution<double> dist{-1.0, 1.0};
+  for (size_t i = 0; i < inertial_vars.size(); ++i) {
+    inertial_vars.data()[i] = dist(generator);
+  }
+
+  // Create a diagonally-dominant random Jacobian (invertible).
+  std::uniform_real_distribution<double> positive_dist{0.5, 1.0};
+  InverseJacobian<DataVector, 3, Frame::Inertial, Frame::Grid>
+      jac_inertial_to_grid(mesh_size);
+  for (size_t i = 0; i < 3; ++i) {
+    for (size_t j = 0; j < 3; ++j) {
+      jac_inertial_to_grid.get(i, j) = 0.05 * dist(generator);
+    }
+    jac_inertial_to_grid.get(i, i) += positive_dist(generator);
+  }
+
+  // Compute the inverse
+  InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>
+      jac_grid_to_inertial(mesh_size);
+  Scalar<DataVector> det(mesh_size);
+  determinant_and_inverse(make_not_null(&det),
+                          make_not_null(&jac_grid_to_inertial),
+                          jac_inertial_to_grid);
+
+  // One-way transform: Inertial -> Grid
+  Variables<filter_detail::ccz4_ghost_vars_list<Frame::Grid>> grid_vars(
+      mesh_size);
+  filter_detail::transform_ghost_tensors_to_different_frame(
+      make_not_null(&grid_vars), inertial_vars, jac_inertial_to_grid,
+      jac_grid_to_inertial);
+
+  // Compare each new tensor type against transform::to_different_frame.
+  // Jacobian<DV,3,Grid,Inertial> is the same type as
+  // InverseJacobian<DV,3,Inertial,Grid>, so we can pass jac_inertial_to_grid
+  // directly. Similarly InverseJacobian<DV,3,Grid,Inertial> =
+  // jac_grid_to_inertial.
+
+  // tnsr::i (FieldA)
+  {
+    tnsr::i<DataVector, 3, Frame::Grid> expected(mesh_size);
+    transform::to_different_frame(
+        make_not_null(&expected),
+        get<Tags::FieldA<DataVector, 3, Frame::Inertial>>(inertial_vars),
+        jac_inertial_to_grid, jac_grid_to_inertial);
+    const auto& actual =
+        get<Tags::FieldA<DataVector, 3, Frame::Grid>>(grid_vars);
+    for (size_t i = 0; i < 3; ++i) {
+      CHECK_ITERABLE_APPROX(actual.get(i), expected.get(i));
+    }
+  }
+  // tnsr::i (FieldP)
+  {
+    tnsr::i<DataVector, 3, Frame::Grid> expected(mesh_size);
+    transform::to_different_frame(
+        make_not_null(&expected),
+        get<Tags::FieldP<DataVector, 3, Frame::Inertial>>(inertial_vars),
+        jac_inertial_to_grid, jac_grid_to_inertial);
+    const auto& actual =
+        get<Tags::FieldP<DataVector, 3, Frame::Grid>>(grid_vars);
+    for (size_t i = 0; i < 3; ++i) {
+      CHECK_ITERABLE_APPROX(actual.get(i), expected.get(i));
+    }
+  }
+  // tnsr::iJ (FieldB)
+  {
+    tnsr::iJ<DataVector, 3, Frame::Grid> expected(mesh_size);
+    transform::to_different_frame(
+        make_not_null(&expected),
+        get<Tags::FieldB<DataVector, 3, Frame::Inertial>>(inertial_vars),
+        jac_inertial_to_grid, jac_grid_to_inertial);
+    const auto& actual =
+        get<Tags::FieldB<DataVector, 3, Frame::Grid>>(grid_vars);
+    for (size_t i = 0; i < 3; ++i) {
+      for (size_t j = 0; j < 3; ++j) {
+        CHECK_ITERABLE_APPROX(actual.get(i, j), expected.get(i, j));
+      }
+    }
+  }
+  // tnsr::ijj (FieldD)
+  {
+    tnsr::ijj<DataVector, 3, Frame::Grid> expected(mesh_size);
+    transform::to_different_frame(
+        make_not_null(&expected),
+        get<Tags::FieldD<DataVector, 3, Frame::Inertial>>(inertial_vars),
+        jac_inertial_to_grid, jac_grid_to_inertial);
+    const auto& actual =
+        get<Tags::FieldD<DataVector, 3, Frame::Grid>>(grid_vars);
+    for (size_t i = 0; i < 3; ++i) {
+      for (size_t j = 0; j < 3; ++j) {
+        for (size_t k = j; k < 3; ++k) {
+          CHECK_ITERABLE_APPROX(actual.get(i, j, k), expected.get(i, j, k));
+        }
+      }
+    }
+  }
+
+  // Also test roundtrip: Inertial -> Grid -> Inertial
+  Variables<filter_detail::ccz4_ghost_vars_list<Frame::Inertial>>
+      test_inertial_vars(mesh_size);
+  filter_detail::transform_ghost_tensors_to_different_frame(
+      make_not_null(&test_inertial_vars), grid_vars, jac_grid_to_inertial,
+      jac_inertial_to_grid);
+  for (size_t i = 0; i < inertial_vars.size(); ++i) {
+    CHECK(inertial_vars.data()[i] == approx(test_inertial_vars.data()[i]));
+  }
+}
+
 // Test the TensorYlmFilter::operator() with SkipExternalBoundaryFaces option
 // using an Element with external boundaries.
 void test_skip_boundary_faces_via_operator() {
@@ -505,6 +624,7 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.ApplyTensorYlmFilter",
   CHECK_FALSE(concrete_filter == concrete_block_filter);
 
   test_transform_spatial_tensors_to_different_frame();
+  test_transform_ghost_tensors_to_different_frame();
   test_modal_nodal_invertibility();
   test_skip_external_boundary_faces();
   test_skip_boundary_faces_via_operator();
@@ -523,6 +643,24 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.ApplyTensorYlmFilter",
       filter_detail::ccz4_vars_list<Frame::Inertial>, true>(0, apply_filter);
   ylm::TensorYlm::test_apply_filter<
       filter_detail::ccz4_vars_list<Frame::Inertial>, true>(5, apply_filter);
+
+  const auto apply_ghost_filter =
+      [](const auto vars_nodal, const auto vars_storage,
+         const auto& jac_inertial_to_grid, const auto& jac_grid_to_inertial,
+         const auto& filter_matrices, const size_t ell_max,
+         const size_t radial_extents) {
+        apply_tensor_ylm_filter_ghost(
+            vars_nodal, vars_storage, jac_inertial_to_grid,
+            jac_grid_to_inertial, filter_matrices.scalar, filter_matrices.i,
+            filter_matrices.ii, filter_matrices.ij, filter_matrices.kii,
+            ell_max, radial_extents);
+      };
+  ylm::TensorYlm::test_apply_filter<
+      filter_detail::ccz4_ghost_vars_list<Frame::Inertial>, true>(
+      0, apply_ghost_filter);
+  ylm::TensorYlm::test_apply_filter<
+      filter_detail::ccz4_ghost_vars_list<Frame::Inertial>, true>(
+      5, apply_ghost_filter);
 }
 }  // namespace
 }  // namespace Ccz4

@@ -60,7 +60,9 @@ void test_creation_and_serialization() {
       "  AnalyticPrescription:\n"
       "    Ccz4(Minkowski):\n"
       "  PrescribeOutgoing: false\n"
-      "  InitialTime: 0.0\n");
+      "  InitialTime: 0.0\n"
+      "  YlmFilterNumModesToKill: None\n"
+      "  YlmFilterHalfPower: None\n");
 
   CHECK(boundary_condition->get_clone() != nullptr);
 
@@ -90,7 +92,9 @@ void test_minkowski() {
       "  AnalyticPrescription:\n"
       "    Ccz4(Minkowski):\n"
       "  PrescribeOutgoing: false\n"
-      "  InitialTime: 0.0\n");
+      "  InitialTime: 0.0\n"
+      "  YlmFilterNumModesToKill: None\n"
+      "  YlmFilterHalfPower: None\n");
   const auto& bc = dynamic_cast<
       const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving&>(
       *bc_ptr);
@@ -325,7 +329,9 @@ void test_kerrschild() {
       "      Center: [0.2, 0.5, 0.1]\n"
       "      Velocity: [0.0, 0.0, 0.0]\n"
       "  PrescribeOutgoing: false\n"
-      "  InitialTime: 0.0\n");
+      "  InitialTime: 0.0\n"
+      "  YlmFilterNumModesToKill: None\n"
+      "  YlmFilterHalfPower: None\n");
   const auto& bc = dynamic_cast<
       const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving&>(
       *bc_ptr);
@@ -584,7 +590,9 @@ void test_kerrschild_dt_boundary_conformal_metric() {
       "      Center: [0.2, 0.5, 0.1]\n"
       "      Velocity: [0.0, 0.0, 0.0]\n"
       "  PrescribeOutgoing: false\n"
-      "  InitialTime: 0.0\n");
+      "  InitialTime: 0.0\n"
+      "  YlmFilterNumModesToKill: None\n"
+      "  YlmFilterHalfPower: None\n");
   const auto& bc = dynamic_cast<
       const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving&>(
       *bc_ptr);
@@ -751,6 +759,332 @@ void test_kerrschild_dt_boundary_conformal_metric() {
   CHECK_ITERABLE_CUSTOM_APPROX(dt_bcm, expected_dt_bcm, custom_approx);
 }
 
+// Verify that dg_time_derivative applies the same YLM ghost filter as dg_ghost.
+// With the filter enabled, dg_time_derivative should compute dt corrections
+// using the filtered pipeline output. We verify this by comparing
+// dg_time_derivative's dt_bcm against a reference computed from the filtered
+// ghost state returned by dg_ghost (eq 12a).
+void test_kerrschild_dt_with_ylm_filter() {
+  register_factory_classes_with_charm<Metavariables>();
+
+  // l_max=2 => num_pts = (l_max+1)*(2*l_max+1) = 15
+  static constexpr size_t Dim = 3;
+  const size_t num_pts = 15;
+
+  // Create BC with YLM filter enabled (kill 1 top ell mode)
+  const auto bc_ptr = TestHelpers::test_creation<
+      std::unique_ptr<Ccz4::BoundaryConditions::BoundaryCondition>,
+      Metavariables>(
+      "ConstraintsRadiationPreserving:\n"
+      "  AnalyticPrescription:\n"
+      "    Ccz4(KerrSchild):\n"
+      "      Mass: 2.0\n"
+      "      Spin: [0.2, 0.4, 0.8]\n"
+      "      Center: [0.2, 0.5, 0.1]\n"
+      "      Velocity: [0.0, 0.0, 0.0]\n"
+      "  PrescribeOutgoing: false\n"
+      "  InitialTime: 0.0\n"
+      "  YlmFilterNumModesToKill: 1\n"
+      "  YlmFilterHalfPower: None\n");
+  const auto& bc = dynamic_cast<
+      const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving&>(
+      *bc_ptr);
+
+  // Also create a BC without filter for comparison
+  const auto bc_nofilter_ptr = TestHelpers::test_creation<
+      std::unique_ptr<Ccz4::BoundaryConditions::BoundaryCondition>,
+      Metavariables>(
+      "ConstraintsRadiationPreserving:\n"
+      "  AnalyticPrescription:\n"
+      "    Ccz4(KerrSchild):\n"
+      "      Mass: 2.0\n"
+      "      Spin: [0.2, 0.4, 0.8]\n"
+      "      Center: [0.2, 0.5, 0.1]\n"
+      "      Velocity: [0.0, 0.0, 0.0]\n"
+      "  PrescribeOutgoing: false\n"
+      "  InitialTime: 0.0\n"
+      "  YlmFilterNumModesToKill: None\n"
+      "  YlmFilterHalfPower: None\n");
+  const auto& bc_nofilter = dynamic_cast<
+      const Ccz4::BoundaryConditions::ConstraintsRadiationPreserving&>(
+      *bc_nofilter_ptr);
+
+  tnsr::I<DataVector, Dim, Frame::Inertial> coords(num_pts, 0.0);
+  for (size_t i = 0; i < num_pts; ++i) {
+    coords.get(0)[i] = 5.0 + 0.1 * static_cast<double>(i);
+    coords.get(1)[i] = 0.1 * static_cast<double>(i);
+    coords.get(2)[i] = -0.1 * static_cast<double>(i);
+  }
+
+  const double time = 0.0;
+  const gr::Solutions::KerrSchild kerr_schild(
+      2.0, std::array<double, 3>{{0.2, 0.4, 0.8}},
+      std::array<double, 3>{{0.2, 0.5, 0.1}});
+  const Ccz4::Solutions::Ccz4WrappedGr<gr::Solutions::KerrSchild>
+      wrapped_solution(kerr_schild);
+
+  using all_tags = tmpl::list<
+      Ccz4::Tags::ConformalMetric<DataVector, 3>,
+      Ccz4::Tags::ConformalFactor<DataVector>,
+      Ccz4::Tags::ATilde<DataVector, 3>,
+      gr::Tags::TraceExtrinsicCurvature<DataVector>,
+      Ccz4::Tags::Theta<DataVector>, Ccz4::Tags::GammaHat<DataVector, 3>,
+      gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
+      Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>,
+      Ccz4::Tags::FieldA<DataVector, 3>, Ccz4::Tags::FieldB<DataVector, 3>,
+      Ccz4::Tags::FieldD<DataVector, 3>, Ccz4::Tags::FieldP<DataVector, 3>>;
+  const auto analytic_values =
+      wrapped_solution.variables(coords, time, all_tags{});
+
+  const auto& interior_conformal_metric =
+      get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(analytic_values);
+  const auto& interior_conformal_factor =
+      get<Ccz4::Tags::ConformalFactor<DataVector>>(analytic_values);
+  const auto& interior_a_tilde =
+      get<Ccz4::Tags::ATilde<DataVector, 3>>(analytic_values);
+  const auto& interior_trace_K =
+      get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(analytic_values);
+  const auto& interior_theta =
+      get<Ccz4::Tags::Theta<DataVector>>(analytic_values);
+  const auto& interior_gamma_hat =
+      get<Ccz4::Tags::GammaHat<DataVector, 3>>(analytic_values);
+  const auto& interior_lapse =
+      get<gr::Tags::Lapse<DataVector>>(analytic_values);
+  const auto& interior_shift =
+      get<gr::Tags::Shift<DataVector, 3>>(analytic_values);
+  const auto& interior_auxiliary_shift_b =
+      get<Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(analytic_values);
+  const auto& interior_field_a =
+      get<Ccz4::Tags::FieldA<DataVector, 3>>(analytic_values);
+  const auto& interior_field_b =
+      get<Ccz4::Tags::FieldB<DataVector, 3>>(analytic_values);
+  const auto& interior_field_d =
+      get<Ccz4::Tags::FieldD<DataVector, 3>>(analytic_values);
+  const auto& interior_field_p =
+      get<Ccz4::Tags::FieldP<DataVector, 3>>(analytic_values);
+
+  auto interior_u_tensor_minus =
+      make_with_value<tnsr::ii<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
+  const auto& interior_boundary_conformal_metric = interior_conformal_metric;
+  const auto& interior_boundary_conformal_factor = interior_conformal_factor;
+  const auto& interior_boundary_lapse = interior_lapse;
+  const auto& interior_boundary_shift = interior_shift;
+  const auto interior_boundary_theta =
+      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  const auto interior_boundary_z =
+      make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
+
+  auto normal_covector =
+      make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(num_pts, 0.0);
+  normal_covector.get(0) = 1.0;
+
+  const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>
+      face_mesh_velocity{};
+  const bool evolve_lapse_and_shift = true;
+
+  // ---- Call dg_ghost with filter to get filtered ghost state ----
+  auto ghost_conformal_metric =
+      make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_conformal_factor =
+      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto ghost_a_tilde = make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_trace_K = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto ghost_theta = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto ghost_gamma_hat =
+      make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_lapse = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto ghost_shift = make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_auxiliary_shift_b =
+      make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_field_a = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_field_b = make_with_value<tnsr::iJ<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_field_d =
+      make_with_value<tnsr::ijj<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_field_p = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_u_tensor_minus =
+      make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_boundary_conformal_metric =
+      make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_boundary_conformal_factor =
+      make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto ghost_boundary_lapse = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto ghost_boundary_shift =
+      make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto ghost_boundary_theta = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto ghost_boundary_z =
+      make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
+
+  bc.dg_ghost(
+      make_not_null(&ghost_conformal_metric),
+      make_not_null(&ghost_conformal_factor), make_not_null(&ghost_a_tilde),
+      make_not_null(&ghost_trace_K), make_not_null(&ghost_theta),
+      make_not_null(&ghost_gamma_hat), make_not_null(&ghost_lapse),
+      make_not_null(&ghost_shift), make_not_null(&ghost_auxiliary_shift_b),
+      make_not_null(&ghost_field_a), make_not_null(&ghost_field_b),
+      make_not_null(&ghost_field_d), make_not_null(&ghost_field_p),
+      make_not_null(&ghost_u_tensor_minus),
+      make_not_null(&ghost_boundary_conformal_metric),
+      make_not_null(&ghost_boundary_conformal_factor),
+      make_not_null(&ghost_boundary_lapse),
+      make_not_null(&ghost_boundary_shift),
+      make_not_null(&ghost_boundary_theta),
+      make_not_null(&ghost_boundary_z), face_mesh_velocity, normal_covector,
+      interior_conformal_metric, interior_conformal_factor, interior_a_tilde,
+      interior_trace_K, interior_theta, interior_gamma_hat, interior_lapse,
+      interior_shift, interior_auxiliary_shift_b, interior_field_a,
+      interior_field_b, interior_field_d, interior_field_p,
+      interior_u_tensor_minus, interior_boundary_conformal_metric,
+      interior_boundary_conformal_factor, interior_boundary_lapse,
+      interior_boundary_shift, interior_boundary_theta, interior_boundary_z,
+      coords, time, evolve_lapse_and_shift);
+
+  // ---- Call dg_time_derivative with filter ----
+  auto dt_cm = make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_cf = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_a_tilde = make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_K = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_theta = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_gamma_hat = make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_lapse = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_shift = make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_b = make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_field_a = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_field_b = make_with_value<tnsr::iJ<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_field_d = make_with_value<tnsr::ijj<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_field_p = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_u_tm = make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_bcm = make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_bcf = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_blapse = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_bshift = make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_btheta = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_bz = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
+
+  bc.dg_time_derivative(
+      make_not_null(&dt_cm), make_not_null(&dt_cf), make_not_null(&dt_a_tilde),
+      make_not_null(&dt_K), make_not_null(&dt_theta),
+      make_not_null(&dt_gamma_hat), make_not_null(&dt_lapse),
+      make_not_null(&dt_shift), make_not_null(&dt_b),
+      make_not_null(&dt_field_a), make_not_null(&dt_field_b),
+      make_not_null(&dt_field_d), make_not_null(&dt_field_p),
+      make_not_null(&dt_u_tm), make_not_null(&dt_bcm), make_not_null(&dt_bcf),
+      make_not_null(&dt_blapse), make_not_null(&dt_bshift),
+      make_not_null(&dt_btheta), make_not_null(&dt_bz), face_mesh_velocity,
+      normal_covector, interior_conformal_metric, interior_conformal_factor,
+      interior_a_tilde, interior_trace_K, interior_theta, interior_gamma_hat,
+      interior_lapse, interior_shift, interior_auxiliary_shift_b,
+      interior_field_a, interior_field_b, interior_field_d, interior_field_p,
+      interior_u_tensor_minus, interior_boundary_conformal_metric,
+      interior_boundary_conformal_factor, interior_boundary_lapse,
+      interior_boundary_shift, interior_boundary_theta, interior_boundary_z,
+      coords, time, evolve_lapse_and_shift);
+
+  // ---- Compute reference dt_bcm from filtered ghost state (eq 12a) ----
+  // dt γ̃_{ij} = 2β^k D_{k,i,j} + γ̃_{ki}B_j^k + γ̃_{kj}B_i^k
+  //              - (2/3) γ̃_{ij} B_k^k - 2α Ã_{ij}
+  // Using the FILTERED ghost state from dg_ghost (which includes the YLM
+  // filter + trace constraint on field_d).
+  tnsr::ii<DataVector, Dim, Frame::Inertial> expected_dt_bcm(num_pts, 0.0);
+  for (size_t s = 0; s < num_pts; ++s) {
+    double cfb = 0.0;
+    for (size_t k = 0; k < Dim; ++k) {
+      cfb += ghost_field_b.get(k, k)[s];
+    }
+    for (size_t i = 0; i < Dim; ++i) {
+      for (size_t j = i; j < Dim; ++j) {
+        double val = 0.0;
+        for (size_t k = 0; k < Dim; ++k) {
+          val += 2.0 * ghost_shift.get(k)[s] *
+                 ghost_field_d.get(k, i, j)[s];
+        }
+        for (size_t k = 0; k < Dim; ++k) {
+          val += ghost_conformal_metric.get(k, i)[s] *
+                 ghost_field_b.get(j, k)[s];
+        }
+        for (size_t k = 0; k < Dim; ++k) {
+          val += ghost_conformal_metric.get(k, j)[s] *
+                 ghost_field_b.get(i, k)[s];
+        }
+        val -= (2.0 / 3.0) * ghost_conformal_metric.get(i, j)[s] * cfb;
+        val -= 2.0 * get(ghost_lapse)[s] * ghost_a_tilde.get(i, j)[s];
+        expected_dt_bcm.get(i, j)[s] = val;
+      }
+    }
+  }
+
+  const Approx custom_approx = Approx::custom().epsilon(1.0e-10).scale(1.0);
+  CHECK_ITERABLE_CUSTOM_APPROX(dt_bcm, expected_dt_bcm, custom_approx);
+
+  // ---- Also verify the filter actually changed something ----
+  // Call dg_time_derivative WITHOUT filter and check results differ
+  auto dt_bcm_nofilter =
+      make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_bcf_nf = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_blapse_nf = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_bshift_nf = make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_btheta_nf = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_bz_nf =
+      make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
+  // Reuse zeroed output vars for the rest (we only care about dt_bcm)
+  auto dt_cm_nf = make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_cf_nf = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_at_nf = make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_K_nf = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_th_nf = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_gh_nf = make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_la_nf = make_with_value<Scalar<DataVector>>(num_pts, 0.0);
+  auto dt_sh_nf = make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_b_nf = make_with_value<tnsr::I<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_fa_nf = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_fb_nf = make_with_value<tnsr::iJ<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_fd_nf = make_with_value<tnsr::ijj<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_fp_nf = make_with_value<tnsr::i<DataVector, Dim>>(num_pts, 0.0);
+  auto dt_utm_nf = make_with_value<tnsr::ii<DataVector, Dim>>(num_pts, 0.0);
+
+  bc_nofilter.dg_time_derivative(
+      make_not_null(&dt_cm_nf), make_not_null(&dt_cf_nf),
+      make_not_null(&dt_at_nf), make_not_null(&dt_K_nf),
+      make_not_null(&dt_th_nf), make_not_null(&dt_gh_nf),
+      make_not_null(&dt_la_nf), make_not_null(&dt_sh_nf),
+      make_not_null(&dt_b_nf), make_not_null(&dt_fa_nf),
+      make_not_null(&dt_fb_nf), make_not_null(&dt_fd_nf),
+      make_not_null(&dt_fp_nf), make_not_null(&dt_utm_nf),
+      make_not_null(&dt_bcm_nofilter), make_not_null(&dt_bcf_nf),
+      make_not_null(&dt_blapse_nf), make_not_null(&dt_bshift_nf),
+      make_not_null(&dt_btheta_nf), make_not_null(&dt_bz_nf),
+      face_mesh_velocity, normal_covector, interior_conformal_metric,
+      interior_conformal_factor, interior_a_tilde, interior_trace_K,
+      interior_theta, interior_gamma_hat, interior_lapse, interior_shift,
+      interior_auxiliary_shift_b, interior_field_a, interior_field_b,
+      interior_field_d, interior_field_p, interior_u_tensor_minus,
+      interior_boundary_conformal_metric, interior_boundary_conformal_factor,
+      interior_boundary_lapse, interior_boundary_shift,
+      interior_boundary_theta, interior_boundary_z, coords, time,
+      evolve_lapse_and_shift);
+
+  // The filtered and unfiltered dt_bcm should differ, proving the filter
+  // actually modifies the fields used by dg_time_derivative.
+  bool any_component_differs = false;
+  for (size_t i = 0; i < Dim; ++i) {
+    for (size_t j = i; j < Dim; ++j) {
+      for (size_t s = 0; s < num_pts; ++s) {
+        if (std::abs(dt_bcm.get(i, j)[s] - dt_bcm_nofilter.get(i, j)[s]) >
+            1.0e-14) {
+          any_component_differs = true;
+          break;
+        }
+      }
+      if (any_component_differs) {
+        break;
+      }
+    }
+    if (any_component_differs) {
+      break;
+    }
+  }
+  CHECK(any_component_differs);
+}
+
 // TODO: Add a test that verifies CRPBC evaluates the analytic solution at
 // initial_time_ (NOT the runtime time). Currently all available CCZ4 analytic
 // solutions (Minkowski, KerrSchild) are stationary, so passing different time
@@ -769,5 +1103,6 @@ SPECTRE_TEST_CASE(
   test_minkowski();
   test_kerrschild();
   test_kerrschild_dt_boundary_conformal_metric();
+  test_kerrschild_dt_with_ylm_filter();
 }
 }  // namespace
