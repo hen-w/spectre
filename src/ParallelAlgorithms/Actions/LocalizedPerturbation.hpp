@@ -85,20 +85,32 @@ struct LocalizedPerturbation {
       static constexpr Options::String help =
           "Center of the Gaussian perturbation.";
     };
+    struct SphericalShellGaussian {
+      using type = Options::Auto<double, Options::AutoLabel::None>;
+      static constexpr Options::String help =
+          "If set, use a spherically symmetric Gaussian localized in the "
+          "radial direction, peaked at the given radius from Center. The "
+          "perturbation is amplitude * exp(-(r - r0)^2 / width^2) where "
+          "r = |x - Center| and r0 is this value. Set to None to use a "
+          "standard Cartesian Gaussian.";
+    };
     using options =
-        tmpl::list<VariablesToPerturb, Amplitude, Width, Center>;
+        tmpl::list<VariablesToPerturb, Amplitude, Width, Center,
+                   SphericalShellGaussian>;
     static constexpr Options::String help =
         "Parameters for a localized Gaussian perturbation.";
 
     PerturbationParameters() = default;
-    PerturbationParameters(std::vector<std::string> in_variables_to_perturb,
-                           double in_amplitude, double in_width,
-                           std::vector<double> in_center,
-                           const Options::Context& context = {})
+    PerturbationParameters(
+        std::vector<std::string> in_variables_to_perturb, double in_amplitude,
+        double in_width, std::vector<double> in_center,
+        std::optional<double> in_spherical_shell_radial_center,
+        const Options::Context& context = {})
         : variables_to_perturb(std::move(in_variables_to_perturb)),
           amplitude(in_amplitude),
           width(in_width),
-          center(std::move(in_center)) {
+          center(std::move(in_center)),
+          spherical_shell_radial_center(in_spherical_shell_radial_center) {
       db::validate_selection<tags_list>(variables_to_perturb, context);
     }
 
@@ -107,12 +119,14 @@ struct LocalizedPerturbation {
       p | amplitude;
       p | width;
       p | center;
+      p | spherical_shell_radial_center;
     }
 
     std::vector<std::string> variables_to_perturb{};
     double amplitude{};
     double width{};
     std::vector<double> center{};
+    std::optional<double> spherical_shell_radial_center{};
   };
 
   struct PerturbationParametersOptionTag {
@@ -157,8 +171,18 @@ struct LocalizedPerturbation {
     for (size_t d = 0; d < Dim; ++d) {
       r_squared += square(coords.get(d) - gsl::at(p.center, d));
     }
-    const DataVector window =
-        p.amplitude * exp(-r_squared / square(p.width));
+    DataVector window(get<0>(coords).size());
+    if (p.spherical_shell_radial_center.has_value()) {
+      // Spherically symmetric Gaussian in radial direction:
+      // amplitude * exp(-(r - r0)^2 / width^2)
+      const DataVector r = sqrt(r_squared);
+      window = p.amplitude *
+               exp(-square(r - p.spherical_shell_radial_center.value()) /
+                   square(p.width));
+    } else {
+      // Standard Cartesian Gaussian: amplitude * exp(-r^2 / width^2)
+      window = p.amplitude * exp(-r_squared / square(p.width));
+    }
     // Add perturbation to selected variables
     const auto& vars_to_perturb = p.variables_to_perturb;
     db::mutate<VariablesTag>(

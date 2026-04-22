@@ -82,7 +82,8 @@ void test_selective_perturbation() {
                                      SegmentId{2, 1}}}};
 
   PerturbAction::PerturbationParameters params{
-      std::vector<std::string>{"PsiTag"}, amplitude, width, center};
+      std::vector<std::string>{"PsiTag"}, amplitude, width, center,
+      std::nullopt};
 
   using element_array = ElementArray<Metavariables>;
   ActionTesting::MockRuntimeSystem<Metavariables> runner{
@@ -162,7 +163,8 @@ void test_localization() {
                                      SegmentId{2, 1}}}};
 
   PerturbAction::PerturbationParameters params{
-      std::vector<std::string>{"PsiTag"}, amplitude, width, center};
+      std::vector<std::string>{"PsiTag"}, amplitude, width, center,
+      std::nullopt};
 
   using element_array = ElementArray<Metavariables>;
   ActionTesting::MockRuntimeSystem<Metavariables> runner{
@@ -182,6 +184,65 @@ void test_localization() {
   CHECK(psi_data[2] < std::numeric_limits<double>::epsilon());
 }
 
+void test_spherical_shell_gaussian() {
+  const size_t num_points = 5;
+  const double amplitude = 1.0e-4;
+  const double width = 1.0;
+  const std::vector<double> center{0.0, 0.0, 0.0};
+  const double radial_center = 10.0;
+
+  // Points at various radii from the origin
+  tnsr::I<DataVector, 3, Frame::Inertial> coords{num_points};
+  // r = 0, 5, 10, 15, 20
+  get<0>(coords) = DataVector{0.0, 3.0, 6.0, 9.0, 12.0};
+  get<1>(coords) = DataVector{0.0, 4.0, 8.0, 12.0, 16.0};
+  get<2>(coords) = DataVector{0.0, 0.0, 0.0, 0.0, 0.0};
+
+  Variables<tags_list> fields{num_points, 0.0};
+
+  const ElementId<3> element_id{
+      0, {{SegmentId{2, 1}, SegmentId{2, 1}, SegmentId{2, 1}}}};
+
+  PerturbAction::PerturbationParameters params{
+      std::vector<std::string>{"PsiTag"}, amplitude, width, center,
+      radial_center};
+
+  using element_array = ElementArray<Metavariables>;
+  ActionTesting::MockRuntimeSystem<Metavariables> runner{
+      {std::optional<PerturbAction::PerturbationParameters>{params}}};
+  ActionTesting::emplace_component_and_initialize<element_array>(
+      &runner, element_id, {fields, coords});
+  ActionTesting::set_phase(make_not_null(&runner), Parallel::Phase::Testing);
+  ActionTesting::next_action<element_array>(make_not_null(&runner),
+                                            element_id);
+
+  const auto get_tag = [&runner, &element_id](auto tag_v) -> const auto& {
+    using tag = std::decay_t<decltype(tag_v)>;
+    return ActionTesting::get_databox_tag<element_array, tag>(runner,
+                                                              element_id);
+  };
+
+  // Compute expected: amplitude * exp(-(r - r0)^2 / width^2)
+  DataVector expected{num_points};
+  for (size_t i = 0; i < num_points; ++i) {
+    const double r = sqrt(square(get<0>(coords)[i]) +
+                          square(get<1>(coords)[i]) +
+                          square(get<2>(coords)[i]));
+    expected[i] = amplitude * exp(-square(r - radial_center) / square(width));
+  }
+
+  const DataVector& psi_data = get(get_tag(PsiTag{}));
+  CHECK(psi_data == expected);
+
+  // PiTag should be identically zero
+  const DataVector& pi_data = get(get_tag(PiTag{}));
+  CHECK(pi_data == DataVector{num_points, 0.0});
+
+  // Verify spherical symmetry: the perturbation at r=10 should be the peak
+  // Point at index 2 has r = sqrt(36+64) = 10, so it should get full amplitude
+  CHECK(psi_data[2] == approx(amplitude));
+}
+
 }  // namespace
 
 SPECTRE_TEST_CASE("Unit.ParallelAlgorithms.Actions.LocalizedPerturbation",
@@ -189,4 +250,5 @@ SPECTRE_TEST_CASE("Unit.ParallelAlgorithms.Actions.LocalizedPerturbation",
   test_selective_perturbation();
   test_disabled();
   test_localization();
+  test_spherical_shell_gaussian();
 }
