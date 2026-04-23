@@ -63,15 +63,11 @@ std::optional<std::string> DirichletAnalytic::dg_ghost(
     const gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*> field_d,
     const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> field_p,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
-        u_tensor_minus,
-    const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
         boundary_conformal_metric,
     const gsl::not_null<Scalar<DataVector>*> boundary_conformal_factor,
     const gsl::not_null<Scalar<DataVector>*> boundary_lapse,
     const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
         boundary_shift,
-    const gsl::not_null<Scalar<DataVector>*> boundary_theta,
-    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> boundary_z,
     const std::optional<
         tnsr::I<DataVector, 3, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, 3, Frame::Inertial>& /*normal_covector*/,
@@ -128,22 +124,12 @@ std::optional<std::string> DirichletAnalytic::dg_ghost(
   *field_b = get<Tags::FieldB<DataVector, 3>>(boundary_values);
   *field_d = get<Tags::FieldD<DataVector, 3>>(boundary_values);
   *field_p = get<Tags::FieldP<DataVector, 3>>(boundary_values);
-  // Boundary mode exterior values: zero (corrections are zero for these tags)
-  for (auto& component : *u_tensor_minus) {
-    component = 0.0;
-  }
   *boundary_conformal_metric =
       get<Tags::ConformalMetric<DataVector, 3>>(boundary_values);
   *boundary_conformal_factor =
       get<Tags::ConformalFactor<DataVector>>(boundary_values);
   *boundary_lapse = get<gr::Tags::Lapse<DataVector>>(boundary_values);
   *boundary_shift = get<gr::Tags::Shift<DataVector, 3>>(boundary_values);
-  // Boundary theta/z: set from analytic theta (z=0 for analytic solutions
-  // where constraints are satisfied)
-  *boundary_theta = get<Tags::Theta<DataVector>>(boundary_values);
-  for (auto& component : *boundary_z) {
-    component = 0.0;
-  }
   return std::nullopt;
 }
 

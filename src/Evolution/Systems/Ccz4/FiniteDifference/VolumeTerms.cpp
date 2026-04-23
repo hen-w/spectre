@@ -87,15 +87,3 @@ template void partial_derivatives<
                           Frame::Inertial>& inverse_jacobian,
     const tnsr::I<DataVector, 3, Frame::Inertial>& inertial_coords);
 
-// Instantiation for the 3-arg overload used by
-// OverwriteExternalBoundaryDtDirichlet
-template auto partial_derivatives<typename system::variables_tag::tags_list,
-                                  typename system::variables_tag::tags_list, 3,
-                                  Frame::Inertial>(
-    const Variables<typename system::variables_tag::tags_list>& u,
-    const Mesh<3>& mesh,
-    const InverseJacobian<DataVector, 3, Frame::ElementLogical,
-                          Frame::Inertial>& inverse_jacobian)
-    -> Variables<db::wrap_tags_in<::Tags::deriv,
-                                  typename system::variables_tag::tags_list,
-                                  tmpl::size_t<3>, Frame::Inertial>>;

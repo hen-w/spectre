@@ -105,14 +105,11 @@ class DirichletAnalytic final : public BoundaryCondition {
       gsl::not_null<tnsr::iJ<DataVector, 3, Frame::Inertial>*> field_b,
       gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*> field_d,
       gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> field_p,
-      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> u_tensor_minus,
       gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
           boundary_conformal_metric,
       gsl::not_null<Scalar<DataVector>*> boundary_conformal_factor,
       gsl::not_null<Scalar<DataVector>*> boundary_lapse,
       gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> boundary_shift,
-      gsl::not_null<Scalar<DataVector>*> boundary_theta,
-      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> boundary_z,
       const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&
           face_mesh_velocity,
       const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,

@@ -32,7 +32,6 @@ spectre_target_headers(
   ApplyFilter.hpp
   BoundaryConditionGhostData.hpp
   Characteristics.hpp
-  ComputeCrpbcBoundaryModeDt.hpp
   ConstraintCharacteristics.hpp
   Derivatives.hpp
   DetConformalSpatialMetricCompute.hpp
@@ -46,14 +45,11 @@ spectre_target_headers(
   HamiltonianConstraintCompute.hpp
   LdgTimeDerivative.hpp
   MomentumConstraintCompute.hpp
-  OverwriteExternalBoundaryDt.hpp
-  OverwriteExternalBoundaryDtDirichlet.hpp
   RadiationCharacteristics.hpp
   Reconstructor.hpp
   RegisterDerivedWithCharm.hpp
   ResizeTimeDerivatives.hpp
   SetInitialEta.hpp
-  SetInitialBoundaryModes.hpp
   SetK0.hpp
   SoTimeDerivative.hpp
   SpatialZ4ConstraintUpCompute.hpp

@@ -153,14 +153,11 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
       gsl::not_null<tnsr::iJ<DataVector, 3, Frame::Inertial>*> field_b,
       gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*> field_d,
       gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> field_p,
-      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*> u_tensor_minus,
       gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
           boundary_conformal_metric,
       gsl::not_null<Scalar<DataVector>*> boundary_conformal_factor,
       gsl::not_null<Scalar<DataVector>*> boundary_lapse,
       gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*> boundary_shift,
-      gsl::not_null<Scalar<DataVector>*> boundary_theta,
-      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> boundary_z,
       // Standard DG ghost args:
       const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&
           face_mesh_velocity,
@@ -180,14 +177,10 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
       const tnsr::ijj<DataVector, 3, Frame::Inertial>& interior_field_d,
       const tnsr::i<DataVector, 3, Frame::Inertial>& interior_field_p,
       const tnsr::ii<DataVector, 3, Frame::Inertial>&
-          interior_boundary_u_tensor_minus,
-      const tnsr::ii<DataVector, 3, Frame::Inertial>&
           interior_boundary_conformal_metric,
       const Scalar<DataVector>& interior_boundary_conformal_factor,
       const Scalar<DataVector>& interior_boundary_lapse,
       const tnsr::I<DataVector, 3, Frame::Inertial>& interior_boundary_shift,
-      const Scalar<DataVector>& interior_boundary_theta,
-      const tnsr::i<DataVector, 3, Frame::Inertial>& interior_boundary_z,
       // dg_interior_temporary_tags:
       const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
       // dg_gridless_tags:
@@ -219,17 +212,12 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
       gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
           dt_field_p_correction,
       gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
-          dt_u_tensor_minus_correction,
-      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
           dt_boundary_conformal_metric_correction,
       gsl::not_null<Scalar<DataVector>*>
           dt_boundary_conformal_factor_correction,
       gsl::not_null<Scalar<DataVector>*> dt_boundary_lapse_correction,
       gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
           dt_boundary_shift_correction,
-      gsl::not_null<Scalar<DataVector>*> dt_boundary_theta_correction,
-      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
-          dt_boundary_z_correction,
       // Standard DG time derivative args:
       const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&
           face_mesh_velocity,
@@ -249,14 +237,10 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
       const tnsr::ijj<DataVector, 3, Frame::Inertial>& interior_field_d,
       const tnsr::i<DataVector, 3, Frame::Inertial>& interior_field_p,
       const tnsr::ii<DataVector, 3, Frame::Inertial>&
-          interior_boundary_u_tensor_minus,
-      const tnsr::ii<DataVector, 3, Frame::Inertial>&
           interior_boundary_conformal_metric,
       const Scalar<DataVector>& interior_boundary_conformal_factor,
       const Scalar<DataVector>& interior_boundary_lapse,
       const tnsr::I<DataVector, 3, Frame::Inertial>& interior_boundary_shift,
-      const Scalar<DataVector>& interior_boundary_theta,
-      const tnsr::i<DataVector, 3, Frame::Inertial>& interior_boundary_z,
       // dg_interior_temporary_tags:
       const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
       // dg_gridless_tags:
@@ -267,8 +251,9 @@ class ConstraintsRadiationPreserving final : public BoundaryCondition {
   using fd_interior_temporary_tags = tmpl::list<>;
   using fd_interior_primitive_variables_tags = tmpl::list<>;
   using fd_gridless_tags = tmpl::list<>;
-  void fd_ghost(gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>,
-                gsl::not_null<Scalar<DataVector>*>,
+  [[noreturn]] void fd_ghost(
+      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>,
+      gsl::not_null<Scalar<DataVector>*>,
                 gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>,
                 gsl::not_null<Scalar<DataVector>*>,
                 gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>,

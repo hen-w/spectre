@@ -9,7 +9,6 @@ spectre_target_sources(
   DirichletAnalytic.cpp
   DirichletCharacteristics.cpp
   Sommerfeld.cpp
-  TimeDerivativeDirichlet.cpp
   )
 
 spectre_target_headers(
@@ -21,6 +20,5 @@ spectre_target_headers(
   DirichletAnalytic.hpp
   DirichletCharacteristics.hpp
   Sommerfeld.hpp
-  TimeDerivativeDirichlet.hpp
   Factory.hpp
   )

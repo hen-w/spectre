@@ -161,9 +161,7 @@ void test_minkowski() {
   auto dt_field_p =
       make_with_value<tnsr::i<DataVector, 3>>(lapse_size, nan_val);
 
-  // Boundary mode dt outputs (zero-initialized)
-  auto dt_u_tensor_minus =
-      make_with_value<tnsr::ii<DataVector, 3>>(lapse_size, 0.0);
+  // Boundary second-order field dt outputs (zero-initialized)
   auto dt_boundary_conformal_metric =
       make_with_value<tnsr::ii<DataVector, 3>>(lapse_size, 0.0);
   auto dt_boundary_conformal_factor =
@@ -171,14 +169,8 @@ void test_minkowski() {
   auto dt_boundary_lapse = make_with_value<Scalar<DataVector>>(lapse_size, 0.0);
   auto dt_boundary_shift =
       make_with_value<tnsr::I<DataVector, 3>>(lapse_size, 0.0);
-  auto dt_boundary_theta =
-      make_with_value<Scalar<DataVector>>(lapse_size, 0.0);
-  auto dt_boundary_z =
-      make_with_value<tnsr::i<DataVector, 3>>(lapse_size, 0.0);
 
-  // Boundary mode derivative inputs (zero-valued)
-  const auto d_u_tensor_minus =
-      make_with_value<tnsr::ijj<DataVector, 3>>(lapse_size, 0.0);
+  // Boundary second-order field derivative inputs (zero-valued)
   const auto d_boundary_conformal_metric =
       make_with_value<tnsr::ijj<DataVector, 3>>(lapse_size, 0.0);
   const auto d_boundary_conformal_factor =
@@ -187,10 +179,6 @@ void test_minkowski() {
       make_with_value<tnsr::i<DataVector, 3>>(lapse_size, 0.0);
   const auto d_boundary_shift =
       make_with_value<tnsr::iJ<DataVector, 3>>(lapse_size, 0.0);
-  const auto d_boundary_theta =
-      make_with_value<tnsr::i<DataVector, 3>>(lapse_size, 0.0);
-  const auto d_boundary_z =
-      make_with_value<tnsr::ij<DataVector, 3>>(lapse_size, 0.0);
 
   const double kappa_1 = 0.1;
   const double kappa_2 = 0.2;
@@ -204,17 +192,15 @@ void test_minkowski() {
       make_not_null(&dt_lapse), make_not_null(&dt_shift), make_not_null(&dt_b),
       make_not_null(&dt_field_a), make_not_null(&dt_field_b),
       make_not_null(&dt_field_d), make_not_null(&dt_field_p),
-      make_not_null(&dt_u_tensor_minus),
       make_not_null(&dt_boundary_conformal_metric),
       make_not_null(&dt_boundary_conformal_factor),
       make_not_null(&dt_boundary_lapse), make_not_null(&dt_boundary_shift),
-      make_not_null(&dt_boundary_theta), make_not_null(&dt_boundary_z),
       // partial derivatives
       d_conformal_metric, d_conformal_factor, d_a_tilde,
       d_trace_extrinsic_curvature, d_theta, d_gamma_hat, d_lapse, d_shift, d_b,
       d_field_a_raw, d_field_b_raw, d_field_d_raw, d_field_p_raw,
-      d_u_tensor_minus, d_boundary_conformal_metric, d_boundary_conformal_factor,
-      d_boundary_lapse, d_boundary_shift, d_boundary_theta, d_boundary_z,
+      d_boundary_conformal_metric, d_boundary_conformal_factor,
+      d_boundary_lapse, d_boundary_shift,
       // argument_tags (variable values)
       conformal_metric, conformal_factor, a_tilde, trace_extrinsic_curvature,
       theta, gamma_hat, lapse, shift, b, field_a, field_b, field_d, field_p,
@@ -456,9 +442,7 @@ void test_kerrschild() {
   auto dt_field_p =
       make_with_value<tnsr::i<DataVector, 3>>(used_for_size, nan_val);
 
-  // Boundary mode dt outputs (zero-initialized)
-  auto dt_u_tensor_minus =
-      make_with_value<tnsr::ii<DataVector, 3>>(used_for_size, 0.0);
+  // Boundary second-order field dt outputs (zero-initialized)
   auto dt_boundary_conformal_metric =
       make_with_value<tnsr::ii<DataVector, 3>>(used_for_size, 0.0);
   auto dt_boundary_conformal_factor =
@@ -467,14 +451,8 @@ void test_kerrschild() {
       make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
   auto dt_boundary_shift =
       make_with_value<tnsr::I<DataVector, 3>>(used_for_size, 0.0);
-  auto dt_boundary_theta =
-      make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
-  auto dt_boundary_z =
-      make_with_value<tnsr::i<DataVector, 3>>(used_for_size, 0.0);
 
-  // Boundary mode derivative inputs (zero-valued)
-  const auto d_u_tensor_minus =
-      make_with_value<tnsr::ijj<DataVector, 3>>(used_for_size, 0.0);
+  // Boundary second-order field derivative inputs (zero-valued)
   const auto d_boundary_conformal_metric =
       make_with_value<tnsr::ijj<DataVector, 3>>(used_for_size, 0.0);
   const auto d_boundary_conformal_factor =
@@ -483,10 +461,6 @@ void test_kerrschild() {
       make_with_value<tnsr::i<DataVector, 3>>(used_for_size, 0.0);
   const auto d_boundary_shift =
       make_with_value<tnsr::iJ<DataVector, 3>>(used_for_size, 0.0);
-  const auto d_boundary_theta =
-      make_with_value<tnsr::i<DataVector, 3>>(used_for_size, 0.0);
-  const auto d_boundary_z =
-      make_with_value<tnsr::ij<DataVector, 3>>(used_for_size, 0.0);
 
   // Call LdgTimeDerivative::apply
   LdgTimeDerivative::apply(
@@ -496,18 +470,15 @@ void test_kerrschild() {
       make_not_null(&dt_lapse), make_not_null(&dt_shift), make_not_null(&dt_b),
       make_not_null(&dt_field_a), make_not_null(&dt_field_b),
       make_not_null(&dt_field_d), make_not_null(&dt_field_p),
-      make_not_null(&dt_u_tensor_minus),
       make_not_null(&dt_boundary_conformal_metric),
       make_not_null(&dt_boundary_conformal_factor),
       make_not_null(&dt_boundary_lapse), make_not_null(&dt_boundary_shift),
-      make_not_null(&dt_boundary_theta), make_not_null(&dt_boundary_z),
       // partial derivatives
       d_conformal_metric_spec, d_conformal_factor_spec, d_a_tilde,
       d_trace_extrinsic_curvature, d_theta, d_gamma_hat, d_lapse_spectral,
       d_shift_spec, d_b, d_field_a_raw, d_field_b_raw, d_field_d_raw,
-      d_field_p_raw, d_u_tensor_minus, d_boundary_conformal_metric,
+      d_field_p_raw, d_boundary_conformal_metric,
       d_boundary_conformal_factor, d_boundary_lapse, d_boundary_shift,
-      d_boundary_theta, d_boundary_z,
       // argument_tags (variable values)
       conformal_metric, conformal_factor_scalar, a_tilde,
       trace_extrinsic_curvature, theta, gamma_hat, lapse, shift, b, field_a,

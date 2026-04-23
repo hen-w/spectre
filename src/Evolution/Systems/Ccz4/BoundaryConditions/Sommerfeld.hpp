@@ -114,11 +114,8 @@ class Sommerfeld final : public BoundaryCondition {
       gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*>,
       gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>,
       gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>,
-      gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>,
       gsl::not_null<Scalar<DataVector>*>, gsl::not_null<Scalar<DataVector>*>,
       gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>,
-      gsl::not_null<Scalar<DataVector>*>,
-      gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>,
       const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>>&,
       const tnsr::i<DataVector, 3, Frame::Inertial>&) const;
 

@@ -733,15 +733,11 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
     const gsl::not_null<tnsr::ijj<DataVector, 3, Frame::Inertial>*> field_d,
     const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> field_p,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
-        bm_u_tensor_minus,
-    const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
         boundary_conformal_metric,
     const gsl::not_null<Scalar<DataVector>*> boundary_conformal_factor,
     const gsl::not_null<Scalar<DataVector>*> boundary_lapse,
     const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
         boundary_shift,
-    const gsl::not_null<Scalar<DataVector>*> boundary_theta,
-    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*> boundary_z,
     const std::optional<
         tnsr::I<DataVector, 3, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
@@ -758,14 +754,11 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
     const tnsr::iJ<DataVector, 3, Frame::Inertial>& interior_field_b,
     const tnsr::ijj<DataVector, 3, Frame::Inertial>& interior_field_d,
     const tnsr::i<DataVector, 3, Frame::Inertial>& interior_field_p,
-    const tnsr::ii<DataVector, 3, Frame::Inertial>& /*interior_boundary_u_tensor_minus*/,
     const tnsr::ii<DataVector, 3, Frame::Inertial>&
         interior_boundary_conformal_metric,
     const Scalar<DataVector>& interior_boundary_conformal_factor,
     const Scalar<DataVector>& interior_boundary_lapse,
     const tnsr::I<DataVector, 3, Frame::Inertial>& interior_boundary_shift,
-    const Scalar<DataVector>& interior_boundary_theta,
-    const tnsr::i<DataVector, 3, Frame::Inertial>& interior_boundary_z,
     const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
     const double /*time*/,
     const bool evolve_lapse_and_shift) const {
@@ -864,18 +857,11 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_ghost(
                 interior_boundary_conformal_metric(ti::i, ti::j) / 3.0);
   }
 
-  // Boundary mode exterior values: zero
-  for (auto& component : *bm_u_tensor_minus) {
-    component = 0.0;
-  }
-
   // Boundary second-order field exterior values: pass through interior
   *boundary_conformal_metric = interior_boundary_conformal_metric;
   *boundary_conformal_factor = interior_boundary_conformal_factor;
   *boundary_lapse = interior_boundary_lapse;
   *boundary_shift = interior_boundary_shift;
-  *boundary_theta = interior_boundary_theta;
-  *boundary_z = interior_boundary_z;
 
   return {};
 }
@@ -905,17 +891,12 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
     const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
         dt_field_p_correction,
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
-        dt_u_tensor_minus_correction,
-    const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>
         dt_boundary_conformal_metric_correction,
     const gsl::not_null<Scalar<DataVector>*>
         dt_boundary_conformal_factor_correction,
     const gsl::not_null<Scalar<DataVector>*> dt_boundary_lapse_correction,
     const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>
         dt_boundary_shift_correction,
-    const gsl::not_null<Scalar<DataVector>*> dt_boundary_theta_correction,
-    const gsl::not_null<tnsr::i<DataVector, 3, Frame::Inertial>*>
-        dt_boundary_z_correction,
     const std::optional<
         tnsr::I<DataVector, 3, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, 3, Frame::Inertial>& normal_covector,
@@ -932,14 +913,11 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
     const tnsr::iJ<DataVector, 3, Frame::Inertial>& interior_field_b,
     const tnsr::ijj<DataVector, 3, Frame::Inertial>& interior_field_d,
     const tnsr::i<DataVector, 3, Frame::Inertial>& interior_field_p,
-    const tnsr::ii<DataVector, 3, Frame::Inertial>& /*interior_boundary_u_tensor_minus*/,
     const tnsr::ii<DataVector, 3, Frame::Inertial>&
         interior_boundary_conformal_metric,
     const Scalar<DataVector>& interior_boundary_conformal_factor,
     const Scalar<DataVector>& interior_boundary_lapse,
     const tnsr::I<DataVector, 3, Frame::Inertial>& interior_boundary_shift,
-    const Scalar<DataVector>& /*interior_boundary_theta*/,
-    const tnsr::i<DataVector, 3, Frame::Inertial>& /*interior_boundary_z*/,
     const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
     const double /*time*/,
     const bool evolve_lapse_and_shift) const {
@@ -981,10 +959,6 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
     component = 0.0;
   }
   for (auto& component : *dt_field_p_correction) {
-    component = 0.0;
-  }
-  // Zero boundary mode dt corrections
-  for (auto& component : *dt_u_tensor_minus_correction) {
     component = 0.0;
   }
 
@@ -1063,16 +1037,10 @@ std::optional<std::string> ConstraintsRadiationPreserving::dg_time_derivative(
       filtered_field_a, filtered_field_b, filtered_field_d, filtered_field_p,
       k_0, f_val, shifting_shift);
 
-  // Zero boundary theta/z dt corrections (not evolved by this BC)
-  get(*dt_boundary_theta_correction) = 0.0;
-  for (auto& component : *dt_boundary_z_correction) {
-    component = 0.0;
-  }
-
   return {};
 }
 
-void ConstraintsRadiationPreserving::fd_ghost(
+[[noreturn]] void ConstraintsRadiationPreserving::fd_ghost(
     const gsl::not_null<tnsr::ii<DataVector, 3, Frame::Inertial>*>,
     const gsl::not_null<Scalar<DataVector>*>,
     const gsl::not_null<tnsr::I<DataVector, 3, Frame::Inertial>*>,

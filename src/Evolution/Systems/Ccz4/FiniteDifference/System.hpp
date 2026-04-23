@@ -48,43 +48,28 @@ struct System {
       ::Ccz4::Tags::FieldA<DataVector, 3>, ::Ccz4::Tags::FieldB<DataVector, 3>,
       ::Ccz4::Tags::FieldD<DataVector, 3>, ::Ccz4::Tags::FieldP<DataVector, 3>>;
 
-  // Boundary mode tags: incoming characteristic modes evolved at CRPBC faces.
-  // Only UTensorMinus is evolved as a minus mode here. The incoming modes
-  // UScalar3Minus / UVector2Minus / UScalar2Minus are reconstructed in
-  // ConstraintsRadiationPreserving from the boundary-integrated physical
-  // fields (BoundaryTheta / BoundaryZ) below together with the interior
-  // plus modes.
-  using boundary_mode_tags = tmpl::list<
-      ::Ccz4::fd::Tags::UTensorMinus<DataVector, 3, Frame::Inertial>>;
-
-  // Boundary-integrated second-order fields. The first four are used by
-  // DirichletCharacteristics/CRPBC as ghost-side second-order data; the
-  // last two (BoundaryTheta, BoundaryZ) are advection+damping ODEs at
-  // CRPBC faces used to reconstruct three incoming minus modes.
+  // Boundary-integrated second-order fields used by
+  // DirichletCharacteristics/CRPBC as ghost-side second-order data.
   using boundary_second_order_tags =
       tmpl::list<::Ccz4::Tags::BoundaryConformalMetric<DataVector, 3>,
                  ::Ccz4::Tags::BoundaryConformalFactor<DataVector>,
                  ::Ccz4::Tags::BoundaryLapse<DataVector>,
-                 ::Ccz4::Tags::BoundaryShift<DataVector, 3>,
-                 ::Ccz4::Tags::BoundaryTheta<DataVector>,
-                 ::Ccz4::Tags::BoundaryZ<DataVector, 3, Frame::Inertial>>;
+                 ::Ccz4::Tags::BoundaryShift<DataVector, 3>>;
 
-  // Full evolved variables = original 9 + 4 boundary modes + 4 boundary
-  // second-order fields
+  // Full evolved variables = original 9 + 4 boundary second-order fields
   using evolved_variables_tags =
-      tmpl::append<original_evolved_variables_tags, boundary_mode_tags,
+      tmpl::append<original_evolved_variables_tags,
                    boundary_second_order_tags>;
 
   // Variables whose spectral derivatives are computed by the DG infrastructure.
   // This includes all variables in variables_tag: original evolved + auxiliary
-  // + boundary modes + boundary second-order fields. Boundary modes and
-  // boundary second-order fields are ODE-evolved (spatially constant) so
-  // their derivatives are zero, but we include them here because the DG
-  // infrastructure's moving-mesh code iterates over all variables and expects
-  // derivatives for each.
+  // + boundary second-order fields. Boundary second-order fields are
+  // ODE-evolved (spatially constant) so their derivatives are zero, but we
+  // include them here because the DG infrastructure's moving-mesh code
+  // iterates over all variables and expects derivatives for each.
   using gradient_variables =
       tmpl::append<original_evolved_variables_tags, auxiliary_variables_tags,
-                   boundary_mode_tags, boundary_second_order_tags>;
+                   boundary_second_order_tags>;
 
   // variables_tag = gradient_variables (which is all tags in the correct order)
   using variables_tag = ::Tags::Variables<gradient_variables>;

@@ -1464,69 +1464,6 @@ struct SoTimeDerivative {
               }
             }
 
-            // Modify the evolution of UTensorMinus to impose radiation
-            // preserving BCs. We use the fact below that CTensorMinus has speed
-            // -\alpha-\beta^n
-            const auto& inv_spatial_metric =
-                get<gr::Tags::InverseSpatialMetric<DataVector, Dim>>(temp_vars);
-            tnsr::II<DataVector, Dim> outermost_inverse_spatial_metric;
-            for (size_t tensor_index = 0;
-                 tensor_index < outermost_conformal_metric.size();
-                 ++tensor_index) {
-              make_const_view<DataVector>(
-                  make_not_null(
-                      &outermost_inverse_spatial_metric[tensor_index]),
-                  inv_spatial_metric[tensor_index],
-                  (subcell_mesh.extents(2) - 1) * num_face_pts, num_face_pts);
-            }
-            const auto& spatial_ricci_tensor =
-                get<::Ccz4::Tags::SpatialRicciTensor<DataVector, Dim>>(
-                    temp_vars);
-            tnsr::ii<DataVector, Dim> outermost_spatial_ricci;
-            for (size_t tensor_index = 0;
-                 tensor_index < outermost_spatial_ricci.size();
-                 ++tensor_index) {
-              make_const_view<DataVector>(
-                  make_not_null(&outermost_spatial_ricci[tensor_index]),
-                  spatial_ricci_tensor[tensor_index],
-                  (subcell_mesh.extents(2) - 1) * num_face_pts, num_face_pts);
-            }
-            const auto& christoffel_second_kind =
-                get<::Ccz4::Tags::ChristoffelSecondKind<DataVector, Dim>>(
-                    temp_vars);
-            tnsr::Ijj<DataVector, Dim> outermost_christoffel;
-            for (size_t tensor_index = 0;
-                 tensor_index < outermost_christoffel.size(); ++tensor_index) {
-              make_const_view<DataVector>(
-                  make_not_null(&outermost_christoffel[tensor_index]),
-                  christoffel_second_kind[tensor_index],
-                  (subcell_mesh.extents(2) - 1) * num_face_pts, num_face_pts);
-            }
-            const auto radiation_char_fields = radiation_characteristic_fields(
-                outermost_conformal_factor, outermost_conformal_factor_squared,
-                outermost_conformal_metric, outermost_spatial_metric,
-                outermost_inverse_spatial_metric,
-                outermost_trace_extrinsic_curvature, outermost_a_tilde,
-                outermost_d_conformal_factor,
-                outermost_d_trace_extrinsic_curvature,
-                outermost_d_conformal_metric, outermost_d_a_tilde,
-                outermost_spatial_ricci, outermost_christoffel,
-                unit_normal_one_form);
-            const auto& c_tensor_minus =
-                get<Tags::CTensorMinus<DataVector, Dim, Frame::Inertial>>(
-                    radiation_char_fields);
-            auto& dt_u_tensor_minus = get<::Tags::dt<
-                Tags::UTensorMinus<DataVector, Dim, Frame::Inertial>>>(
-                dt_char_fields);
-
-            ::tenex::update<ti::i, ti::j>(
-                make_not_null(&dt_u_tensor_minus),
-                dt_u_tensor_minus(ti::i, ti::j) -
-                    (outermost_lapse() +
-                     outermost_shift(ti::K) * unit_normal_one_form(ti::k)) *
-                        outermost_conformal_factor_squared() *
-                        c_tensor_minus(ti::i, ti::j));
-
             // Finally, transform the modified evolution of characteristic
             // fields back to the evolution of (normal derivatives) of evolved
             // fields.
