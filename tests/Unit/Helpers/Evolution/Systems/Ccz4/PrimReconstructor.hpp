@@ -329,8 +329,16 @@ compute_prim_solution_for_Minkowski(
       make_with_value<tnsr::I<DataVector, SpatialDim, FrameType>>(used_for_size,
                                                                   0.0);
 
-  // Boundary second-order fields: zero for analytic data
+  // Auxiliary and boundary fields: zero for the FD subcell path
   const size_t npts = get<0>(coords).size();
+  get<::Ccz4::Tags::FieldA<DataVector, 3>>(evolved_vars) =
+      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(npts, 0.0);
+  get<::Ccz4::Tags::FieldB<DataVector, 3>>(evolved_vars) =
+      make_with_value<tnsr::iJ<DataVector, 3, Frame::Inertial>>(npts, 0.0);
+  get<::Ccz4::Tags::FieldD<DataVector, 3>>(evolved_vars) =
+      make_with_value<tnsr::ijj<DataVector, 3, Frame::Inertial>>(npts, 0.0);
+  get<::Ccz4::Tags::FieldP<DataVector, 3>>(evolved_vars) =
+      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(npts, 0.0);
   get<::Ccz4::Tags::BoundaryConformalMetric<DataVector, 3>>(evolved_vars) =
       make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(npts, 0.0);
   get<::Ccz4::Tags::BoundaryConformalFactor<DataVector>>(evolved_vars) =
@@ -633,8 +641,16 @@ compute_prim_solution_for_KerrSchild(
   get(get<::Ccz4::Tags::ConformalFactor<DataVector>>(evolved_vars)) =
       conformal_factor;
 
-  // Boundary second-order fields: zero for analytic data
+  // Auxiliary and boundary fields: zero for the FD subcell path
   const size_t npts = get<0>(coords).size();
+  get<::Ccz4::Tags::FieldA<DataVector, 3>>(evolved_vars) =
+      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(npts, 0.0);
+  get<::Ccz4::Tags::FieldB<DataVector, 3>>(evolved_vars) =
+      make_with_value<tnsr::iJ<DataVector, 3, Frame::Inertial>>(npts, 0.0);
+  get<::Ccz4::Tags::FieldD<DataVector, 3>>(evolved_vars) =
+      make_with_value<tnsr::ijj<DataVector, 3, Frame::Inertial>>(npts, 0.0);
+  get<::Ccz4::Tags::FieldP<DataVector, 3>>(evolved_vars) =
+      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(npts, 0.0);
   get<::Ccz4::Tags::BoundaryConformalMetric<DataVector, 3>>(evolved_vars) =
       make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(npts, 0.0);
   get<::Ccz4::Tags::BoundaryConformalFactor<DataVector>>(evolved_vars) =
@@ -1073,6 +1089,25 @@ compute_prim_solution_for_GaugePlaneWave(
 
   get(get<::Ccz4::Tags::ConformalFactor<DataVector>>(evolved_vars)) =
       conformal_factor;
+
+  // Auxiliary and boundary fields: zero for the FD subcell path
+  const size_t npts = get<0>(coords).size();
+  get<::Ccz4::Tags::FieldA<DataVector, 3>>(evolved_vars) =
+      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(npts, 0.0);
+  get<::Ccz4::Tags::FieldB<DataVector, 3>>(evolved_vars) =
+      make_with_value<tnsr::iJ<DataVector, 3, Frame::Inertial>>(npts, 0.0);
+  get<::Ccz4::Tags::FieldD<DataVector, 3>>(evolved_vars) =
+      make_with_value<tnsr::ijj<DataVector, 3, Frame::Inertial>>(npts, 0.0);
+  get<::Ccz4::Tags::FieldP<DataVector, 3>>(evolved_vars) =
+      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(npts, 0.0);
+  get<::Ccz4::Tags::BoundaryConformalMetric<DataVector, 3>>(evolved_vars) =
+      make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(npts, 0.0);
+  get<::Ccz4::Tags::BoundaryConformalFactor<DataVector>>(evolved_vars) =
+      make_with_value<Scalar<DataVector>>(npts, 0.0);
+  get<::Ccz4::Tags::BoundaryLapse<DataVector>>(evolved_vars) =
+      make_with_value<Scalar<DataVector>>(npts, 0.0);
+  get<::Ccz4::Tags::BoundaryShift<DataVector, 3>>(evolved_vars) =
+      make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(npts, 0.0);
 
   return evolved_vars;
 }

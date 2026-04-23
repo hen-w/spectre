@@ -175,10 +175,6 @@ void test(const BoundaryConditionType& boundary_condition,
   const Vars interior_evolved_vars =
       set_polynomial(interior_inertial_coords, 1);
 
-  auto& [conformal_metric, conformal_factor, a_tilde, trace_extrinsic_curvature,
-         theta, gamma_hat, lapse, shift, auxiliary_shift_b] =
-      interior_evolved_vars;
-
   auto box = db::create<db::AddSimpleTags<
       Ccz4::Tags::ConformalMetric<DataVector, 3>, gr::Tags::Lapse<DataVector>,
       gr::Tags::Shift<DataVector, 3>, Ccz4::Tags::ConformalFactor<DataVector>,
@@ -197,8 +193,15 @@ void test(const BoundaryConditionType& boundary_condition,
       domain::CoordinateMaps::Tags::CoordinateMap<3, Frame::Grid,
                                                   Frame::Inertial>,
       Ccz4::fd::Tags::EvolveLapseAndShift>>(
-      conformal_metric, lapse, shift, conformal_factor, a_tilde,
-      trace_extrinsic_curvature, theta, gamma_hat, auxiliary_shift_b,
+      get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(interior_evolved_vars),
+      get<gr::Tags::Lapse<DataVector>>(interior_evolved_vars),
+      get<gr::Tags::Shift<DataVector, 3>>(interior_evolved_vars),
+      get<Ccz4::Tags::ConformalFactor<DataVector>>(interior_evolved_vars),
+      get<Ccz4::Tags::ATilde<DataVector, 3>>(interior_evolved_vars),
+      get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(interior_evolved_vars),
+      get<Ccz4::Tags::Theta<DataVector>>(interior_evolved_vars),
+      get<Ccz4::Tags::GammaHat<DataVector, 3>>(interior_evolved_vars),
+      get<Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(interior_evolved_vars),
       EvolutionMetaVars{}, std::move(domain), std::move(boundary_conditions),
       subcell_mesh, subcell_logical_coords, ghost_data,
       std::unique_ptr<Ccz4::fd::Reconstructor>{
@@ -236,14 +239,27 @@ void test(const BoundaryConditionType& boundary_condition,
   if (typeid(BoundaryConditionType) ==
       typeid(Ccz4::BoundaryConditions::DirichletAnalytic)) {
     const auto& expected_ghost_vars = solution.variables(
-        ghost_inertial_coords, time, typename System::variables_tag_list{});
-    tmpl::for_each<System::variables_tag_list>([&]<typename Tag>(
-                                                   tmpl::type_<Tag> /*meta*/) {
-      const std::string tag_name = db::tag_name<Tag>();
-      CAPTURE(tag_name);
-      CAPTURE(ghost_inertial_coords);
-      CHECK(tuples::get<Tag>(expected_ghost_vars) == get<Tag>(ghost_zone_vars));
-    });
+        ghost_inertial_coords, time,
+        typename System::original_evolved_variables_tags{});
+    tmpl::for_each<System::original_evolved_variables_tags>(
+        [&]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
+          const std::string tag_name = db::tag_name<Tag>();
+          CAPTURE(tag_name);
+          CAPTURE(ghost_inertial_coords);
+          CHECK(tuples::get<Tag>(expected_ghost_vars) ==
+                get<Tag>(ghost_zone_vars));
+        });
+    // Verify auxiliary and boundary fields are zero in ghost data
+    const DataVector zero_dv(num_face_pts * ghost_zone_size, 0.0);
+    tmpl::for_each<tmpl::append<System::auxiliary_variables_tags,
+                                System::boundary_second_order_tags>>(
+        [&]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
+          const std::string tag_name = db::tag_name<Tag>();
+          CAPTURE(tag_name);
+          for (const auto& component : get<Tag>(ghost_zone_vars)) {
+            CHECK_ITERABLE_APPROX(component, zero_dv);
+          }
+        });
 
   } else if (typeid(BoundaryConditionType) ==
              typeid(Ccz4::BoundaryConditions::Sommerfeld)) {

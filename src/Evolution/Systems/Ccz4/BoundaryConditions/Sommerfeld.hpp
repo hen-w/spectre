@@ -121,8 +121,7 @@ class Sommerfeld final : public BoundaryCondition {
 
   // FD interface
   using fd_interior_evolved_variables_tags =
-      tmpl::append<::Ccz4::fd::System::original_evolved_variables_tags,
-                   ::Ccz4::fd::System::auxiliary_variables_tags>;
+      ::Ccz4::fd::System::original_evolved_variables_tags;
   using fd_interior_temporary_tags =
       tmpl::list<evolution::dg::subcell::Tags::Mesh<3>>;
   using fd_interior_primitive_variables_tags = tmpl::list<>;

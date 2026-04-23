@@ -88,7 +88,7 @@ void test_fd(const U& boundary_condition, const T& analytic_solution_or_data) {
   const Ccz4::fd::DummyReconstructor reconstructor{};
   const size_t ghost_zone_size = reconstructor.ghost_zone_size();
 
-  using Vars = Variables<Ccz4::fd::Tags::spacetime_reconstruction_tags>;
+  using Vars = Variables<Ccz4::fd::System::original_evolved_variables_tags>;
   Vars vars{ghost_zone_size * subcell_mesh.extents().slice_away(0).product()};
   const auto expected_vars = [&analytic_solution_or_data, &direction,
                               &functions_of_time, &grid_to_inertial_map,

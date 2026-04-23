@@ -42,10 +42,10 @@ void ccz4_kreiss_oliger_filter(
   using first_ccz4_tag = tmpl::front<System::variables_tag_list>;
   const size_t number_of_ccz4_components =
       evolve_lapse_and_shift
-          ? Variables<
-                System::variables_tag_list>::number_of_independent_components
-          : Variables<
-                System::variables_tag_list>::number_of_independent_components -
+          ? Variables<System::original_evolved_variables_tags>::
+                number_of_independent_components
+          : Variables<System::original_evolved_variables_tags>::
+                number_of_independent_components -
                 7;
 
   DirectionMap<3, gsl::span<const double>> ghost_cell_vars{};

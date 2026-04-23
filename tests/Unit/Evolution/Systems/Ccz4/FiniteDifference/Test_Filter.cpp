@@ -130,7 +130,7 @@ void test(const bool evolve_lapse_and_shift) {
   using System = ::Ccz4::fd::System;
 
   Variables<System::variables_tag_list> volume_evolved_variables{
-      subcell_mesh.number_of_grid_points()};
+      subcell_mesh.number_of_grid_points(), 0.0};
 
   DirectionalIdMap<3, evolution::dg::subcell::GhostData>
       neighbor_data_for_reconstruction{};
@@ -163,7 +163,7 @@ void test(const bool evolve_lapse_and_shift) {
               volume_evolved_variables));
   }
 
-  tmpl::for_each<System::variables_tag_list>(
+  tmpl::for_each<System::original_evolved_variables_tags>(
       [&result, &volume_evolved_variables](auto tag_v) {
         using tag = tmpl::type_from<decltype(tag_v)>;
         auto& result_tensor = get<tag>(result);
@@ -179,6 +179,15 @@ void test(const bool evolve_lapse_and_shift) {
               DataVector(result_tensor[tensor_index].size(), 0.0),
               custom_approx);
         }
+      });
+
+  // Verify auxiliary and boundary fields are untouched by the filter
+  tmpl::for_each<tmpl::append<System::auxiliary_variables_tags,
+                              System::boundary_second_order_tags>>(
+      [&result, &volume_evolved_variables](auto tag_v) {
+        using tag = tmpl::type_from<decltype(tag_v)>;
+        CHECK_ITERABLE_APPROX(get<tag>(result),
+                              get<tag>(volume_evolved_variables));
       });
 }
 

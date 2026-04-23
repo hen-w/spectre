@@ -231,7 +231,10 @@ void test_constraint_characteristics(
   const Approx custom_approx =
       Approx::custom().epsilon(1.0e-12).scale(*std::max_element(
           volume_evolved_vars.data(),
-          volume_evolved_vars.data() + volume_evolved_vars.size()));
+          volume_evolved_vars.data() +
+              Variables<::Ccz4::fd::System::original_evolved_variables_tags>::
+                  number_of_independent_components *
+                  volume_evolved_vars.number_of_grid_points()));
 
   tmpl::for_each<typename ::Ccz4::fd::Tags::ConstraintCharacteristicFields<
       DataVector, ::Ccz4::fd::System::volume_dim,

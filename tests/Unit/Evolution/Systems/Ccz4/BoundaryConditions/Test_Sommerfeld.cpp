@@ -30,7 +30,7 @@
 #include "Utilities/TMPL.hpp"
 
 namespace {
-using Vars = Variables<Ccz4::fd::Tags::spacetime_reconstruction_tags>;
+using Vars = Variables<Ccz4::fd::System::original_evolved_variables_tags>;
 
 struct Metavariables {
   struct factory_creation
@@ -56,7 +56,7 @@ Vars set_polynomial(const tnsr::I<DataVector, 3, Frame::Inertial>& coords,
   }
   Vars vars{get<0>(coords).size()};
 
-  tmpl::for_each<Ccz4::fd::System::variables_tag_list>(
+  tmpl::for_each<Ccz4::fd::System::original_evolved_variables_tags>(
       [&]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
         for (auto& component : get<Tag>(vars)) {
           component = result_vector;
@@ -153,7 +153,7 @@ void test_fd(const U& boundary_condition, const size_t max_degree) {
       int_trace_extrinsic_curvature, int_theta, int_gamma_hat, int_lapse,
       int_shift, int_auxiliary_shift_b, subcell_mesh, reconstructor);
 
-  tmpl::for_each<Ccz4::fd::System::variables_tag_list>(
+  tmpl::for_each<Ccz4::fd::System::original_evolved_variables_tags>(
       [&]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
         const std::string tag_name = db::tag_name<Tag>();
         CAPTURE(tag_name);

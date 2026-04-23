@@ -48,8 +48,7 @@ void spacetime_derivatives(
 
   using first_Ccz4_tag = tmpl::front<Tags::spacetime_reconstruction_tags>;
   constexpr size_t number_of_Ccz4_components =
-      Variables<Tags::spacetime_reconstruction_tags>::
-          number_of_independent_components;
+      Variables<gradients_tags>::number_of_independent_components;
 
   DirectionMap<3, gsl::span<const double>> ghost_cell_vars{};
   for (const auto& [directional_element_id, ghost_data] : all_ghost_data) {
@@ -118,8 +117,7 @@ void second_spacetime_derivatives(
 
   using first_Ccz4_tag = tmpl::front<Tags::spacetime_reconstruction_tags>;
   constexpr size_t number_of_Ccz4_components =
-      Variables<Tags::spacetime_reconstruction_tags>::
-          number_of_independent_components;
+      Variables<gradients_tags>::number_of_independent_components;
 
   DirectionMap<3, gsl::span<const double>> ghost_cell_vars{};
   for (const auto& [directional_element_id, ghost_data] : all_ghost_data) {

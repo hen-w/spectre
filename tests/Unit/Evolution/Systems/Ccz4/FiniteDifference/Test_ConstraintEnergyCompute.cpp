@@ -24,62 +24,60 @@
 namespace Ccz4::fd {
 namespace {
 
-// Minkowski with Theta=0: all constraints vanish, so the energy is 0.
+// [[TimeOut, 20]]
 SPECTRE_TEST_CASE(
     "Unit.Evolution.Systems.Ccz4.Fd.ConstraintEnergyCompute",
     "[Unit][Evolution]") {
-  const Mesh<3> mesh(5, Spectral::Basis::Legendre,
-                     Spectral::Quadrature::GaussLobatto);
-  const size_t num_pts = mesh.number_of_grid_points();
+  // Minkowski with Theta=0: all constraints vanish, so the energy is 0.
+  {
+    const Mesh<3> mesh(5, Spectral::Basis::Legendre,
+                       Spectral::Quadrature::GaussLobatto);
+    const size_t num_pts = mesh.number_of_grid_points();
 
-  InverseJacobian<DataVector, 3, Frame::ElementLogical, Frame::Inertial>
-      inv_jac(num_pts, 0.0);
-  for (size_t i = 0; i < 3; ++i) {
-    inv_jac.get(i, i) = 1.0;
+    InverseJacobian<DataVector, 3, Frame::ElementLogical, Frame::Inertial>
+        inv_jac(num_pts, 0.0);
+    for (size_t i = 0; i < 3; ++i) {
+      inv_jac.get(i, i) = 1.0;
+    }
+
+    Scalar<DataVector> conformal_factor{DataVector{num_pts, 1.0}};
+    tnsr::ii<DataVector, 3> conformal_metric(num_pts, 0.0);
+    for (size_t i = 0; i < 3; ++i) {
+      conformal_metric.get(i, i) = 1.0;
+    }
+    tnsr::ii<DataVector, 3> a_tilde(num_pts, 0.0);
+    Scalar<DataVector> trace_extrinsic_curvature{DataVector{num_pts, 0.0}};
+    tnsr::ijj<DataVector, 3> field_d(num_pts, 0.0);
+    tnsr::i<DataVector, 3> field_p(num_pts, 0.0);
+    Scalar<DataVector> theta{DataVector{num_pts, 0.0}};
+    tnsr::I<DataVector, 3> gamma_hat(num_pts, 0.0);
+
+    auto box = db::create<
+        db::AddSimpleTags<
+            Ccz4::Tags::ConformalFactor<DataVector>,
+            Ccz4::Tags::ConformalMetric<DataVector, 3>,
+            Ccz4::Tags::ATilde<DataVector, 3>,
+            gr::Tags::TraceExtrinsicCurvature<DataVector>,
+            Ccz4::Tags::FieldD<DataVector, 3>,
+            Ccz4::Tags::FieldP<DataVector, 3>,
+            Ccz4::Tags::Theta<DataVector>,
+            Ccz4::Tags::GammaHat<DataVector, 3>, domain::Tags::Mesh<3>,
+            domain::Tags::InverseJacobian<3, Frame::ElementLogical,
+                                          Frame::Inertial>>,
+        db::AddComputeTags<ConstraintEnergyCompute>>(
+        std::move(conformal_factor), std::move(conformal_metric),
+        std::move(a_tilde), std::move(trace_extrinsic_curvature),
+        std::move(field_d), std::move(field_p), std::move(theta),
+        std::move(gamma_hat), mesh, std::move(inv_jac));
+
+    const auto& energy =
+        db::get<Ccz4::Tags::ConstraintEnergy<DataVector>>(box);
+    for (const auto& val : get(energy)) {
+      CHECK(val == approx(0.0));
+    }
   }
 
-  Scalar<DataVector> conformal_factor{DataVector{num_pts, 1.0}};
-  tnsr::ii<DataVector, 3> conformal_metric(num_pts, 0.0);
-  for (size_t i = 0; i < 3; ++i) {
-    conformal_metric.get(i, i) = 1.0;
-  }
-  tnsr::ii<DataVector, 3> a_tilde(num_pts, 0.0);
-  Scalar<DataVector> trace_extrinsic_curvature{DataVector{num_pts, 0.0}};
-  tnsr::ijj<DataVector, 3> field_d(num_pts, 0.0);
-  tnsr::i<DataVector, 3> field_p(num_pts, 0.0);
-  Scalar<DataVector> theta{DataVector{num_pts, 0.0}};
-  tnsr::I<DataVector, 3> gamma_hat(num_pts, 0.0);
-
-  auto box = db::create<
-      db::AddSimpleTags<
-          Ccz4::Tags::ConformalFactor<DataVector>,
-          Ccz4::Tags::ConformalMetric<DataVector, 3>,
-          Ccz4::Tags::ATilde<DataVector, 3>,
-          gr::Tags::TraceExtrinsicCurvature<DataVector>,
-          Ccz4::Tags::FieldD<DataVector, 3>,
-          Ccz4::Tags::FieldP<DataVector, 3>,
-          Ccz4::Tags::Theta<DataVector>,
-          Ccz4::Tags::GammaHat<DataVector, 3>, domain::Tags::Mesh<3>,
-          domain::Tags::InverseJacobian<3, Frame::ElementLogical,
-                                        Frame::Inertial>>,
-      db::AddComputeTags<ConstraintEnergyCompute>>(
-      std::move(conformal_factor), std::move(conformal_metric),
-      std::move(a_tilde), std::move(trace_extrinsic_curvature),
-      std::move(field_d), std::move(field_p), std::move(theta),
-      std::move(gamma_hat), mesh, std::move(inv_jac));
-
-  const auto& energy =
-      db::get<Ccz4::Tags::ConstraintEnergy<DataVector>>(box);
-  for (const auto& val : get(energy)) {
-    CHECK(val == approx(0.0));
-  }
-}
-
-// KerrSchild: constraint energy should converge spectrally.
-// [[TimeOut, 20]]
-SPECTRE_TEST_CASE(
-    "Unit.Evolution.Systems.Ccz4.Fd.ConstraintEnergyComputeKerrSchild",
-    "[Unit][Evolution]") {
+  // KerrSchild: constraint energy should converge spectrally.
   const Ccz4::Solutions::Ccz4WrappedGr<gr::Solutions::KerrSchild>
       wrapped_solution(1.0, {{0.0, 0.0, 0.0}}, {{0.0, 0.0, 0.0}});
   const double center = 5.0;

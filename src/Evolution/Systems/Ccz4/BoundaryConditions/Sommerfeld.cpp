@@ -111,8 +111,7 @@ void Sommerfeld::fd_ghost(
   const intrp::Irregular<3> irregular_interpolant(
       subcell_mesh, ghost_logical_coords, extrapolation_order_);
 
-  Variables<tmpl::append<::Ccz4::fd::System::original_evolved_variables_tags,
-                         ::Ccz4::fd::System::auxiliary_variables_tags>>
+  Variables<::Ccz4::fd::System::original_evolved_variables_tags>
       interior_var{subcell_mesh.number_of_grid_points()};
   get<Tags::ConformalMetric<DataVector, 3>>(interior_var) =
       interior_conformal_metric;

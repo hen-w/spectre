@@ -43,11 +43,21 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Fd.GhostData",
 
   const Variables<::Ccz4::fd::System::variables_tag_list> retrieved_vars{
       retrieved_vars_subcell.data(), retrieved_vars_subcell.size() - 2};
-  tmpl::for_each<::Ccz4::fd::System::variables_tag_list>(
+  tmpl::for_each<::Ccz4::fd::System::original_evolved_variables_tags>(
       [&random_vars_subcell, &retrieved_vars](auto tag_v) {
         using tag = tmpl::type_from<decltype(tag_v)>;
         CHECK_ITERABLE_APPROX(get<tag>(random_vars_subcell),
                               get<tag>(retrieved_vars));
+      });
+  // Verify auxiliary and boundary fields are zero in ghost data
+  const DataVector zero_dv(retrieved_vars.number_of_grid_points(), 0.0);
+  tmpl::for_each<tmpl::append<::Ccz4::fd::System::auxiliary_variables_tags,
+                              ::Ccz4::fd::System::boundary_second_order_tags>>(
+      [&retrieved_vars, &zero_dv](auto tag_v) {
+        using tag = tmpl::type_from<decltype(tag_v)>;
+        for (const auto& component : get<tag>(retrieved_vars)) {
+          CHECK_ITERABLE_APPROX(component, zero_dv);
+        }
       });
 }
 }  // namespace

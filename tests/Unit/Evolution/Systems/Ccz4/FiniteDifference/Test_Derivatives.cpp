@@ -297,7 +297,10 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.FiniteDifference.Derivatives",
   const Approx custom_approx =
       Approx::custom().epsilon(1.0e-12).scale(*std::max_element(
           volume_evolved_vars.data(),
-          volume_evolved_vars.data() + volume_evolved_vars.size() - 1));
+          volume_evolved_vars.data() +
+              Variables<Ccz4::fd::System::original_evolved_variables_tags>::
+                  number_of_independent_components *
+                  volume_evolved_vars.number_of_grid_points()));
 
   CHECK_ITERABLE_CUSTOM_APPROX(
       (get<::Tags::second_deriv<::Ccz4::Tags::ConformalMetric<DataVector, 3>,

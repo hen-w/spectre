@@ -117,7 +117,7 @@ class CProxy_GlobalCache;
 /// \endcond
 
 struct EvolutionMetavars {
-  static constexpr bool use_dg_subcell = false;
+  static constexpr bool use_dg_subcell = true;
   static constexpr size_t volume_dim = ::Ccz4::fd::System::volume_dim;
   using initial_data_list = Ccz4::Solutions::all_solutions;
   using initial_data_tag = evolution::initial_data::Tags::InitialData;
@@ -300,7 +300,6 @@ struct EvolutionMetavars {
   using dg_subcell_step_actions = tmpl::flatten<tmpl::list<
       evolution::dg::subcell::Actions::SelectNumericalMethod,
 
-      // the following actions should never happen cuz we are only doing FD
       Actions::Label<evolution::dg::subcell::Actions::Labels::BeginDg>,
       Actions::Goto<evolution::dg::subcell::Actions::Labels::EndOfSolvers>,
 

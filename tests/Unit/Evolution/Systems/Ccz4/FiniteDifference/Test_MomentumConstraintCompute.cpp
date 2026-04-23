@@ -24,60 +24,58 @@
 namespace Ccz4::fd {
 namespace {
 
-// Minkowski: phi=1, gamma_tilde=delta, A_tilde=0, K=0, D=0, P=0 -> M^i=0.
+// [[TimeOut, 20]]
 SPECTRE_TEST_CASE(
     "Unit.Evolution.Systems.Ccz4.Fd.MomentumConstraintCompute",
     "[Unit][Evolution]") {
-  const Mesh<3> mesh(5, Spectral::Basis::Legendre,
-                     Spectral::Quadrature::GaussLobatto);
-  const size_t num_pts = mesh.number_of_grid_points();
+  // Minkowski: phi=1, gamma_tilde=delta, A_tilde=0, K=0, D=0, P=0 -> M^i=0.
+  {
+    const Mesh<3> mesh(5, Spectral::Basis::Legendre,
+                       Spectral::Quadrature::GaussLobatto);
+    const size_t num_pts = mesh.number_of_grid_points();
 
-  InverseJacobian<DataVector, 3, Frame::ElementLogical, Frame::Inertial>
-      inv_jac(num_pts, 0.0);
-  for (size_t i = 0; i < 3; ++i) {
-    inv_jac.get(i, i) = 1.0;
-  }
+    InverseJacobian<DataVector, 3, Frame::ElementLogical, Frame::Inertial>
+        inv_jac(num_pts, 0.0);
+    for (size_t i = 0; i < 3; ++i) {
+      inv_jac.get(i, i) = 1.0;
+    }
 
-  Scalar<DataVector> conformal_factor{DataVector{num_pts, 1.0}};
-  tnsr::ii<DataVector, 3> conformal_metric(num_pts, 0.0);
-  for (size_t i = 0; i < 3; ++i) {
-    conformal_metric.get(i, i) = 1.0;
-  }
-  tnsr::ii<DataVector, 3> a_tilde(num_pts, 0.0);
-  Scalar<DataVector> trace_extrinsic_curvature{DataVector{num_pts, 0.0}};
-  tnsr::ijj<DataVector, 3> field_d(num_pts, 0.0);
-  tnsr::i<DataVector, 3> field_p(num_pts, 0.0);
+    Scalar<DataVector> conformal_factor{DataVector{num_pts, 1.0}};
+    tnsr::ii<DataVector, 3> conformal_metric(num_pts, 0.0);
+    for (size_t i = 0; i < 3; ++i) {
+      conformal_metric.get(i, i) = 1.0;
+    }
+    tnsr::ii<DataVector, 3> a_tilde(num_pts, 0.0);
+    Scalar<DataVector> trace_extrinsic_curvature{DataVector{num_pts, 0.0}};
+    tnsr::ijj<DataVector, 3> field_d(num_pts, 0.0);
+    tnsr::i<DataVector, 3> field_p(num_pts, 0.0);
 
-  const auto box = db::create<
-      db::AddSimpleTags<
-          Ccz4::Tags::ConformalFactor<DataVector>,
-          Ccz4::Tags::ConformalMetric<DataVector, 3>,
-          Ccz4::Tags::ATilde<DataVector, 3>,
-          gr::Tags::TraceExtrinsicCurvature<DataVector>,
-          Ccz4::Tags::FieldD<DataVector, 3>,
-          Ccz4::Tags::FieldP<DataVector, 3>, domain::Tags::Mesh<3>,
-          domain::Tags::InverseJacobian<3, Frame::ElementLogical,
-                                        Frame::Inertial>>,
-      db::AddComputeTags<MomentumConstraintCompute>>(
-      std::move(conformal_factor), std::move(conformal_metric),
-      std::move(a_tilde), std::move(trace_extrinsic_curvature),
-      std::move(field_d), std::move(field_p), mesh, std::move(inv_jac));
+    const auto box = db::create<
+        db::AddSimpleTags<
+            Ccz4::Tags::ConformalFactor<DataVector>,
+            Ccz4::Tags::ConformalMetric<DataVector, 3>,
+            Ccz4::Tags::ATilde<DataVector, 3>,
+            gr::Tags::TraceExtrinsicCurvature<DataVector>,
+            Ccz4::Tags::FieldD<DataVector, 3>,
+            Ccz4::Tags::FieldP<DataVector, 3>, domain::Tags::Mesh<3>,
+            domain::Tags::InverseJacobian<3, Frame::ElementLogical,
+                                          Frame::Inertial>>,
+        db::AddComputeTags<MomentumConstraintCompute>>(
+        std::move(conformal_factor), std::move(conformal_metric),
+        std::move(a_tilde), std::move(trace_extrinsic_curvature),
+        std::move(field_d), std::move(field_p), mesh, std::move(inv_jac));
 
-  const auto& momentum =
-      db::get<gr::Tags::MomentumConstraint<DataVector, 3, Frame::Inertial>>(
-          box);
-  for (size_t i = 0; i < 3; ++i) {
-    for (const auto& val : momentum.get(i)) {
-      CHECK(val == approx(0.0));
+    const auto& momentum =
+        db::get<gr::Tags::MomentumConstraint<DataVector, 3, Frame::Inertial>>(
+            box);
+    for (size_t i = 0; i < 3; ++i) {
+      for (const auto& val : momentum.get(i)) {
+        CHECK(val == approx(0.0));
+      }
     }
   }
-}
 
-// KerrSchild: verify spectral convergence of M^i to zero.
-// [[TimeOut, 20]]
-SPECTRE_TEST_CASE(
-    "Unit.Evolution.Systems.Ccz4.Fd.MomentumConstraintComputeKerrSchild",
-    "[Unit][Evolution]") {
+  // KerrSchild: verify spectral convergence of M^i to zero.
   const Ccz4::Solutions::Ccz4WrappedGr<gr::Solutions::KerrSchild>
       wrapped_solution(1.0, {{0.0, 0.0, 0.0}}, {{0.0, 0.0, 0.0}});
   const double center = 5.0;

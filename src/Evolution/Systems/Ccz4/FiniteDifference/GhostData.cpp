@@ -18,6 +18,7 @@ DataVector GhostVariables::apply(
                         Variables<Ccz4::fd::System::variables_tag_list>::
                             number_of_independent_components +
                     rdmp_size};
+  buffer = 0.0;
   Variables<Ccz4::fd::System::variables_tag_list> vars_to_reconstruct(
       buffer.data(), buffer.size() - rdmp_size);
 

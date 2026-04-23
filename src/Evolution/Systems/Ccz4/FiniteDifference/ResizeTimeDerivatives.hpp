@@ -5,6 +5,7 @@
 
 #include "DataStructures/DataBox/Protocols/Mutator.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/ProtocolHelpers.hpp"

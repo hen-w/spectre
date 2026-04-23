@@ -117,6 +117,7 @@ void BoundaryConditionGhostData::apply(
     DataVector& boundary_ghost_data =
         all_ghost_data.at(mortar_id).neighbor_ghost_data_for_reconstruction();
     boundary_ghost_data.destructive_resize(evolved_vars_size + fluxes_size);
+    boundary_ghost_data = 0.0;
     Variables<variables_for_reconstruction> ghost_data_vars{
         boundary_ghost_data.data(), evolved_vars_size};
 
