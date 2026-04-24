@@ -59,6 +59,7 @@ spectre_target_headers(
   Tags.hpp
   TraceATildeCompute.hpp
   UpdateAuxiliaryVariables.hpp
+  UpdateAuxiliaryVariablesFd.hpp
   )
 
 target_link_libraries(

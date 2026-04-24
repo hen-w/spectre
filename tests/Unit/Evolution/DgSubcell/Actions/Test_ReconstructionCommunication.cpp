@@ -101,7 +101,7 @@ struct System {
 };
 
 template <size_t Dim, typename Metavariables, bool UseNodegroupDgElements,
-          bool ExtraTesting = false>
+          bool ExtraTesting = false, bool IsAuxiliary = false>
 struct component {
   using metavariables = Metavariables;
   using chare_type = ActionTesting::MockArrayChare;
@@ -146,20 +146,23 @@ struct component {
                               tmpl::list<>>,
           tmpl::list<evolution::dg::subcell::Actions::SendDataForReconstruction<
                          Dim, typename Metavariables::GhostDataMutator,
-                         UseNodegroupDgElements>,
+                         UseNodegroupDgElements, IsAuxiliary>,
                      evolution::dg::subcell::Actions::
                          ReceiveAndSendDataForReconstruction<
                              Dim, typename Metavariables::GhostDataMutator,
-                             UseNodegroupDgElements>,
+                             UseNodegroupDgElements, IsAuxiliary>,
                      evolution::dg::subcell::Actions::
-                         ReceiveDataForReconstruction<Dim>>>>>>;
+                         ReceiveDataForReconstruction<Dim,
+                                                      IsAuxiliary>>>>>>;
 };
 
-template <size_t Dim, bool UseNodegroupDgElements, bool ExtraTesting = false>
+template <size_t Dim, bool UseNodegroupDgElements, bool ExtraTesting = false,
+          bool IsAuxiliary = false>
 struct Metavariables {
   static constexpr size_t volume_dim = Dim;
-  using component_list = tmpl::list<
-      component<Dim, Metavariables, UseNodegroupDgElements, ExtraTesting>>;
+  using component_list = tmpl::list<component<Dim, Metavariables,
+                                              UseNodegroupDgElements,
+                                              ExtraTesting, IsAuxiliary>>;
   using system = System<Dim>;
   using const_global_cache_tags = tmpl::flatten<tmpl::list<tmpl::conditional_t<
       ExtraTesting, ::domain::Tags::Domain<Dim>, tmpl::list<>>>>;
@@ -197,15 +200,17 @@ struct Metavariables {
   };
 };
 
-template <size_t Dim, bool UseNodegroupDgElements, bool ExtraTesting>
+template <size_t Dim, bool UseNodegroupDgElements, bool ExtraTesting,
+          bool IsAuxiliary>
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
-bool Metavariables<Dim, UseNodegroupDgElements,
-                   ExtraTesting>::ghost_zone_size_invoked = false;
+bool Metavariables<Dim, UseNodegroupDgElements, ExtraTesting,
+                   IsAuxiliary>::ghost_zone_size_invoked = false;
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
-template <size_t Dim, bool UseNodegroupDgElements, bool ExtraTesting>
+template <size_t Dim, bool UseNodegroupDgElements, bool ExtraTesting,
+          bool IsAuxiliary>
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
-bool Metavariables<Dim, UseNodegroupDgElements,
-                   ExtraTesting>::ghost_data_mutator_invoked = false;
+bool Metavariables<Dim, UseNodegroupDgElements, ExtraTesting,
+                   IsAuxiliary>::ghost_data_mutator_invoked = false;
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 template <size_t Dim, bool UseNodegroupDgElements>
@@ -1124,6 +1129,137 @@ void test_receive_and_send_data(const bool enable_extension,
   }
 }
 
+// Test that IsAuxiliary template parameter routes data to the correct inbox:
+// IsAuxiliary=true  -> BoundaryCorrectionAndGhostCellsInbox<..., true>
+// IsAuxiliary=false -> BoundaryCorrectionAndGhostCellsInbox<..., false>
+template <size_t Dim, bool UseNodegroupDgElements, bool IsAuxiliary>
+void test_inbox_routing() {
+  CAPTURE(Dim);
+  CAPTURE(IsAuxiliary);
+  using Interps = DirectionalIdMap<Dim, std::optional<intrp::Irregular<Dim>>>;
+  using ExtensionDirs =
+      DirectionMap<Dim, interpolators_detail::ExtensionDirection<Dim>>;
+  using SubcellOptions = evolution::dg::subcell::SubcellOptions;
+
+  using metavars =
+      Metavariables<Dim, UseNodegroupDgElements, false, IsAuxiliary>;
+  metavars::ghost_zone_size_invoked = false;
+  metavars::ghost_data_mutator_invoked = false;
+  using comp =
+      component<Dim, metavars, UseNodegroupDgElements, false, IsAuxiliary>;
+  using MockRuntimeSystem = ActionTesting::MockRuntimeSystem<metavars>;
+  MockRuntimeSystem runner{{}};
+
+  const TimeStepId time_step_id{true, 1, Time{Slab{1.0, 2.0}, {0, 10}}};
+  const TimeStepId next_time_step_id{true, 1, Time{Slab{1.0, 2.0}, {1, 10}}};
+  const Mesh<Dim> dg_mesh{5, Spectral::Basis::Legendre,
+                          Spectral::Quadrature::GaussLobatto};
+  const Mesh<Dim> subcell_mesh = evolution::dg::subcell::fd::mesh(dg_mesh);
+  const evolution::dg::subcell::ActiveGrid active_grid =
+      evolution::dg::subcell::ActiveGrid::Subcell;
+
+  // 1D: one element with one neighbor in +xi
+  DirectionMap<Dim, Neighbors<Dim>> neighbors{};
+  ElementId<Dim> self_id{};
+  ElementId<Dim> east_id{};
+
+  if constexpr (Dim == 1) {
+    self_id = ElementId<Dim>{0, {{{1, 0}}}};
+    east_id = ElementId<Dim>{0, {{{1, 1}}}};
+    neighbors[Direction<Dim>::upper_xi()] =
+        Neighbors<Dim>{{east_id}, OrientationMap<Dim>::create_aligned()};
+  } else {
+    // Only test 1D for this auxiliary inbox check
+    static_assert(Dim == 1, "test_inbox_routing only implemented for 1D");
+  }
+
+  const Element<Dim> element{self_id, neighbors};
+
+  using NeighborDataMap =
+      DirectionalIdMap<Dim, evolution::dg::subcell::GhostData>;
+  NeighborDataMap neighbor_data{};
+
+  using evolved_vars_tags = tmpl::list<Var1>;
+  Variables<evolved_vars_tags> evolved_vars{
+      subcell_mesh.number_of_grid_points()};
+  get(get<Var1>(evolved_vars)) = get<0>(logical_coordinates(subcell_mesh));
+  TimeSteppers::History<Variables<evolved_vars_tags>> time_stepper_history{};
+
+  using CellCenteredFluxTag =
+      evolution::dg::subcell::Tags::CellCenteredFlux<tmpl::list<Var1>, Dim>;
+  typename CellCenteredFluxTag::type cell_centered_flux{};
+
+  using MortarInfo = typename evolution::dg::Tags::MortarInfo<Dim>::type;
+  using MortarData = typename evolution::dg::Tags::MortarData<Dim>::type;
+  using MortarMesh = typename evolution::dg::Tags::MortarMesh<Dim>::type;
+  using MortarNextId =
+      typename evolution::dg::Tags::MortarNextTemporalId<Dim>::type;
+  const DirectionalId<Dim> east_neighbor_id{Direction<Dim>::upper_xi(),
+                                            east_id};
+  MortarInfo mortar_info{};
+  MortarData mortar_data{};
+  MortarMesh mortar_mesh{};
+  MortarNextId mortar_next_id{};
+  mortar_info[east_neighbor_id] = evolution::dg::MortarInfo<Dim>{
+      {.time_stepping_policy = evolution::dg::TimeSteppingPolicy::EqualRate}};
+  mortar_data[east_neighbor_id] = {};
+  mortar_mesh[east_neighbor_id] = {dg_mesh.slice_away(0)};
+  mortar_next_id[east_neighbor_id] = {};
+
+  typename evolution::dg::subcell::Tags::NeighborTciDecisions<Dim>::type
+      neighbor_decision{};
+  neighbor_decision.insert(
+      std::pair{east_neighbor_id, 0});
+  ActionTesting::emplace_array_component_and_initialize<comp>(
+      &runner, ActionTesting::NodeId{0}, ActionTesting::LocalCoreId{0},
+      east_id,
+      {std::make_unique<DummyReconstructor>(),
+       time_step_id, next_time_step_id, Mesh<Dim>{}, Mesh<Dim>{},
+       active_grid, Element<Dim>{}, NeighborDataMap{},
+       evolution::dg::subcell::RdmpTciData{}, 0,
+       typename evolution::dg::subcell::Tags::NeighborTciDecisions<
+           Dim>::type{},
+       Variables<evolved_vars_tags>{}, time_stepper_history,
+       MortarInfo{}, MortarMesh{}, MortarData{}, MortarNextId{},
+       typename domain::Tags::NeighborMesh<Dim>::type{},
+       typename evolution::dg::subcell::Tags::MeshForGhostData<Dim>::type{},
+       cell_centered_flux, Interps{}, Interps{}, ExtensionDirs{},
+       SubcellOptions{}});
+
+  Interps fd_to_neighbor_fd_interpolants{};
+  Interps neighbor_dg_to_fd_interpolants{};
+  ExtensionDirs extension_directions{};
+  SubcellOptions subcell_options(
+      4.0, 1, 2.0e-3, 2.0e-4, false, false,
+      evolution::dg::subcell::fd::ReconstructionMethod::DimByDim, false,
+      std::nullopt, ::fd::DerivativeOrder::Two, 1, 1, 1);
+  ActionTesting::emplace_array_component_and_initialize<comp>(
+      &runner, ActionTesting::NodeId{0}, ActionTesting::LocalCoreId{0},
+      self_id,
+      {std::make_unique<DummyReconstructor>(), time_step_id, next_time_step_id,
+       dg_mesh, subcell_mesh, active_grid, element, neighbor_data,
+       evolution::dg::subcell::RdmpTciData{{max(get(get<Var1>(evolved_vars)))},
+                                           {min(get(get<Var1>(evolved_vars)))}},
+       100, neighbor_decision, evolved_vars, time_stepper_history,
+       mortar_info, mortar_mesh, mortar_data, mortar_next_id,
+       typename domain::Tags::NeighborMesh<Dim>::type{},
+       typename evolution::dg::subcell::Tags::MeshForGhostData<Dim>::type{},
+       cell_centered_flux, fd_to_neighbor_fd_interpolants,
+       neighbor_dg_to_fd_interpolants, extension_directions, subcell_options});
+
+  // Run SendDataForReconstruction with IsAuxiliary template parameter
+  ActionTesting::next_action<comp>(make_not_null(&runner), self_id);
+
+  // Data should be in the inbox matching IsAuxiliary
+  const auto& inbox =
+      ActionTesting::get_inbox_tag<
+          comp, evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
+                    Dim, UseNodegroupDgElements, IsAuxiliary>>(runner, east_id)
+          .messages;
+  CHECK(inbox.count(time_step_id) == 1);
+  CHECK(inbox.at(time_step_id).size() == 1);
+}
+
 SPECTRE_TEST_CASE("Unit.Evolution.Subcell.Actions.ReconstructionCommunication",
                   "[Evolution][Unit]") {
   for (const bool use_cell_centered_flux : {false, true}) {
@@ -1133,5 +1269,7 @@ SPECTRE_TEST_CASE("Unit.Evolution.Subcell.Actions.ReconstructionCommunication",
     test_receive_and_send_data<3, false>(false, use_cell_centered_flux);
     test_receive_and_send_data<3, false>(true, use_cell_centered_flux);
   }
+  test_inbox_routing<1, false, true>();
+  test_inbox_routing<1, false, false>();
 }
 }  // namespace

@@ -57,6 +57,7 @@
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/TraceATildeCompute.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/UpdateAuxiliaryVariables.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/UpdateAuxiliaryVariablesFd.hpp"
 #include "Evolution/Systems/Ccz4/Solutions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/ApplyTensorYlmFilter.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
@@ -265,6 +266,7 @@ struct EvolutionMetavars {
     }
 
     using GhostVariables = Ccz4::fd::GhostVariables;
+    using GhostVariablesPhysical = Ccz4::fd::GhostVariablesPhysical;
 
     using DgComputeSubcellNeighborPackagedData =
         Ccz4::fd::NeighborPackagedData;
@@ -340,11 +342,26 @@ struct EvolutionMetavars {
 
       Actions::Label<evolution::dg::subcell::Actions::Labels::BeginSubcell>,
       Actions::MutateApply<::Ccz4::fd::EnforceConstrainedEvolution>,
+
+      // -- Round 1: exchange evolved variables via Inbox<true> --
       evolution::dg::subcell::Actions::SendDataForReconstruction<
           volume_dim, SubcellOptions::GhostVariables,
-          use_dg_element_collection>,
+          use_dg_element_collection, true>,
       evolution::dg::subcell::Actions::ReceiveAndSendDataForReconstruction<
           volume_dim, SubcellOptions::GhostVariables,
+          use_dg_element_collection, true>,
+      evolution::dg::subcell::Actions::ReceiveDataForReconstruction<
+          volume_dim, true>,
+
+      // -- Between rounds: compute FieldA/B/D/P from FD derivatives --
+      Ccz4::fd::UpdateAuxiliaryVariablesFd,
+
+      // -- Round 2: send evolved vars + FieldA/B/D/P via Inbox<false> --
+      evolution::dg::subcell::Actions::SendDataForReconstruction<
+          volume_dim, SubcellOptions::GhostVariablesPhysical,
+          use_dg_element_collection>,
+      evolution::dg::subcell::Actions::ReceiveAndSendDataForReconstruction<
+          volume_dim, SubcellOptions::GhostVariablesPhysical,
           use_dg_element_collection>,
       evolution::dg::subcell::Actions::ReceiveDataForReconstruction<volume_dim>,
 

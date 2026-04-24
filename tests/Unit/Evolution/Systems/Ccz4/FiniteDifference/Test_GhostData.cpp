@@ -21,8 +21,7 @@
 #include "Utilities/TMPL.hpp"
 
 namespace {
-SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Fd.GhostData",
-                  "[Unit][Evolution]") {
+void test_ghost_variables() {
   MAKE_GENERATOR(gen);
   const std::uniform_real_distribution<> dist(-1.0, 1.0);
 
@@ -59,5 +58,59 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Fd.GhostData",
           CHECK_ITERABLE_APPROX(component, zero_dv);
         }
       });
+}
+
+void test_ghost_variables_physical() {
+  MAKE_GENERATOR(gen);
+  const std::uniform_real_distribution<> dist(-1.0, 1.0);
+
+  const size_t points_per_dimension = 5;
+  const Mesh<3> subcell_mesh{points_per_dimension,
+                             Spectral::Basis::FiniteDifference,
+                             Spectral::Quadrature::CellCentered};
+  const auto random_vars_subcell = make_with_random_values<
+      Variables<::Ccz4::fd::System::variables_tag_list>>(
+      make_not_null(&gen), dist, subcell_mesh.number_of_grid_points());
+  auto box_subcell =
+      db::create<db::AddSimpleTags<::Ccz4::fd::System::variables_tag>>(
+          random_vars_subcell);
+
+  DataVector retrieved_vars_subcell = db::mutate_apply<
+      ::Ccz4::fd::GhostVariablesPhysical>(make_not_null(&box_subcell), 2_st);
+
+  const Variables<::Ccz4::fd::System::variables_tag_list> retrieved_vars{
+      retrieved_vars_subcell.data(), retrieved_vars_subcell.size() - 2};
+
+  // Verify original evolved variables are copied
+  tmpl::for_each<::Ccz4::fd::System::original_evolved_variables_tags>(
+      [&random_vars_subcell, &retrieved_vars](auto tag_v) {
+        using tag = tmpl::type_from<decltype(tag_v)>;
+        CHECK_ITERABLE_APPROX(get<tag>(random_vars_subcell),
+                              get<tag>(retrieved_vars));
+      });
+
+  // Verify auxiliary fields (FieldA/B/D/P) are copied
+  tmpl::for_each<::Ccz4::fd::System::auxiliary_variables_tags>(
+      [&random_vars_subcell, &retrieved_vars](auto tag_v) {
+        using tag = tmpl::type_from<decltype(tag_v)>;
+        CHECK_ITERABLE_APPROX(get<tag>(random_vars_subcell),
+                              get<tag>(retrieved_vars));
+      });
+
+  // Verify boundary second-order fields are zero
+  const DataVector zero_dv(retrieved_vars.number_of_grid_points(), 0.0);
+  tmpl::for_each<::Ccz4::fd::System::boundary_second_order_tags>(
+      [&retrieved_vars, &zero_dv](auto tag_v) {
+        using tag = tmpl::type_from<decltype(tag_v)>;
+        for (const auto& component : get<tag>(retrieved_vars)) {
+          CHECK_ITERABLE_APPROX(component, zero_dv);
+        }
+      });
+}
+
+SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Fd.GhostData",
+                  "[Unit][Evolution]") {
+  test_ghost_variables();
+  test_ghost_variables_physical();
 }
 }  // namespace

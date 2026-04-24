@@ -118,11 +118,12 @@ namespace evolution::dg::subcell::Actions {
  * - Modifies:
  *   - `subcell::Tags::GhostDataForReconstruction<Dim>`
  */
-template <size_t Dim, typename GhostDataMutator, bool UseNodegroupDgElements>
+template <size_t Dim, typename GhostDataMutator, bool UseNodegroupDgElements,
+          bool IsAuxiliary = false>
 struct SendDataForReconstruction {
   using inbox_tags =
       tmpl::list<evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
-          Dim, UseNodegroupDgElements>>;
+          Dim, UseNodegroupDgElements, IsAuxiliary>>;
 
   template <typename DbTags, typename... InboxTags, typename ArrayIndex,
             typename ActionList, typename ParallelComponent,
@@ -300,7 +301,8 @@ struct SendDataForReconstruction {
           Parallel::receive_data<
               evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
                   Dim,
-                  Parallel::is_dg_element_collection_v<ParallelComponent>>>(
+                  Parallel::is_dg_element_collection_v<ParallelComponent>,
+                  IsAuxiliary>>(
               receiver_proxy[neighbor], time_step_id,
               std::pair{
                   DirectionalId<Dim>{direction_from_neighbor, element.id()},
@@ -369,11 +371,12 @@ struct SendDataForReconstruction {
  * 3. Interpolates to the requested ghost points, and then sends the completed
  *    ghost data to the original neighbor.
  */
-template <size_t Dim, typename GhostDataMutator, bool UseNodegroupDgElements>
+template <size_t Dim, typename GhostDataMutator, bool UseNodegroupDgElements,
+          bool IsAuxiliary = false>
 struct ReceiveAndSendDataForReconstruction {
   using inbox_tags =
       tmpl::list<evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
-          Dim, UseNodegroupDgElements>>;
+          Dim, UseNodegroupDgElements, IsAuxiliary>>;
   template <typename DbTags, typename... InboxTags, typename ArrayIndex,
             typename ActionList, typename ParallelComponent,
             typename Metavariables>
@@ -434,7 +437,8 @@ struct ReceiveAndSendDataForReconstruction {
     auto& inbox =
         tuples::get<evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
             Metavariables::volume_dim,
-            Parallel::is_dg_element_collection_v<ParallelComponent>>>(inboxes);
+            Parallel::is_dg_element_collection_v<ParallelComponent>,
+            IsAuxiliary>>(inboxes);
     inbox.collect_messages();
     const auto received = inbox.messages.find(current_time_step_id);
     // Check we have at least some data from correct time, and then check
@@ -626,7 +630,8 @@ struct ReceiveAndSendDataForReconstruction {
           tci_decision, integration_order};
       Parallel::receive_data<
           evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
-              Dim, Parallel::is_dg_element_collection_v<ParallelComponent>>>(
+              Dim, Parallel::is_dg_element_collection_v<ParallelComponent>,
+              IsAuxiliary>>(
           receiver_proxy[problematic_neighbor_id], time_step_id,
           std::pair{DirectionalId<Dim>{direction_from_neighbor, element.id()},
                     std::move(data)});
@@ -670,7 +675,7 @@ struct ReceiveAndSendDataForReconstruction {
  *   - `evolution::dg::Tags::MortarData`
  *   - `evolution::dg::Tags::MortarNextTemporalId`
  */
-template <size_t Dim>
+template <size_t Dim, bool IsAuxiliary = false>
 struct ReceiveDataForReconstruction {
   template <typename DbTags, typename... InboxTags, typename ArrayIndex,
             typename ActionList, typename ParallelComponent,
@@ -692,7 +697,8 @@ struct ReceiveDataForReconstruction {
     auto& inbox =
         tuples::get<evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
             Metavariables::volume_dim,
-            Parallel::is_dg_element_collection_v<ParallelComponent>>>(inboxes);
+            Parallel::is_dg_element_collection_v<ParallelComponent>,
+            IsAuxiliary>>(inboxes);
     inbox.collect_messages();
     const auto received = inbox.messages.find(current_time_step_id);
     // Check we have at least some data from correct time, and then check that

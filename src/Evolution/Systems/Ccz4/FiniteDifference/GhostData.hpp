@@ -30,4 +30,23 @@ class GhostVariables {
       const Variables<Ccz4::fd::System::variables_tag_list>& evolved_vars,
       size_t rdmp_size);
 };
+
+/*!
+ * \brief Get the Ccz4 evolution variables including auxiliary fields for ghost
+ * data (round 2 of two-round subcell communication).
+ *
+ * Copies the 9 original evolved variables AND FieldA/B/D/P into the ghost
+ * buffer. Used after UpdateAuxiliaryVariablesFd has computed the auxiliary
+ * fields from FD derivatives.
+ */
+class GhostVariablesPhysical {
+ public:
+  using return_tags = tmpl::list<>;
+  using argument_tags =
+      tmpl::list<::Tags::Variables<Ccz4::fd::System::variables_tag_list>>;
+
+  static DataVector apply(
+      const Variables<Ccz4::fd::System::variables_tag_list>& evolved_vars,
+      size_t rdmp_size);
+};
 }  // namespace Ccz4::fd

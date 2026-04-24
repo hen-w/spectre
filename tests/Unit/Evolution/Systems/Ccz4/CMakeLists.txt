@@ -29,6 +29,7 @@ set(LIBRARY_SOURCES
   FiniteDifference/Test_SetInitialEta.cpp
   FiniteDifference/Test_SetK0.cpp
   FiniteDifference/Test_SoTimeDerivative.cpp
+  FiniteDifference/Test_UpdateAuxiliaryVariablesFd.cpp
   FiniteDifference/Test_Tags.cpp
   Test_ApplyTensorYlmFilter.cpp
   Test_ATilde.cpp
