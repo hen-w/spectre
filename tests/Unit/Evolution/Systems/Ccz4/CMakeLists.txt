@@ -23,6 +23,7 @@ set(LIBRARY_SOURCES
   FiniteDifference/Test_Filter.cpp
   FiniteDifference/Test_GhostData.cpp
   FiniteDifference/Test_LdgTimeDerivative.cpp
+  FiniteDifference/Test_NeighborPackagedData.cpp
   FiniteDifference/Test_RadiationCharacteristics.cpp
   FiniteDifference/Test_ResizeTimeDerivatives.cpp
   FiniteDifference/Test_SetInitialEta.cpp

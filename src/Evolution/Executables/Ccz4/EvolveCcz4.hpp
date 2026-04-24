@@ -13,7 +13,9 @@
 #include "Evolution/BoundaryCorrection.hpp"
 #include "Evolution/ComputeTags.hpp"
 #include "Evolution/DgSubcell/Actions/Initialize.hpp"
+#include "Evolution/DgSubcell/GetTciDecision.hpp"
 #include "Evolution/DgSubcell/Actions/Labels.hpp"
+#include "Evolution/DgSubcell/PrepareNeighborData.hpp"
 #include "Evolution/DgSubcell/Actions/ReconstructionCommunication.hpp"
 #include "Evolution/DgSubcell/Actions/SelectNumericalMethod.hpp"
 #include "Evolution/DgSubcell/Actions/TakeTimeStep.hpp"
@@ -44,6 +46,7 @@
 #include "Evolution/Systems/Ccz4/FiniteDifference/EnforceTracelessDerivConformalMetric.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/EnforceTracelessDtConformalMetric.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/GhostData.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/NeighborPackagedData.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/LdgTimeDerivative.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Reconstructor.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/ResizeTimeDerivatives.hpp"
@@ -262,6 +265,9 @@ struct EvolutionMetavars {
     }
 
     using GhostVariables = Ccz4::fd::GhostVariables;
+
+    using DgComputeSubcellNeighborPackagedData =
+        Ccz4::fd::NeighborPackagedData;
   };
 
   using events_and_dense_triggers_subcell_postprocessors = tmpl::list<>;
@@ -301,6 +307,35 @@ struct EvolutionMetavars {
       evolution::dg::subcell::Actions::SelectNumericalMethod,
 
       Actions::Label<evolution::dg::subcell::Actions::Labels::BeginDg>,
+      Actions::MutateApply<::Ccz4::fd::EnforceConstrainedEvolution>,
+      Actions::MutateApply<Ccz4::fd::UpdateAuxiliaryVariables>,
+      evolution::dg::Actions::ComputeTimeDerivative<
+          volume_dim, system, AllStepChoosers, local_time_stepping,
+          use_dg_element_collection, true>,
+      evolution::dg::Actions::ApplyAuxiliaryBoundaryCorrectionsToVariables<
+          volume_dim, use_dg_element_collection>,
+      Actions::MutateApply<::Ccz4::fd::EnforceTracelessDerivConformalMetric>,
+      evolution::dg::Actions::ComputeTimeDerivative<
+          volume_dim, system, AllStepChoosers, local_time_stepping,
+          use_dg_element_collection>,
+      evolution::dg::Actions::ApplyBoundaryCorrectionsToTimeDerivative<
+          volume_dim, use_dg_element_collection>,
+      Actions::MutateApply<::Ccz4::fd::EnforceTracelessDtConformalMetric>,
+      Actions::MutateApply<RecordTimeStepperData<system>>,
+      evolution::Actions::RunEventsAndDenseTriggers<tmpl::list<>>,
+      Actions::MutateApply<UpdateU<system, local_time_stepping>>,
+      Actions::MutateApply<CleanHistory<system>>,
+      dg::Actions::Filter<
+          FilterEvolvedVariables,
+          tmpl::list<::Ccz4::Tags::ConformalMetric<DataVector, 3>,
+                     ::Ccz4::Tags::ConformalFactor<DataVector>,
+                     ::Ccz4::Tags::ATilde<DataVector, 3>,
+                     gr::Tags::TraceExtrinsicCurvature<DataVector>,
+                     ::Ccz4::Tags::Theta<DataVector>,
+                     ::Ccz4::Tags::GammaHat<DataVector, 3>,
+                     gr::Tags::Lapse<DataVector>,
+                     gr::Tags::Shift<DataVector, 3>,
+                     ::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>>,
       Actions::Goto<evolution::dg::subcell::Actions::Labels::EndOfSolvers>,
 
       Actions::Label<evolution::dg::subcell::Actions::Labels::BeginSubcell>,
@@ -343,11 +378,6 @@ struct EvolutionMetavars {
       Initialization::Actions::NonconservativeSystem<system>,
       evolution::Initialization::Actions::SetVariables<
           domain::Tags::Coordinates<volume_dim, Frame::ElementLogical>>,
-      ::Actions::RandomizeVariables<typename system::variables_tag,
-                                    RandomizeInitialData>,
-      ::Actions::LocalizedPerturbation<typename system::variables_tag,
-                                       PerturbInitialData>,
-
       tmpl::conditional_t<
           use_dg_subcell,
           tmpl::list<
@@ -357,7 +387,10 @@ struct EvolutionMetavars {
                   volume_dim, Ccz4::fd::Tags::Reconstructor>>,
               Actions::MutateApply<Ccz4::fd::ResizeTimeDerivatives>>,
           tmpl::list<>>,
-
+      ::Actions::RandomizeVariables<typename system::variables_tag,
+                                    RandomizeInitialData>,
+      ::Actions::LocalizedPerturbation<typename system::variables_tag,
+                                       PerturbInitialData>,
       Initialization::Actions::AddComputeTags<
           StepChoosers::step_chooser_compute_tags<EvolutionMetavars,
                                                   local_time_stepping>>,

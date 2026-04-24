@@ -19,6 +19,7 @@ spectre_target_sources(
   EventInstantiation.cpp
   Filter.cpp
   GhostData.cpp
+  NeighborPackagedData.cpp
   RadiationCharacteristics.cpp
   Reconstructor.cpp
   RegisterDerivedWithCharm.cpp
@@ -43,6 +44,7 @@ spectre_target_headers(
   ConstraintEnergyCompute.hpp
   GhostData.hpp
   HamiltonianConstraintCompute.hpp
+  NeighborPackagedData.hpp
   LdgTimeDerivative.hpp
   MomentumConstraintCompute.hpp
   RadiationCharacteristics.hpp
