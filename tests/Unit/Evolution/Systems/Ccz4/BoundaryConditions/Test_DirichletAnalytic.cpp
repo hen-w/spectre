@@ -21,7 +21,7 @@
 #include "Evolution/Systems/Ccz4/BoundaryConditions/DirichletAnalytic.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/Ccz4WrappedGr.hpp"
-#include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/UnlimitedDeg4Prim.hpp"
 #include "Evolution/Systems/Ccz4/Solutions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Framework/TestCreation.hpp"
@@ -85,7 +85,7 @@ void test_fd(const U& boundary_condition, const T& analytic_solution_or_data) {
           .get_clone()};
   const auto direction = Direction<3>::lower_xi();
 
-  const Ccz4::fd::DummyReconstructor reconstructor{};
+  const Ccz4::fd::UnlimitedDeg4Prim reconstructor{};
   const size_t ghost_zone_size = reconstructor.ghost_zone_size();
 
   using Vars = Variables<Ccz4::fd::System::original_evolved_variables_tags>;

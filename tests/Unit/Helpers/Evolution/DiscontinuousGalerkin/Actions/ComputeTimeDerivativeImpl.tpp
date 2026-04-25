@@ -547,6 +547,10 @@ struct BoundaryTerms final : public ::evolution::BoundaryCorrection {
       tmpl::conditional_t<HasPrims, tmpl::list<Tags::TimeStepId>, tmpl::list<>>;
   using dg_boundary_terms_volume_tags =
       tmpl::conditional_t<HasPrims, tmpl::list<Tags::TimeStepId>, tmpl::list<>>;
+  using dg_auxiliary_package_field_tags = tmpl::list<>;
+  using dg_auxiliary_package_data_temporary_tags = tmpl::list<>;
+  using dg_auxiliary_package_data_volume_tags = tmpl::list<>;
+  using dg_auxiliary_boundary_terms_volume_tags = tmpl::list<>;
   /// [bt_ta]
 
   // Conservative system
@@ -569,7 +573,8 @@ struct BoundaryTerms final : public ::evolution::BoundaryCorrection {
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& /*face_direction*/) const {
     *out_normal_dot_flux_var1 = dot_product(flux_var1, normal_covector);
     if (mesh_velocity.has_value()) {
       get(*out_normal_dot_flux_var1) -=
@@ -625,12 +630,13 @@ struct BoundaryTerms final : public ::evolution::BoundaryCorrection {
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
       const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& face_direction,
 
       const TimeStepId& time_step_id) const {
     dg_package_data(out_normal_dot_flux_var1, out_normal_dot_flux_var2,
                     out_var1, out_var2, max_abs_char_speed, var1, var2,
                     flux_var1, flux_var2, var3_squared, normal_covector,
-                    mesh_velocity, normal_dot_mesh_velocity);
+                    mesh_velocity, normal_dot_mesh_velocity, face_direction);
     get(*out_var1) += get(prim_var1) + time_step_id.step_time().value();
     return max(get(*max_abs_char_speed));
   }
@@ -653,7 +659,8 @@ struct BoundaryTerms final : public ::evolution::BoundaryCorrection {
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& /*face_direction*/) const {
     get(*out_normal_dot_flux_var1) =
         get(var1) + get(dot_product(var2, normal_covector));
     if (mesh_velocity.has_value()) {
@@ -706,7 +713,8 @@ struct BoundaryTerms final : public ::evolution::BoundaryCorrection {
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& /*face_direction*/) const {
     get(*out_normal_dot_flux_var1) =
         get(var1) + get(dot_product(var2, normal_covector));
     if (mesh_velocity.has_value()) {
@@ -763,12 +771,13 @@ struct BoundaryTerms final : public ::evolution::BoundaryCorrection {
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
       const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& face_direction,
 
       const TimeStepId& time_step_id) const {
     dg_package_data(out_normal_dot_flux_var1, out_normal_dot_flux_var2,
                     out_var1, out_var2, max_abs_char_speed, var1, var2,
                     flux_var2, var3_squared, normal_covector, mesh_velocity,
-                    normal_dot_mesh_velocity);
+                    normal_dot_mesh_velocity, face_direction);
     get(*out_var1) += get(prim_var1) + time_step_id.step_time().value();
     return max(get(*max_abs_char_speed));
   }
@@ -1012,11 +1021,13 @@ double dg_package_data(
     const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
         mesh_velocity,
     const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
-    const TagRetriever& get_tag, tmpl::list<VolumeTags...> /*meta*/) {
+    const Direction<Dim>& face_direction, const TagRetriever& get_tag,
+    tmpl::list<VolumeTags...> /*meta*/) {
   return boundary_correction.dg_package_data(
       make_not_null(&get<PackagedFieldTags>(*packaged_data))...,
       get<ProjectedFieldTags>(projected_fields)..., normal_covector,
-      mesh_velocity, normal_dot_mesh_velocity, get_tag(VolumeTags{})...);
+      mesh_velocity, normal_dot_mesh_velocity, face_direction,
+      get_tag(VolumeTags{})...);
 }
 
 template <bool LocalTimeStepping, bool UseMovingMesh, size_t Dim,
@@ -1698,8 +1709,8 @@ void test_impl(const Spectral::Quadrature quadrature,
         const double max_char_speed_on_face = dg_package_data(
             make_not_null(&packaged_data), BoundaryTerms<Dim, HasPrims>{},
             fields_on_face, face_normals.at(local_direction),
-            face_mesh_velocity, normal_dot_mesh_velocity, get_tag,
-            volume_tags{});
+            face_mesh_velocity, normal_dot_mesh_velocity, local_direction,
+            get_tag, volume_tags{});
 
         CHECK(
             max_char_speed_on_face ==

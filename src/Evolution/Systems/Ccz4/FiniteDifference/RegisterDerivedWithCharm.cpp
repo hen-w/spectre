@@ -3,7 +3,7 @@
 
 #include "Evolution/Systems/Ccz4/FiniteDifference/RegisterDerivedWithCharm.hpp"
 
-#include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/UnlimitedDeg4Prim.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Reconstructor.hpp"
 #include "Utilities/Serialization/RegisterDerivedClassesWithCharm.hpp"
 

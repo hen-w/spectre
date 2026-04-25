@@ -17,7 +17,7 @@
 #include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Sommerfeld.hpp"
-#include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/UnlimitedDeg4Prim.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Framework/TestCreation.hpp"
 #include "Framework/TestHelpers.hpp"
@@ -93,7 +93,7 @@ void test_fd(const U& boundary_condition, const size_t max_degree) {
 
   const auto direction = Direction<3>::lower_xi();
 
-  const Ccz4::fd::DummyReconstructor reconstructor{};
+  const Ccz4::fd::UnlimitedDeg4Prim reconstructor{};
   const size_t ghost_zone_size = reconstructor.ghost_zone_size();
 
   const auto expected_vars = [&]() {

@@ -55,13 +55,10 @@ void receive_subcell_data_for_dg(
               neighbor_ghost_and_subcell_data[offset_for_min + var_index]);
         }
 
-        ASSERT(subcell_ghost_data_ptr->find(mortar_id) ==
-                   subcell_ghost_data_ptr->end(),
-               "The subcell neighbor data is already inserted. Direction: "
-                   << mortar_id.direction()
-                   << " with ElementId: " << mortar_id.id());
-
-        (*subcell_ghost_data_ptr)[mortar_id] = GhostData{1};
+        // Use insert_or_assign to allow overwriting: the auxiliary pass
+        // populates ghost data first, then the physical pass overwrites
+        // with updated data.
+        subcell_ghost_data_ptr->insert_or_assign(mortar_id, GhostData{1});
         GhostData& all_ghost_data = subcell_ghost_data_ptr->at(mortar_id);
         DataVector& neighbor_data =
             all_ghost_data.neighbor_ghost_data_for_reconstruction();

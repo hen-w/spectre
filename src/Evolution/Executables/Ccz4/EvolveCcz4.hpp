@@ -41,7 +41,7 @@
 #include "Evolution/Systems/Ccz4/FiniteDifference/SpatialZ4ConstraintUpCompute.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/ApplyFilter.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/DetConformalSpatialMetricCompute.hpp"
-#include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/UnlimitedDeg4Prim.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/EnforceConstrainedEvolution.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/EnforceTracelessDerivConformalMetric.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/EnforceTracelessDtConformalMetric.hpp"
@@ -270,6 +270,8 @@ struct EvolutionMetavars {
 
     using DgComputeSubcellNeighborPackagedData =
         Ccz4::fd::NeighborPackagedData;
+    using DgComputeSubcellNeighborAuxPackagedData =
+        Ccz4::fd::NeighborPackagedDataImpl<true>;
   };
 
   using events_and_dense_triggers_subcell_postprocessors = tmpl::list<>;
@@ -393,8 +395,6 @@ struct EvolutionMetavars {
           dg::Actions::InitializeFilters<FilterEvolvedVariables>,
           Initialization::TimeStepperHistory<EvolutionMetavars>>,
       Initialization::Actions::NonconservativeSystem<system>,
-      evolution::Initialization::Actions::SetVariables<
-          domain::Tags::Coordinates<volume_dim, Frame::ElementLogical>>,
       tmpl::conditional_t<
           use_dg_subcell,
           tmpl::list<
@@ -403,7 +403,8 @@ struct EvolutionMetavars {
               Actions::MutateApply<evolution::dg::subcell::SetInterpolators<
                   volume_dim, Ccz4::fd::Tags::Reconstructor>>,
               Actions::MutateApply<Ccz4::fd::ResizeTimeDerivatives>>,
-          tmpl::list<>>,
+          tmpl::list<evolution::Initialization::Actions::SetVariables<
+              domain::Tags::Coordinates<volume_dim, Frame::ElementLogical>>>>,
       ::Actions::RandomizeVariables<typename system::variables_tag,
                                     RandomizeInitialData>,
       ::Actions::LocalizedPerturbation<typename system::variables_tag,

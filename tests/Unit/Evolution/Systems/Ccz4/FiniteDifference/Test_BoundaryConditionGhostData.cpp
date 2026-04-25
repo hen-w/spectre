@@ -36,7 +36,7 @@
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Sommerfeld.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/BoundaryConditionGhostData.hpp"
-#include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/UnlimitedDeg4Prim.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Solutions/Factory.hpp"
@@ -125,7 +125,7 @@ void test(const BoundaryConditionType& boundary_condition,
                         Spectral::Quadrature::GaussLobatto};
   const Mesh<3> subcell_mesh = evolution::dg::subcell::fd::mesh(dg_mesh);
 
-  using ReconstructorForTest = DummyReconstructor;
+  using ReconstructorForTest = UnlimitedDeg4Prim;
   const size_t ghost_zone_size{ReconstructorForTest{}.ghost_zone_size()};
 
   // Below are tags required by DirichletAnalytic boundary condition to compute

@@ -108,7 +108,12 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
                    variables_tags>,
       MaxAbsCharSpeed>;
   using dg_boundary_terms_volume_tags = tmpl::list<VolumeTag>;
+  using dg_auxiliary_package_field_tags = tmpl::list<>;
+  using dg_auxiliary_package_data_temporary_tags = tmpl::list<>;
+  using dg_auxiliary_package_data_volume_tags = tmpl::list<>;
+  using dg_auxiliary_boundary_terms_volume_tags = tmpl::list<>;
 
+  template <bool /*ForExternalBoundary*/ = false>
   void dg_boundary_terms(
       const gsl::not_null<Scalar<DataVector>*> boundary_correction_var1,
       const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>

@@ -203,6 +203,17 @@ bool receive_boundary_data(
         auto time_entry = inbox_data.find(mortar_next_time_step_id);
         auto received_mortar_data = time_entry->second.find(mortar_id);
 
+        // When using DG-subcell, store subcell ghost data for
+        // reconstruction by NeighborPackagedData (auxiliary pass).
+        if constexpr (using_subcell_v<Metavariables>) {
+          if (mortar_infos.at(mortar_id).time_stepping_policy() ==
+              TimeSteppingPolicy::EqualRate) {
+            evolution::dg::subcell::receive_subcell_data_for_dg<volume_dim>(
+                &db::as_access(*box), mortar_id,
+                received_mortar_data->second);
+          }
+        }
+
         db::mutate<evolution::dg::Tags::MortarMesh<volume_dim>,
                    evolution::dg::Tags::MortarData<volume_dim>,
                    evolution::dg::Tags::MortarDataHistory<volume_dim>,
@@ -244,10 +255,11 @@ bool receive_boundary_data(
               // data at the current temporal ID.
 
               ASSERT(
-                  received_mortar_data->second.boundary_correction_data
-                      .has_value(),
-                  "Must receive neighbor boundary correction data. "
-                  "Mortar ID is: ("
+                  using_subcell_v<Metavariables> or
+                      received_mortar_data->second.boundary_correction_data
+                          .has_value(),
+                  "Must receive neighbor boundary correction data when "
+                  "not using DG-subcell. Mortar ID is: ("
                       << mortar_id.direction() << "," << mortar_id.id()
                       << ") and TimeStepId is " << time_entry->first);
               MortarData<volume_dim> neighbor_mortar_data{};
@@ -269,6 +281,15 @@ bool receive_boundary_data(
           inbox_data.erase(time_entry);
         }
       }
+    }
+    // When using DG-subcell, reconstruct the subcell neighbor's face
+    // solution and package it for the DG element (auxiliary pass).
+    if constexpr (using_subcell_v<Metavariables>) {
+      evolution::dg::subcell::neighbor_reconstructed_face_solution<
+          volume_dim,
+          typename Metavariables::SubcellOptions::
+              DgComputeSubcellNeighborAuxPackagedData>(
+          &db::as_access(*box));
     }
     return true;
   }

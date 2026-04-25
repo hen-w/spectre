@@ -12,7 +12,7 @@ spectre_target_sources(
   Characteristics.cpp
   ConstraintCharacteristics.cpp
   Derivatives.cpp
-  DummyReconstructor.cpp
+  UnlimitedDeg4Prim.cpp
   EnforceConstrainedEvolution.cpp
   EnforceTracelessDerivConformalMetric.cpp
   EnforceTracelessDtConformalMetric.cpp
@@ -36,7 +36,8 @@ spectre_target_headers(
   ConstraintCharacteristics.hpp
   Derivatives.hpp
   DetConformalSpatialMetricCompute.hpp
-  DummyReconstructor.hpp
+  ReconstructWork.hpp
+  UnlimitedDeg4Prim.hpp
   EnforceConstrainedEvolution.hpp
   EnforceTracelessDerivConformalMetric.hpp
   EnforceTracelessDtConformalMetric.hpp

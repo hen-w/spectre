@@ -143,7 +143,7 @@ void call_dg_boundary_terms(
     const Variables<tmpl::list<PackageTags...>>& exterior_package_data,
     const ::dg::Formulation dg_formulation,
     tmpl::list<VolumeTagsToForward...> /*meta*/) {
-  correction.dg_boundary_terms(
+  correction.template dg_boundary_terms<false>(
       make_not_null(&get<BoundaryCorrectionTags>(*boundary_corrections))...,
       get<PackageTags>(interior_package_data)...,
       get<PackageTags>(exterior_package_data)..., dg_formulation,

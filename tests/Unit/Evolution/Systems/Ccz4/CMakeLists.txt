@@ -18,7 +18,7 @@ set(LIBRARY_SOURCES
   FiniteDifference/Test_Characteristics.cpp
   FiniteDifference/Test_ConstraintCharacteristics.cpp
   FiniteDifference/Test_Derivatives.cpp
-  FiniteDifference/Test_DummyReconstructor.cpp
+  FiniteDifference/Test_UnlimitedDeg4Prim.cpp
   FiniteDifference/Test_EnforceConstrainedEvolution.cpp
   FiniteDifference/Test_Filter.cpp
   FiniteDifference/Test_GhostData.cpp

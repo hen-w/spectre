@@ -15,12 +15,19 @@ class Variables;
 
 namespace Ccz4::fd {
 /*!
- * \brief Get the Ccz4 evolution variables for ghost
+ * \brief Get the Ccz4 ghost data for subcell communication.
  *
- * This mutator is passed to
- * `evolution::dg::subcell::Actions::SendDataForReconstruction`.
+ * - `GhostVariablesImpl<true>` (round 1, auxiliary): copies the 9 original
+ *   evolved variables only.
+ * - `GhostVariablesImpl<false>` (round 2, physical): copies the 9 original
+ *   evolved variables AND the 4 auxiliary fields (FieldA/B/D/P).
+ *
+ * In both cases the buffer is sized for a full
+ * `Variables<variables_tag_list>` (17 tags) so that the receiver can
+ * interpret it uniformly.  Tags that are not explicitly copied are zero.
  */
-class GhostVariables {
+template <bool IsAuxiliary>
+class GhostVariablesImpl {
  public:
   using return_tags = tmpl::list<>;
   using argument_tags =
@@ -31,22 +38,8 @@ class GhostVariables {
       size_t rdmp_size);
 };
 
-/*!
- * \brief Get the Ccz4 evolution variables including auxiliary fields for ghost
- * data (round 2 of two-round subcell communication).
- *
- * Copies the 9 original evolved variables AND FieldA/B/D/P into the ghost
- * buffer. Used after UpdateAuxiliaryVariablesFd has computed the auxiliary
- * fields from FD derivatives.
- */
-class GhostVariablesPhysical {
- public:
-  using return_tags = tmpl::list<>;
-  using argument_tags =
-      tmpl::list<::Tags::Variables<Ccz4::fd::System::variables_tag_list>>;
-
-  static DataVector apply(
-      const Variables<Ccz4::fd::System::variables_tag_list>& evolved_vars,
-      size_t rdmp_size);
-};
+/// Round 1 (auxiliary pass): 9 evolved variables only.
+using GhostVariables = GhostVariablesImpl<true>;
+/// Round 2 (physical pass): 9 evolved + 4 auxiliary fields.
+using GhostVariablesPhysical = GhostVariablesImpl<false>;
 }  // namespace Ccz4::fd

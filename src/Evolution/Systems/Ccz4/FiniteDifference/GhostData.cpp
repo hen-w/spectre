@@ -11,7 +11,8 @@
 #include "Utilities/TMPL.hpp"
 
 namespace Ccz4::fd {
-DataVector GhostVariables::apply(
+template <bool IsAuxiliary>
+DataVector GhostVariablesImpl<IsAuxiliary>::apply(
     const Variables<Ccz4::fd::System::variables_tag_list>& evolved_vars,
     const size_t rdmp_size) {
   DataVector buffer{evolved_vars.number_of_grid_points() *
@@ -22,6 +23,7 @@ DataVector GhostVariables::apply(
   Variables<Ccz4::fd::System::variables_tag_list> vars_to_reconstruct(
       buffer.data(), buffer.size() - rdmp_size);
 
+  // Copy the 9 original evolved variables (always)
   get<::Ccz4::Tags::ConformalMetric<DataVector, 3>>(vars_to_reconstruct) =
       get<::Ccz4::Tags::ConformalMetric<DataVector, 3>>(evolved_vars);
   get<gr::Tags::Lapse<DataVector>>(vars_to_reconstruct) =
@@ -41,50 +43,21 @@ DataVector GhostVariables::apply(
   get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(vars_to_reconstruct) =
       get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(evolved_vars);
 
-  return buffer;
-}
-
-DataVector GhostVariablesPhysical::apply(
-    const Variables<Ccz4::fd::System::variables_tag_list>& evolved_vars,
-    const size_t rdmp_size) {
-  DataVector buffer{evolved_vars.number_of_grid_points() *
-                        Variables<Ccz4::fd::System::variables_tag_list>::
-                            number_of_independent_components +
-                    rdmp_size};
-  buffer = 0.0;
-  Variables<Ccz4::fd::System::variables_tag_list> vars_to_reconstruct(
-      buffer.data(), buffer.size() - rdmp_size);
-
-  // Copy the 9 original evolved variables
-  get<::Ccz4::Tags::ConformalMetric<DataVector, 3>>(vars_to_reconstruct) =
-      get<::Ccz4::Tags::ConformalMetric<DataVector, 3>>(evolved_vars);
-  get<gr::Tags::Lapse<DataVector>>(vars_to_reconstruct) =
-      get<gr::Tags::Lapse<DataVector>>(evolved_vars);
-  get<gr::Tags::Shift<DataVector, 3>>(vars_to_reconstruct) =
-      get<gr::Tags::Shift<DataVector, 3>>(evolved_vars);
-  get<::Ccz4::Tags::ConformalFactor<DataVector>>(vars_to_reconstruct) =
-      get<::Ccz4::Tags::ConformalFactor<DataVector>>(evolved_vars);
-  get<::Ccz4::Tags::ATilde<DataVector, 3>>(vars_to_reconstruct) =
-      get<::Ccz4::Tags::ATilde<DataVector, 3>>(evolved_vars);
-  get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(vars_to_reconstruct) =
-      get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(evolved_vars);
-  get<::Ccz4::Tags::Theta<DataVector>>(vars_to_reconstruct) =
-      get<::Ccz4::Tags::Theta<DataVector>>(evolved_vars);
-  get<::Ccz4::Tags::GammaHat<DataVector, 3>>(vars_to_reconstruct) =
-      get<::Ccz4::Tags::GammaHat<DataVector, 3>>(evolved_vars);
-  get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(vars_to_reconstruct) =
-      get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(evolved_vars);
-
-  // Copy the 4 auxiliary fields (FieldA/B/D/P)
-  get<::Ccz4::Tags::FieldA<DataVector, 3>>(vars_to_reconstruct) =
-      get<::Ccz4::Tags::FieldA<DataVector, 3>>(evolved_vars);
-  get<::Ccz4::Tags::FieldB<DataVector, 3>>(vars_to_reconstruct) =
-      get<::Ccz4::Tags::FieldB<DataVector, 3>>(evolved_vars);
-  get<::Ccz4::Tags::FieldD<DataVector, 3>>(vars_to_reconstruct) =
-      get<::Ccz4::Tags::FieldD<DataVector, 3>>(evolved_vars);
-  get<::Ccz4::Tags::FieldP<DataVector, 3>>(vars_to_reconstruct) =
-      get<::Ccz4::Tags::FieldP<DataVector, 3>>(evolved_vars);
+  if constexpr (not IsAuxiliary) {
+    // Round 2 (physical pass): also copy the 4 auxiliary fields
+    get<::Ccz4::Tags::FieldA<DataVector, 3>>(vars_to_reconstruct) =
+        get<::Ccz4::Tags::FieldA<DataVector, 3>>(evolved_vars);
+    get<::Ccz4::Tags::FieldB<DataVector, 3>>(vars_to_reconstruct) =
+        get<::Ccz4::Tags::FieldB<DataVector, 3>>(evolved_vars);
+    get<::Ccz4::Tags::FieldD<DataVector, 3>>(vars_to_reconstruct) =
+        get<::Ccz4::Tags::FieldD<DataVector, 3>>(evolved_vars);
+    get<::Ccz4::Tags::FieldP<DataVector, 3>>(vars_to_reconstruct) =
+        get<::Ccz4::Tags::FieldP<DataVector, 3>>(evolved_vars);
+  }
 
   return buffer;
 }
+
+template class GhostVariablesImpl<true>;
+template class GhostVariablesImpl<false>;
 }  // namespace Ccz4::fd

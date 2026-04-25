@@ -28,7 +28,7 @@
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
 #include "Options/Protocols/FactoryCreation.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Derivatives.hpp"
-#include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/UnlimitedDeg4Prim.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Reconstructor.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
@@ -72,7 +72,7 @@ void test_minkowski() {
   constexpr size_t SpatialDim = 3;
   using FrameType = Frame::Inertial;
   const size_t points_per_dimension = 5;
-  const Ccz4::fd::DummyReconstructor recons{};
+  const Ccz4::fd::UnlimitedDeg4Prim recons{};
   const size_t ghost_zone_size = recons.ghost_zone_size();
   const Mesh<SpatialDim> subcell_mesh{points_per_dimension,
                                       Spectral::Basis::FiniteDifference,
@@ -183,7 +183,7 @@ void test_kerrschild() {
   constexpr size_t SpatialDim = 3;
   using FrameType = Frame::Inertial;
   const size_t points_per_dimension = 20;
-  const Ccz4::fd::DummyReconstructor recons{};
+  const Ccz4::fd::UnlimitedDeg4Prim recons{};
   const size_t ghost_zone_size = recons.ghost_zone_size();
   const Mesh<SpatialDim> subcell_mesh{points_per_dimension,
                                       Spectral::Basis::FiniteDifference,

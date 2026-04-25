@@ -6,6 +6,7 @@
 #include <cstddef>
 
 #include "DataStructures/DataBox/Tag.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/EagerMath/DotProduct.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
@@ -161,6 +162,7 @@ struct Correction final : public CorrectionBase {
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
       /*mesh_velocity*/,
       const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& /*face_direction*/,
       const VolumeDoubleType volume_double_in) const {
     double volume_double = 0.0;
     if constexpr (std::is_same_v<double, VolumeDoubleType>) {
@@ -206,12 +208,13 @@ struct Correction final : public CorrectionBase {
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
       const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& face_direction,
       const VolumeDoubleType volume_double_in) const {
     const double max_speed = dg_package_data(
         packaged_var1, packaged_normal_dot_flux_var1, packaged_var2,
         packaged_normal_dot_flux_var2, packaged_abs_char_speed, var1, var2,
         flux_var1, flux_var2, normal_covector, mesh_velocity,
-        normal_dot_mesh_velocity, volume_double_in);
+        normal_dot_mesh_velocity, face_direction, volume_double_in);
 
     // We add the normal vector to the flux just to verify that it is being
     // used. This is total nonsense in terms of physics.
@@ -221,6 +224,7 @@ struct Correction final : public CorrectionBase {
     return max_speed;
   }
 
+  template <bool /*ForExternalBoundary*/ = false>
   void dg_boundary_terms(
       const gsl::not_null<Scalar<DataVector>*> boundary_correction_var1,
       const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>

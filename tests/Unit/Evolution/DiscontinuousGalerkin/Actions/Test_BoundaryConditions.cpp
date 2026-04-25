@@ -147,6 +147,10 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       HasPrims, tmpl::list<Tags::BoundaryCorrectionVolumeTag>, tmpl::list<>>;
   using dg_boundary_terms_volume_tags = tmpl::conditional_t<
       HasPrims, tmpl::list<Tags::BoundaryCorrectionVolumeTag>, tmpl::list<>>;
+  using dg_auxiliary_package_field_tags = tmpl::list<>;
+  using dg_auxiliary_package_data_temporary_tags = tmpl::list<>;
+  using dg_auxiliary_package_data_volume_tags = tmpl::list<>;
+  using dg_auxiliary_boundary_terms_volume_tags = tmpl::list<>;
 
   // Conservative system, flat background
   double dg_package_data(
@@ -168,7 +172,8 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& /*face_direction*/) const {
     if (mesh_velocity.has_value()) {
       REQUIRE(normal_dot_mesh_velocity.has_value());
       CHECK_ITERABLE_APPROX(*normal_dot_mesh_velocity,
@@ -228,13 +233,15 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const tnsr::I<DataVector, Dim, Frame::Inertial>& normal_vector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& face_direction) const {
     CHECK_ITERABLE_APPROX(get(dot_product(normal_covector, normal_vector)),
                           DataVector(get(var1).size(), 1.0));
     return dg_package_data(out_normal_dot_flux_var1, out_normal_dot_flux_var2,
                            out_var1, out_var2, max_abs_char_speed, var1, var2,
                            flux_var1, flux_var2, var3_squared, normal_covector,
-                           mesh_velocity, normal_dot_mesh_velocity);
+                           mesh_velocity, normal_dot_mesh_velocity,
+                           face_direction);
   }
 
   // Conservative system with prim vars, flat background
@@ -259,12 +266,13 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
       const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& face_direction,
 
       const double volume_number) const {
     dg_package_data(out_normal_dot_flux_var1, out_normal_dot_flux_var2,
                     out_var1, out_var2, max_abs_char_speed, var1, var2,
                     flux_var1, flux_var2, var3_squared, normal_covector,
-                    mesh_velocity, normal_dot_mesh_velocity);
+                    mesh_velocity, normal_dot_mesh_velocity, face_direction);
     get(*out_var1) += get(prim_var1) + volume_number;
     if (mesh_velocity.has_value()) {
       get(*out_normal_dot_flux_var1) -=
@@ -297,6 +305,7 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
       const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& face_direction,
 
       const double volume_number) const {
     CHECK_ITERABLE_APPROX(get(dot_product(normal_covector, normal_vector)),
@@ -305,7 +314,8 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
                            out_var1, out_var2, max_abs_char_speed, var1, var2,
                            flux_var1, flux_var2, var3_squared, prim_var1,
                            normal_covector, mesh_velocity,
-                           normal_dot_mesh_velocity, volume_number);
+                           normal_dot_mesh_velocity, face_direction,
+                           volume_number);
   }
 
   // Nonconservative system, flat background
@@ -325,7 +335,8 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& /*face_direction*/) const {
     if (mesh_velocity.has_value()) {
       REQUIRE(normal_dot_mesh_velocity.has_value());
       CHECK_ITERABLE_APPROX(*normal_dot_mesh_velocity,
@@ -383,13 +394,14 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const tnsr::I<DataVector, Dim, Frame::Inertial>& normal_vector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& face_direction) const {
     CHECK_ITERABLE_APPROX(get(dot_product(normal_covector, normal_vector)),
                           DataVector(get(var1).size(), 1.0));
     return dg_package_data(out_normal_dot_flux_var1, out_normal_dot_flux_var2,
                            out_var1, out_var2, max_abs_char_speed, var1, var2,
                            var3_squared, normal_covector, mesh_velocity,
-                           normal_dot_mesh_velocity);
+                           normal_dot_mesh_velocity, face_direction);
   }
 
   // Mixed system, no prims, flat background
@@ -411,7 +423,8 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& /*face_direction*/) const {
     if (mesh_velocity.has_value()) {
       REQUIRE(normal_dot_mesh_velocity.has_value());
       CHECK_ITERABLE_APPROX(*normal_dot_mesh_velocity,
@@ -471,13 +484,15 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const tnsr::I<DataVector, Dim, Frame::Inertial>& normal_vector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
-      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& face_direction) const {
     CHECK_ITERABLE_APPROX(get(dot_product(normal_covector, normal_vector)),
                           DataVector(get(var1).size(), 1.0));
     return dg_package_data(out_normal_dot_flux_var1, out_normal_dot_flux_var2,
                            out_var1, out_var2, max_abs_char_speed, var1, var2,
                            flux_var2, var3_squared, normal_covector,
-                           mesh_velocity, normal_dot_mesh_velocity);
+                           mesh_velocity, normal_dot_mesh_velocity,
+                           face_direction);
   }
 
   // Mixed system with prims, flat background
@@ -502,12 +517,13 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
       const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& face_direction,
 
       const double volume_number) const {
     dg_package_data(out_normal_dot_flux_var1, out_normal_dot_flux_var2,
                     out_var1, out_var2, max_abs_char_speed, var1, var2,
                     flux_var2, var3_squared, normal_covector, mesh_velocity,
-                    normal_dot_mesh_velocity);
+                    normal_dot_mesh_velocity, face_direction);
     get(*out_var1) += get(prim_var1) + volume_number;
     return max(get(*max_abs_char_speed));
   }
@@ -535,6 +551,7 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           mesh_velocity,
       const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+      const Direction<Dim>& face_direction,
 
       const double volume_number) const {
     CHECK_ITERABLE_APPROX(get(dot_product(normal_covector, normal_vector)),
@@ -543,9 +560,10 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
                            out_var1, out_var2, max_abs_char_speed, var1, var2,
                            flux_var2, var3_squared, prim_var1, normal_covector,
                            mesh_velocity, normal_dot_mesh_velocity,
-                           volume_number);
+                           face_direction, volume_number);
   }
 
+  template <bool /*ForExternalBoundary*/ = false>
   void dg_boundary_terms(
       const gsl::not_null<Scalar<DataVector>*> boundary_correction_var1,
       const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
@@ -686,6 +704,7 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
                        sign_of_normal_ / normalization_factor * mesh_velocity));
   }
 
+  template <bool /*ForExternalBoundary*/ = false>
   void dg_boundary_terms(
       const gsl::not_null<Scalar<DataVector>*> boundary_correction_var1,
       const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>

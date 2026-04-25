@@ -33,7 +33,7 @@
 #include "Evolution/Systems/Ccz4/Christoffel.hpp"
 #include "Evolution/Systems/Ccz4/DerivChristoffel.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Derivatives.hpp"
-#include "Evolution/Systems/Ccz4/FiniteDifference/DummyReconstructor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/UnlimitedDeg4Prim.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Reconstructor.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/SoTimeDerivative.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
@@ -82,7 +82,7 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
   const size_t SpatialDim = 3;
   using FrameType = Frame::Inertial;
   const size_t points_per_dimension = 5;
-  const Ccz4::fd::DummyReconstructor recons{};
+  const Ccz4::fd::UnlimitedDeg4Prim recons{};
   const size_t ghost_zone_size = recons.ghost_zone_size();
   const Mesh<SpatialDim> subcell_mesh{points_per_dimension,
                                       Spectral::Basis::FiniteDifference,
@@ -208,7 +208,7 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
   const size_t SpatialDim = 3;
   using FrameType = Frame::Inertial;
   const size_t points_per_dimension = 20;
-  const Ccz4::fd::DummyReconstructor recons{};
+  const Ccz4::fd::UnlimitedDeg4Prim recons{};
   const size_t ghost_zone_size = recons.ghost_zone_size();
   const Mesh<SpatialDim> subcell_mesh{points_per_dimension,
                                       Spectral::Basis::FiniteDifference,
@@ -378,7 +378,7 @@ void test_gauge_plane_wave(
   const size_t SpatialDim = 3;
   using FrameType = Frame::Inertial;
   const size_t points_per_dimension = 20;
-  const Ccz4::fd::DummyReconstructor recons{};
+  const Ccz4::fd::UnlimitedDeg4Prim recons{};
   const size_t ghost_zone_size = recons.ghost_zone_size();
   const Mesh<SpatialDim> subcell_mesh{points_per_dimension,
                                       Spectral::Basis::FiniteDifference,
@@ -744,7 +744,7 @@ void test_sommerfeld(
   const size_t SpatialDim = 3;
   using FrameType = Frame::Inertial;
   const size_t points_per_dimension = 5;
-  const Ccz4::fd::DummyReconstructor recons{};
+  const Ccz4::fd::UnlimitedDeg4Prim recons{};
   const size_t ghost_zone_size = recons.ghost_zone_size();
   const Mesh<SpatialDim> subcell_mesh{points_per_dimension,
                                       Spectral::Basis::FiniteDifference,
@@ -1034,7 +1034,7 @@ void test_dirichlet_analytic_bc(const bool evolve_lapse_and_shift) {
   const size_t SpatialDim = 3;
   using FrameType = Frame::Inertial;
   const size_t points_per_dimension = 5;
-  const Ccz4::fd::DummyReconstructor recons{};
+  const Ccz4::fd::UnlimitedDeg4Prim recons{};
   const size_t ghost_zone_size = recons.ghost_zone_size();
   const Mesh<SpatialDim> subcell_mesh{points_per_dimension,
                                       Spectral::Basis::FiniteDifference,

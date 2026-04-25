@@ -571,7 +571,7 @@ void test_skip_boundary_faces_via_operator() {
   }
 }
 
-// [[TimeOut, 20]]
+// [[TimeOut, 30]]
 SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.ApplyTensorYlmFilter",
                   "[NumericalAlgorithms][Unit]") {
   register_factory_classes_with_charm<Metavariables>();

@@ -11,7 +11,7 @@
 
 namespace Ccz4::fd {
 /// \cond
-class DummyReconstructor;
+class UnlimitedDeg4Prim;
 /// \endcond
 
 /*!
@@ -31,7 +31,7 @@ class Reconstructor : public PUP::able {
   WRAPPED_PUPable_abstract(Reconstructor);  // NOLINT
   /// \endcond
 
-  using creatable_classes = tmpl::list<DummyReconstructor>;
+  using creatable_classes = tmpl::list<UnlimitedDeg4Prim>;
 
   virtual std::unique_ptr<Reconstructor> get_clone() const = 0;
 
