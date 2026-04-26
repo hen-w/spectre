@@ -55,9 +55,11 @@ DomainCreator:
     InitialNumberOfRadialGridPoints: 5
     InitialSphericalHarmonicL: 4
     InitialNumberOfAngularGridPointsOfWedges: 5
-    InnerBoundaryCondition:
-      DirichletAnalytic:
-        AnalyticPrescription: *InitialData
+    Interior:
+      ExciseWithBoundaryCondition:
+        DirichletAnalytic:
+          AnalyticPrescription: *InitialData
+    UseEquiangularMap: true
     OuterBoundaryCondition:
       DirichletAnalytic:
         AnalyticPrescription: *InitialData
