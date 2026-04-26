@@ -35,7 +35,7 @@
 #include "PointwiseFunctions/MathFunctions/MathFunction.hpp"
 #include "PointwiseFunctions/MathFunctions/PowX.hpp"
 #include "Utilities/MakeWithValue.hpp"
-#include "Utilities/TaggedTuple.hpp"
+#include "DataStructures/TaggedTuple.hpp"
 
 namespace {
 template <size_t Index, size_t Dim>

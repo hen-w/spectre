@@ -151,11 +151,8 @@ bool receive_boundary_data(
     const auto& element = db::get<domain::Tags::Element<volume_dim>>(*box);
     const auto& current_id = db::get<::Tags::TimeStepId>(*box);
 
-    using InboxMap = std::map<
-        TimeStepId,
-        DirectionalIdMap<volume_dim, evolution::dg::BoundaryData<volume_dim>>>;
     inbox.collect_messages();
-    InboxMap& inbox_data = inbox.messages;
+    auto& inbox_data = inbox.messages;
 
     // Phase 1: check availability of all mortar data.
     size_t missing_messages = 0;
@@ -174,7 +171,10 @@ bool receive_boundary_data(
         }
         const auto time_entry = inbox_data.find(mortar_next_time_step_id);
         if (time_entry == inbox_data.end() or
-            time_entry->second.find(mortar_id) == time_entry->second.end()) {
+            alg::none_of(time_entry->second,
+                         [&mortar_id](const auto& id_and_data) {
+                           return id_and_data.first == mortar_id;
+                         })) {
           ++missing_messages;
         }
       }
@@ -201,7 +201,11 @@ bool receive_boundary_data(
         const Mesh<volume_dim - 1> face_mesh =
             volume_mesh.slice_away(sliced_away_dim);
         auto time_entry = inbox_data.find(mortar_next_time_step_id);
-        auto received_mortar_data = time_entry->second.find(mortar_id);
+        auto received_mortar_data =
+            alg::find_if(time_entry->second,
+                         [&mortar_id](const auto& id_and_data) {
+                           return id_and_data.first == mortar_id;
+                         });
 
         // When using DG-subcell, store subcell ghost data for
         // reconstruction by NeighborPackagedData (auxiliary pass).

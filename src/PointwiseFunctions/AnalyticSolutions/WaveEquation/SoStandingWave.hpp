@@ -12,7 +12,7 @@
 #include "PointwiseFunctions/InitialDataUtilities/InitialData.hpp"
 #include "Utilities/Serialization/CharmPupable.hpp"
 #include "Utilities/TMPL.hpp"
-#include "Utilities/TaggedTuple.hpp"
+#include "DataStructures/TaggedTuple.hpp"
 
 /// \cond
 class DataVector;

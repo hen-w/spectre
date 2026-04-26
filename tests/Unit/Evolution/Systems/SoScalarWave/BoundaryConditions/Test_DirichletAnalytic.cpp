@@ -22,7 +22,7 @@
 #include "Time/Tags/Time.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/TMPL.hpp"
-#include "Utilities/TaggedTuple.hpp"
+#include "DataStructures/TaggedTuple.hpp"
 
 namespace helpers = TestHelpers::evolution::dg;
 

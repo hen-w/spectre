@@ -25,7 +25,7 @@
 #include "Utilities/Serialization/Serialize.hpp"
 #include "Utilities/StdHelpers.hpp"
 #include "Utilities/TMPL.hpp"
-#include "Utilities/TaggedTuple.hpp"
+#include "DataStructures/TaggedTuple.hpp"
 #include "Utilities/TypeTraits.hpp"
 
 /// \cond

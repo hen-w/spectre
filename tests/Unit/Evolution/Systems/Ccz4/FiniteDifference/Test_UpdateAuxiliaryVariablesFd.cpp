@@ -42,7 +42,7 @@
 #include "PointwiseFunctions/GeneralRelativity/Tags.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/TMPL.hpp"
-#include "Utilities/TaggedTuple.hpp"
+#include "DataStructures/TaggedTuple.hpp"
 
 namespace Ccz4::fd {
 namespace {
