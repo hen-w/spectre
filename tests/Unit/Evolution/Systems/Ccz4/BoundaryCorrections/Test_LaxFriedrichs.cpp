@@ -1239,8 +1239,256 @@ void test_dg_auxiliary_boundary_terms() {
   CHECK_ITERABLE_APPROX(corr_field_p, expected_corr_field_p);
 }
 
+void test_use_central_flux_at_boundary_false() {
+  // When use_central_flux_at_boundary is false, the ForExternalBoundary=true
+  // code path should use the user-specified tau1/tau2 instead of 0.0/1.0.
+  const double tau1 = 1.5;
+  const double tau2 = 2.3;
+  const Ccz4::BoundaryCorrections::LaxFriedrichs<3> correction_central(
+      tau1, tau2, true);
+  const Ccz4::BoundaryCorrections::LaxFriedrichs<3> correction_no_central(
+      tau1, tau2, false);
+
+  MAKE_GENERATOR(gen);
+  std::uniform_real_distribution<> dist(-1.0, 1.0);
+
+  const auto conformal_metric_int =
+      make_random_conformal_metric(make_not_null(&gen), face_size);
+  const auto conformal_factor_int = make_with_random_values<Scalar<DataVector>>(
+      make_not_null(&gen), dist, DataVector(face_size));
+  const auto a_tilde_int =
+      make_with_random_values<tnsr::ii<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto trace_extrinsic_curvature_int =
+      make_with_random_values<Scalar<DataVector>>(make_not_null(&gen), dist,
+                                                  DataVector(face_size));
+  const auto theta_int = make_with_random_values<Scalar<DataVector>>(
+      make_not_null(&gen), dist, DataVector(face_size));
+  const auto gamma_hat_int =
+      make_with_random_values<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto lapse_int = make_with_random_values<Scalar<DataVector>>(
+      make_not_null(&gen), dist, DataVector(face_size));
+  const auto shift_int =
+      make_with_random_values<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto auxiliary_shift_b_int =
+      make_with_random_values<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto field_a_int =
+      make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto field_b_int =
+      make_with_random_values<tnsr::iJ<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto field_d_int =
+      make_with_random_values<tnsr::ijj<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto field_p_int =
+      make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto boundary_conformal_metric_int =
+      make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  const auto boundary_conformal_factor_int =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  const auto boundary_lapse_int =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  const auto boundary_shift_int =
+      make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  const auto normal_covector_int = make_unit_normal(face_size);
+
+  const auto conformal_metric_ext =
+      make_random_conformal_metric(make_not_null(&gen), face_size);
+  const auto conformal_factor_ext = make_with_random_values<Scalar<DataVector>>(
+      make_not_null(&gen), dist, DataVector(face_size));
+  const auto a_tilde_ext =
+      make_with_random_values<tnsr::ii<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto trace_extrinsic_curvature_ext =
+      make_with_random_values<Scalar<DataVector>>(make_not_null(&gen), dist,
+                                                  DataVector(face_size));
+  const auto theta_ext = make_with_random_values<Scalar<DataVector>>(
+      make_not_null(&gen), dist, DataVector(face_size));
+  const auto gamma_hat_ext =
+      make_with_random_values<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto lapse_ext = make_with_random_values<Scalar<DataVector>>(
+      make_not_null(&gen), dist, DataVector(face_size));
+  const auto shift_ext =
+      make_with_random_values<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto auxiliary_shift_b_ext =
+      make_with_random_values<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto field_a_ext =
+      make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto field_b_ext =
+      make_with_random_values<tnsr::iJ<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto field_d_ext =
+      make_with_random_values<tnsr::ijj<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto field_p_ext =
+      make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto boundary_conformal_metric_ext =
+      make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  const auto boundary_conformal_factor_ext =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  const auto boundary_lapse_ext =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  const auto boundary_shift_ext =
+      make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  auto normal_covector_ext =
+      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  get<0>(normal_covector_ext) = -1.0;
+
+  // Call ForExternalBoundary=true with use_central_flux_at_boundary=true
+  auto corr_K_central =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  auto corr_dummy_ii =
+      make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  auto corr_dummy_scalar =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  auto corr_dummy_I =
+      make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  auto corr_dummy_i =
+      make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  auto corr_dummy_iJ =
+      make_with_value<tnsr::iJ<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  auto corr_dummy_ijj =
+      make_with_value<tnsr::ijj<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+
+  correction_central.dg_boundary_terms<true>(
+      make_not_null(&corr_dummy_ii), make_not_null(&corr_dummy_scalar),
+      make_not_null(&corr_dummy_ii), make_not_null(&corr_K_central),
+      make_not_null(&corr_dummy_scalar), make_not_null(&corr_dummy_I),
+      make_not_null(&corr_dummy_scalar), make_not_null(&corr_dummy_I),
+      make_not_null(&corr_dummy_I), make_not_null(&corr_dummy_i),
+      make_not_null(&corr_dummy_iJ), make_not_null(&corr_dummy_ijj),
+      make_not_null(&corr_dummy_i), make_not_null(&corr_dummy_ii),
+      make_not_null(&corr_dummy_scalar), make_not_null(&corr_dummy_scalar),
+      make_not_null(&corr_dummy_I),
+      conformal_metric_int, conformal_factor_int, a_tilde_int,
+      trace_extrinsic_curvature_int, theta_int, gamma_hat_int, lapse_int,
+      shift_int, auxiliary_shift_b_int, field_a_int, field_b_int, field_d_int,
+      field_p_int, boundary_conformal_metric_int,
+      boundary_conformal_factor_int, boundary_lapse_int, boundary_shift_int,
+      normal_covector_int, conformal_metric_ext, conformal_factor_ext,
+      a_tilde_ext, trace_extrinsic_curvature_ext, theta_ext, gamma_hat_ext,
+      lapse_ext, shift_ext, auxiliary_shift_b_ext, field_a_ext, field_b_ext,
+      field_d_ext, field_p_ext, boundary_conformal_metric_ext,
+      boundary_conformal_factor_ext, boundary_lapse_ext, boundary_shift_ext,
+      normal_covector_ext, dg::Formulation::StrongInertial);
+
+  // Call ForExternalBoundary=true with use_central_flux_at_boundary=false
+  auto corr_K_no_central =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  // Reset dummies
+  corr_dummy_ii = make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
+      DataVector(face_size), 0.0);
+  corr_dummy_scalar =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  corr_dummy_I = make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
+      DataVector(face_size), 0.0);
+  corr_dummy_i = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
+      DataVector(face_size), 0.0);
+  corr_dummy_iJ = make_with_value<tnsr::iJ<DataVector, 3, Frame::Inertial>>(
+      DataVector(face_size), 0.0);
+  corr_dummy_ijj = make_with_value<tnsr::ijj<DataVector, 3, Frame::Inertial>>(
+      DataVector(face_size), 0.0);
+
+  correction_no_central.dg_boundary_terms<true>(
+      make_not_null(&corr_dummy_ii), make_not_null(&corr_dummy_scalar),
+      make_not_null(&corr_dummy_ii), make_not_null(&corr_K_no_central),
+      make_not_null(&corr_dummy_scalar), make_not_null(&corr_dummy_I),
+      make_not_null(&corr_dummy_scalar), make_not_null(&corr_dummy_I),
+      make_not_null(&corr_dummy_I), make_not_null(&corr_dummy_i),
+      make_not_null(&corr_dummy_iJ), make_not_null(&corr_dummy_ijj),
+      make_not_null(&corr_dummy_i), make_not_null(&corr_dummy_ii),
+      make_not_null(&corr_dummy_scalar), make_not_null(&corr_dummy_scalar),
+      make_not_null(&corr_dummy_I),
+      conformal_metric_int, conformal_factor_int, a_tilde_int,
+      trace_extrinsic_curvature_int, theta_int, gamma_hat_int, lapse_int,
+      shift_int, auxiliary_shift_b_int, field_a_int, field_b_int, field_d_int,
+      field_p_int, boundary_conformal_metric_int,
+      boundary_conformal_factor_int, boundary_lapse_int, boundary_shift_int,
+      normal_covector_int, conformal_metric_ext, conformal_factor_ext,
+      a_tilde_ext, trace_extrinsic_curvature_ext, theta_ext, gamma_hat_ext,
+      lapse_ext, shift_ext, auxiliary_shift_b_ext, field_a_ext, field_b_ext,
+      field_d_ext, field_p_ext, boundary_conformal_metric_ext,
+      boundary_conformal_factor_ext, boundary_lapse_ext, boundary_shift_ext,
+      normal_covector_ext, dg::Formulation::StrongInertial);
+
+  // Call ForExternalBoundary=false (interior) with no_central — should match
+  // no_central at external boundary since both use tau1/tau2
+  auto corr_K_interior =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  corr_dummy_ii = make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
+      DataVector(face_size), 0.0);
+  corr_dummy_scalar =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  corr_dummy_I = make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
+      DataVector(face_size), 0.0);
+  corr_dummy_i = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
+      DataVector(face_size), 0.0);
+  corr_dummy_iJ = make_with_value<tnsr::iJ<DataVector, 3, Frame::Inertial>>(
+      DataVector(face_size), 0.0);
+  corr_dummy_ijj = make_with_value<tnsr::ijj<DataVector, 3, Frame::Inertial>>(
+      DataVector(face_size), 0.0);
+
+  correction_no_central.dg_boundary_terms(
+      make_not_null(&corr_dummy_ii), make_not_null(&corr_dummy_scalar),
+      make_not_null(&corr_dummy_ii), make_not_null(&corr_K_interior),
+      make_not_null(&corr_dummy_scalar), make_not_null(&corr_dummy_I),
+      make_not_null(&corr_dummy_scalar), make_not_null(&corr_dummy_I),
+      make_not_null(&corr_dummy_I), make_not_null(&corr_dummy_i),
+      make_not_null(&corr_dummy_iJ), make_not_null(&corr_dummy_ijj),
+      make_not_null(&corr_dummy_i), make_not_null(&corr_dummy_ii),
+      make_not_null(&corr_dummy_scalar), make_not_null(&corr_dummy_scalar),
+      make_not_null(&corr_dummy_I),
+      conformal_metric_int, conformal_factor_int, a_tilde_int,
+      trace_extrinsic_curvature_int, theta_int, gamma_hat_int, lapse_int,
+      shift_int, auxiliary_shift_b_int, field_a_int, field_b_int, field_d_int,
+      field_p_int, boundary_conformal_metric_int,
+      boundary_conformal_factor_int, boundary_lapse_int, boundary_shift_int,
+      normal_covector_int, conformal_metric_ext, conformal_factor_ext,
+      a_tilde_ext, trace_extrinsic_curvature_ext, theta_ext, gamma_hat_ext,
+      lapse_ext, shift_ext, auxiliary_shift_b_ext, field_a_ext, field_b_ext,
+      field_d_ext, field_p_ext, boundary_conformal_metric_ext,
+      boundary_conformal_factor_ext, boundary_lapse_ext, boundary_shift_ext,
+      normal_covector_ext, dg::Formulation::StrongInertial);
+
+  // With use_central_flux_at_boundary=false, external boundary should match
+  // interior (both use tau1/tau2)
+  CHECK_ITERABLE_APPROX(corr_K_no_central, corr_K_interior);
+
+  // The central and no_central results should differ (since tau1!=0, tau2!=1)
+  // Just check they are NOT equal at at least one point
+  bool differs = false;
+  for (size_t q = 0; q < face_size; ++q) {
+    if (get(corr_K_central)[q] != get(corr_K_no_central)[q]) {
+      differs = true;
+      break;
+    }
+  }
+  CHECK(differs);
+}
+
 void test_serialization() {
-  const Ccz4::BoundaryCorrections::LaxFriedrichs<3> correction(1.5, 2.3);
+  const Ccz4::BoundaryCorrections::LaxFriedrichs<3> correction(1.5, 2.3,
+                                                                false);
   const auto deserialized = serialize_and_deserialize(correction);
   // Verify it works by running a simple package_data call
   // (if pup restored tau1_ and tau2_ correctly, the computation will match)
@@ -1369,5 +1617,8 @@ SPECTRE_TEST_CASE(
   SECTION("dg_auxiliary_package_data") { test_dg_auxiliary_package_data(); }
   SECTION("dg_boundary_terms") { test_dg_boundary_terms(); }
   SECTION("dg_auxiliary_boundary_terms") { test_dg_auxiliary_boundary_terms(); }
+  SECTION("use_central_flux_at_boundary_false") {
+    test_use_central_flux_at_boundary_false();
+  }
   SECTION("serialization") { test_serialization(); }
 }

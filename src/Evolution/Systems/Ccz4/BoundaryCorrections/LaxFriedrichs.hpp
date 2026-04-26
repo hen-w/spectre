@@ -53,14 +53,22 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
     static constexpr Options::String help = {
         "The penalty parameter tau2 for the auxiliary numerical flux"};
   };
+  struct UseCentralFluxAtBoundary {
+    using type = bool;
+    static constexpr Options::String help = {
+        "If true, use central flux (tau1=0, tau2=1) at external boundaries. "
+        "If false, use the same tau1/tau2 as interior faces."};
+    static constexpr type default_value = true;
+  };
 
-  using options = tmpl::list<Tau1, Tau2>;
+  using options = tmpl::list<Tau1, Tau2, UseCentralFluxAtBoundary>;
   static constexpr Options::String help = {
       "A boundary correction that enables the LDG method using DG "
       "infrastructure. "};
 
   LaxFriedrichs() = default;
-  explicit LaxFriedrichs(double tau1, double tau2);
+  explicit LaxFriedrichs(double tau1, double tau2,
+                         bool use_central_flux_at_boundary = true);
   LaxFriedrichs(const LaxFriedrichs&) = default;
   LaxFriedrichs& operator=(const LaxFriedrichs&) = default;
   LaxFriedrichs(LaxFriedrichs&&) = default;
@@ -341,5 +349,6 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
  private:
   double tau1_ = std::numeric_limits<double>::signaling_NaN();
   double tau2_ = std::numeric_limits<double>::signaling_NaN();
+  bool use_central_flux_at_boundary_ = true;
 };
 }  // namespace Ccz4::BoundaryCorrections

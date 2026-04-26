@@ -26,8 +26,11 @@ LaxFriedrichs<Dim>::LaxFriedrichs(CkMigrateMessage* msg)
     : BoundaryCorrection(msg) {}
 
 template <size_t Dim>
-LaxFriedrichs<Dim>::LaxFriedrichs(const double tau1, const double tau2)
-    : tau1_(tau1), tau2_(tau2) {}
+LaxFriedrichs<Dim>::LaxFriedrichs(const double tau1, const double tau2,
+                                  const bool use_central_flux_at_boundary)
+    : tau1_(tau1),
+      tau2_(tau2),
+      use_central_flux_at_boundary_(use_central_flux_at_boundary) {}
 
 template <size_t Dim>
 std::unique_ptr<evolution::BoundaryCorrection> LaxFriedrichs<Dim>::get_clone()
@@ -40,6 +43,7 @@ void LaxFriedrichs<Dim>::pup(PUP::er& p) {
   BoundaryCorrection::pup(p);
   p | tau1_;
   p | tau2_;
+  p | use_central_flux_at_boundary_;
 }
 
 template <size_t Dim>
@@ -201,8 +205,10 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
           conformal_factor_int, 0.0);
 
   constexpr double f_param = ::Ccz4::fd::System::f;
-  const double effective_tau1 = ForExternalBoundary ? 0.0 : tau1_;
-  const double effective_tau2 = ForExternalBoundary ? 1.0 : tau2_;
+  const double effective_tau1 =
+      (ForExternalBoundary && use_central_flux_at_boundary_) ? 0.0 : tau1_;
+  const double effective_tau2 =
+      (ForExternalBoundary && use_central_flux_at_boundary_) ? 1.0 : tau2_;
   // boundary corrections for conformal metric, conformal factor, lapse,
   // and shift are identically zero.
   *conformal_metric_boundary_correction =
