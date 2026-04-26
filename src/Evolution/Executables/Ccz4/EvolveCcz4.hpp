@@ -373,6 +373,7 @@ struct EvolutionMetavars {
       // subcell actions
       evolution::dg::subcell::fd::Actions::TakeTimeStep<
           Ccz4::fd::SoTimeDerivative>,
+      Actions::MutateApply<::Ccz4::fd::EnforceTracelessDtConformalMetric>,
       Actions::MutateApply<RecordTimeStepperData<system>>,
       evolution::Actions::RunEventsAndDenseTriggers<
           events_and_dense_triggers_subcell_postprocessors>,
