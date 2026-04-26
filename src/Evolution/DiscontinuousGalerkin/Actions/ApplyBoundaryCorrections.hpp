@@ -304,12 +304,12 @@ bool receive_boundary_data(
               const gsl::not_null<
                   DirectionalIdMap<volume_dim, Mesh<volume_dim>>*>
                   neighbor_meshes) {
-            neighbor_meshes->insert_or_assign(received_mortar_id,
-                                              neighbor_mesh);
             switch (mortar_infos.at(mortar_id).interface_data_policy()) {
               case InterfaceDataPolicy::CopyProject:
                 [[fallthrough]];
               case InterfaceDataPolicy::OrientCopyProject: {
+                neighbor_meshes->insert_or_assign(received_mortar_id,
+                                                  neighbor_mesh);
                 const Mesh<face_dim> neighbor_face_mesh =
                     received_mortar_data.volume_mesh.slice_away(
                         sliced_away_dim);
@@ -382,6 +382,8 @@ bool receive_boundary_data(
               }
               case InterfaceDataPolicy::NonconformingSelfInterpolates: {
                 if constexpr (volume_dim > 1) {
+                  neighbor_meshes->insert_or_assign(received_mortar_id,
+                                                    neighbor_mesh);
                   mortar_next_time_step_ids_mutable->at(mortar_id) =
                       received_mortar_data.validity_range;
                   mortar_meshes->at(mortar_id) = face_mesh;
@@ -404,6 +406,8 @@ bool receive_boundary_data(
               }
               case InterfaceDataPolicy::NonconformingNeighborInterpolates: {
                 if constexpr (volume_dim > 1) {
+                  // We do not insert the neighbor mesh into neighbor_meshes
+                  // as this could overflow the FixedHashMap size
                   const size_t npts_mortar = face_mesh.number_of_grid_points();
                   const size_t mortar_data_size = gts_mortar_data->at(mortar_id)
                                                       .local()
