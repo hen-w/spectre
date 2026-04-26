@@ -52,6 +52,7 @@ target_link_libraries(
   ${LIBRARY}
   PRIVATE
   Ccz4
+  ConstraintDamping
   CoordinateMaps
   EvolutionBoundaryConditions
   DataBoxTestHelpers

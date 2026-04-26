@@ -68,8 +68,12 @@ struct K0;
 template <typename DataType>
 struct Eta;
 struct GammaDriverParam;
+struct DampingFunctionKappa1;
+struct DampingFunctionKappa2;
 struct Kappa1;
+struct Kappa1Compute;
 struct Kappa2;
+struct Kappa2Compute;
 struct Kappa3;
 struct EvolveLapseAndShift;
 struct ConstrainedEvolution;

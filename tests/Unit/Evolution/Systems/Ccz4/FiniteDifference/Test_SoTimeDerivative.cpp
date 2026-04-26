@@ -13,6 +13,7 @@
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
 #include "Domain/CoordinateMaps/Affine.hpp"
+#include "Domain/FunctionsOfTime/Tags.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.tpp"
 #include "Domain/CoordinateMaps/Identity.hpp"
@@ -50,6 +51,7 @@
 #include "PointwiseFunctions/GeneralRelativity/DerivativeSpatialMetric.hpp"
 #include "PointwiseFunctions/GeneralRelativity/ExtrinsicCurvature.hpp"
 #include "PointwiseFunctions/GeneralRelativity/Tags.hpp"
+#include "PointwiseFunctions/ConstraintDamping/Constant.hpp"
 #include "PointwiseFunctions/MathFunctions/MathFunction.hpp"
 #include "PointwiseFunctions/MathFunctions/Sinusoid.hpp"
 #include "Time/Tags/Time.hpp"
@@ -110,10 +112,6 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
         2.0 / gsl::at(coords_range, i);
   }
 
-  // We use a trivial inverse hessian here as this test is testing the time
-  // derivative. The only place where the inverse hessian is used in time
-  // derivative is in second_spacetime_derivatives, which is already tested in
-  // Test_Derivatives.cpp.
   InverseHessian<DataVector, SpatialDim, Frame::ElementLogical, Frame::Inertial>
       cell_centered_logical_to_inertial_inv_hessian{
           subcell_mesh.number_of_grid_points(), 0.0};
@@ -143,16 +141,32 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
       make_with_value<tnsr::I<DataVector, 3>>(
           used_for_size, std::numeric_limits<double>::signaling_NaN());
 
-  const double kappa_1 = 0.1;
-  const double kappa_2 = 0.2;
+  std::unique_ptr<ConstraintDamping::DampingFunction<3, Frame::Grid>>
+      kappa_1_fn =
+          std::make_unique<ConstraintDamping::Constant<3, Frame::Grid>>(0.1);
+  std::unique_ptr<ConstraintDamping::DampingFunction<3, Frame::Grid>>
+      kappa_2_fn =
+          std::make_unique<ConstraintDamping::Constant<3, Frame::Grid>>(0.2);
   const double kappa_3 = 0.3;
+  // Grid coords = Inertial coords for identity grid-to-inertial map
+  tnsr::I<DataVector, SpatialDim, Frame::Grid> grid_coords(
+      subcell_mesh.number_of_grid_points());
+  for (size_t i = 0; i < SpatialDim; ++i) {
+    grid_coords.get(i) = x.get(i);
+  }
+  const double time = 0.0;
+  // NOLINTNEXTLINE(misc-const-correctness)
+  std::unordered_map<std::string,
+                     std::unique_ptr<domain::FunctionsOfTime::FunctionOfTime>>
+      functions_of_time{};
 
   // put needed quantities into databox
   using dt_variables_tag =
       db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
 
   auto box = db::create<db::AddSimpleTags<
-      ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
+      ::Ccz4::Tags::DampingFunctionKappa1,
+      ::Ccz4::Tags::DampingFunctionKappa2, ::Ccz4::Tags::Kappa3,
       ::Ccz4::fd::Tags::EvolveLapseAndShift, domain::Tags::Element<SpatialDim>,
       fd::Tags::Reconstructor,
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<false>>,
@@ -166,8 +180,11 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
           SpatialDim>,
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>,
       domain::Tags::ExternalBoundaryConditions<SpatialDim>,
-      evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Inertial>>>(
-      kappa_1, kappa_2, kappa_3, evolve_lapse_and_shift, element,
+      evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Inertial>,
+      evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Grid>,
+      ::Tags::Time, ::domain::Tags::FunctionsOfTime>>(
+      std::move(kappa_1_fn), std::move(kappa_2_fn), kappa_3,
+      evolve_lapse_and_shift, element,
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
       DummyEvolutionMetaVars<false>{}, evolved_vars, eta, k_0,
@@ -179,7 +196,7 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
       std::vector<DirectionMap<
           SpatialDim,
           std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>{},
-      x);
+      x, grid_coords, time, std::move(functions_of_time));
   // Check that all time derivatives are 0
   ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
   const auto zero = DataVector(used_for_size.size(), 0.0);
@@ -236,10 +253,6 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
         2.0 / gsl::at(coords_range, i);
   }
 
-  // We use a trivial inverse hessian here as this test is testing the time
-  // derivative. The only place where the inverse hessian is used in time
-  // derivative is in second_spacetime_derivatives, which is already tested in
-  // Test_Derivatives.cpp.
   InverseHessian<DataVector, SpatialDim, Frame::ElementLogical, Frame::Inertial>
       cell_centered_logical_to_inertial_inv_hessian{
           subcell_mesh.number_of_grid_points(), 0.0};
@@ -289,16 +302,32 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
       make_with_value<tnsr::I<DataVector, 3>>(
           used_for_size, std::numeric_limits<double>::signaling_NaN());
 
-  const double kappa_1 = 0.1;
-  const double kappa_2 = 0.2;
+  std::unique_ptr<ConstraintDamping::DampingFunction<3, Frame::Grid>>
+      kappa_1_fn =
+          std::make_unique<ConstraintDamping::Constant<3, Frame::Grid>>(0.1);
+  std::unique_ptr<ConstraintDamping::DampingFunction<3, Frame::Grid>>
+      kappa_2_fn =
+          std::make_unique<ConstraintDamping::Constant<3, Frame::Grid>>(0.2);
   const double kappa_3 = 0.3;
+  // Grid coords = Inertial coords for identity grid-to-inertial map
+  tnsr::I<DataVector, SpatialDim, Frame::Grid> grid_coords(
+      subcell_mesh.number_of_grid_points());
+  for (size_t i = 0; i < SpatialDim; ++i) {
+    grid_coords.get(i) = x.get(i);
+  }
+  const double time = 0.0;
+  // NOLINTNEXTLINE(misc-const-correctness)
+  std::unordered_map<std::string,
+                     std::unique_ptr<domain::FunctionsOfTime::FunctionOfTime>>
+      functions_of_time{};
 
   // put needed quantities into databox
   using dt_variables_tag =
       db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
 
   auto box = db::create<db::AddSimpleTags<
-      ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
+      ::Ccz4::Tags::DampingFunctionKappa1,
+      ::Ccz4::Tags::DampingFunctionKappa2, ::Ccz4::Tags::Kappa3,
       ::Ccz4::fd::Tags::EvolveLapseAndShift, domain::Tags::Element<SpatialDim>,
       fd::Tags::Reconstructor,
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<false>>,
@@ -312,8 +341,11 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
           SpatialDim>,
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>,
       domain::Tags::ExternalBoundaryConditions<SpatialDim>,
-      evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Inertial>>>(
-      kappa_1, kappa_2, kappa_3, evolve_lapse_and_shift, element,
+      evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Inertial>,
+      evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Grid>,
+      ::Tags::Time, ::domain::Tags::FunctionsOfTime>>(
+      std::move(kappa_1_fn), std::move(kappa_2_fn), kappa_3,
+      evolve_lapse_and_shift, element,
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
       DummyEvolutionMetaVars<false>{}, evolved_vars, eta, k_0,
@@ -325,7 +357,7 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
       std::vector<DirectionMap<
           SpatialDim,
           std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>{},
-      x);
+      x, grid_coords, time, std::move(functions_of_time));
   // Check that all time derivatives are 0
   ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
   const auto zero = DataVector(used_for_size.size(), 0.0);
@@ -405,10 +437,6 @@ void test_gauge_plane_wave(
         2.0 / gsl::at(coords_range, i);
   }
 
-  // We use a trivial inverse hessian here as this test is testing the time
-  // derivative. The only place where the inverse hessian is used in time
-  // derivative is in second_spacetime_derivatives, which is already tested in
-  // Test_Derivatives.cpp.
   InverseHessian<DataVector, SpatialDim, Frame::ElementLogical, Frame::Inertial>
       cell_centered_logical_to_inertial_inv_hessian{
           subcell_mesh.number_of_grid_points(), 0.0};
@@ -464,16 +492,32 @@ void test_gauge_plane_wave(
       make_with_value<tnsr::I<DataVector, 3>>(
           used_for_size, std::numeric_limits<double>::signaling_NaN());
 
-  const double kappa_1 = 0.1;
-  const double kappa_2 = 0.2;
+  std::unique_ptr<ConstraintDamping::DampingFunction<3, Frame::Grid>>
+      kappa_1_fn =
+          std::make_unique<ConstraintDamping::Constant<3, Frame::Grid>>(0.1);
+  std::unique_ptr<ConstraintDamping::DampingFunction<3, Frame::Grid>>
+      kappa_2_fn =
+          std::make_unique<ConstraintDamping::Constant<3, Frame::Grid>>(0.2);
   const double kappa_3 = 0.3;
+  // Grid coords = Inertial coords for identity grid-to-inertial map
+  tnsr::I<DataVector, SpatialDim, Frame::Grid> grid_coords(
+      subcell_mesh.number_of_grid_points());
+  for (size_t i = 0; i < SpatialDim; ++i) {
+    grid_coords.get(i) = x.get(i);
+  }
+  const double time = 0.0;
+  // NOLINTNEXTLINE(misc-const-correctness)
+  std::unordered_map<std::string,
+                     std::unique_ptr<domain::FunctionsOfTime::FunctionOfTime>>
+      functions_of_time{};
 
   // put needed quantities into databox
   using dt_variables_tag =
       db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
 
   auto box = db::create<db::AddSimpleTags<
-      ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
+      ::Ccz4::Tags::DampingFunctionKappa1,
+      ::Ccz4::Tags::DampingFunctionKappa2, ::Ccz4::Tags::Kappa3,
       ::Ccz4::fd::Tags::EvolveLapseAndShift, domain::Tags::Element<SpatialDim>,
       fd::Tags::Reconstructor,
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<false>>,
@@ -487,8 +531,11 @@ void test_gauge_plane_wave(
           SpatialDim>,
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>,
       domain::Tags::ExternalBoundaryConditions<SpatialDim>,
-      evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Inertial>>>(
-      kappa_1, kappa_2, kappa_3, evolve_lapse_and_shift, element,
+      evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Inertial>,
+      evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Grid>,
+      ::Tags::Time, ::domain::Tags::FunctionsOfTime>>(
+      std::move(kappa_1_fn), std::move(kappa_2_fn), kappa_3,
+      evolve_lapse_and_shift, element,
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
       DummyEvolutionMetaVars<false>{}, evolved_vars, eta, k_0,
@@ -500,7 +547,7 @@ void test_gauge_plane_wave(
       std::vector<DirectionMap<
           SpatialDim,
           std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>{},
-      x);
+      x, grid_coords, time, std::move(functions_of_time));
   // Check all time derivatives
   ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
 
@@ -786,10 +833,6 @@ void test_sommerfeld(
         2.0 / gsl::at(coords_range, i);
   }
 
-  // We use a trivial inverse hessian here as this test is testing the time
-  // derivative. The only place where the inverse hessian is used in time
-  // derivative is in second_spacetime_derivatives, which is already tested in
-  // Test_Derivatives.cpp.
   InverseHessian<DataVector, SpatialDim, Frame::ElementLogical, Frame::Inertial>
       cell_centered_logical_to_inertial_inv_hessian{
           subcell_mesh.number_of_grid_points(), 0.0};
@@ -820,9 +863,19 @@ void test_sommerfeld(
       make_with_value<tnsr::I<DataVector, 3>>(
           used_for_size, std::numeric_limits<double>::signaling_NaN());
 
-  const double kappa_1 = 0.1;
-  const double kappa_2 = 0.2;
+  std::unique_ptr<ConstraintDamping::DampingFunction<3, Frame::Grid>>
+      kappa_1_fn =
+          std::make_unique<ConstraintDamping::Constant<3, Frame::Grid>>(0.1);
+  std::unique_ptr<ConstraintDamping::DampingFunction<3, Frame::Grid>>
+      kappa_2_fn =
+          std::make_unique<ConstraintDamping::Constant<3, Frame::Grid>>(0.2);
   const double kappa_3 = 0.3;
+  // Grid coords = Inertial coords for identity grid-to-inertial map
+  tnsr::I<DataVector, SpatialDim, Frame::Grid> grid_coords(
+      subcell_mesh.number_of_grid_points());
+  for (size_t i = 0; i < SpatialDim; ++i) {
+    grid_coords.get(i) = x.get(i);
+  }
 
   using dt_variables_tag =
       db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
@@ -841,7 +894,8 @@ void test_sommerfeld(
       functions_of_time{};
 
   auto box = db::create<db::AddSimpleTags<
-      ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
+      ::Ccz4::Tags::DampingFunctionKappa1,
+      ::Ccz4::Tags::DampingFunctionKappa2, ::Ccz4::Tags::Kappa3,
       ::Ccz4::fd::Tags::EvolveLapseAndShift, domain::Tags::Element<SpatialDim>,
       fd::Tags::Reconstructor,
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<true>>,
@@ -856,11 +910,13 @@ void test_sommerfeld(
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>,
       domain::Tags::ExternalBoundaryConditions<SpatialDim>,
       evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Inertial>,
+      evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Grid>,
       ::Tags::Time, domain::Tags::FunctionsOfTime,
       domain::Tags::ElementMap<SpatialDim, Frame::Grid>,
       domain::CoordinateMaps::Tags::CoordinateMap<SpatialDim, Frame::Grid,
                                                   Frame::Inertial>>>(
-      kappa_1, kappa_2, kappa_3, evolve_lapse_and_shift, element,
+      std::move(kappa_1_fn), std::move(kappa_2_fn), kappa_3,
+      evolve_lapse_and_shift, element,
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
       DummyEvolutionMetaVars<true>{}, evolved_vars, eta, k_0,
@@ -869,8 +925,9 @@ void test_sommerfeld(
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
       cell_centered_logical_to_inertial_inv_hessian, all_ghost_data,
-      std::move(external_bcs_per_block), x, 0.0, std::move(functions_of_time),
-      std::move(element_map), grid_to_inertial_map.get_clone());
+      std::move(external_bcs_per_block), x, grid_coords, 0.0,
+      std::move(functions_of_time), std::move(element_map),
+      grid_to_inertial_map.get_clone());
 
   ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
 
@@ -1076,10 +1133,6 @@ void test_dirichlet_analytic_bc(const bool evolve_lapse_and_shift) {
         2.0 / gsl::at(coords_range, i);
   }
 
-  // We use a trivial inverse hessian here as this test is testing the time
-  // derivative. The only place where the inverse hessian is used in time
-  // derivative is in second_spacetime_derivatives, which is already tested in
-  // Test_Derivatives.cpp.
   InverseHessian<DataVector, SpatialDim, Frame::ElementLogical, Frame::Inertial>
       cell_centered_logical_to_inertial_inv_hessian{
           subcell_mesh.number_of_grid_points(), 0.0};
@@ -1107,9 +1160,19 @@ void test_dirichlet_analytic_bc(const bool evolve_lapse_and_shift) {
       make_with_value<tnsr::I<DataVector, 3>>(
           used_for_size, std::numeric_limits<double>::signaling_NaN());
 
-  const double kappa_1 = 0.1;
-  const double kappa_2 = 0.2;
+  std::unique_ptr<ConstraintDamping::DampingFunction<3, Frame::Grid>>
+      kappa_1_fn =
+          std::make_unique<ConstraintDamping::Constant<3, Frame::Grid>>(0.1);
+  std::unique_ptr<ConstraintDamping::DampingFunction<3, Frame::Grid>>
+      kappa_2_fn =
+          std::make_unique<ConstraintDamping::Constant<3, Frame::Grid>>(0.2);
   const double kappa_3 = 0.3;
+  // Grid coords = Inertial coords for identity grid-to-inertial map
+  tnsr::I<DataVector, SpatialDim, Frame::Grid> grid_coords(
+      subcell_mesh.number_of_grid_points());
+  for (size_t i = 0; i < SpatialDim; ++i) {
+    grid_coords.get(i) = x.get(i);
+  }
 
   using dt_variables_tag =
       db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
@@ -1131,7 +1194,8 @@ void test_dirichlet_analytic_bc(const bool evolve_lapse_and_shift) {
       functions_of_time{};
 
   auto box = db::create<db::AddSimpleTags<
-      ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
+      ::Ccz4::Tags::DampingFunctionKappa1,
+      ::Ccz4::Tags::DampingFunctionKappa2, ::Ccz4::Tags::Kappa3,
       ::Ccz4::fd::Tags::EvolveLapseAndShift, domain::Tags::Element<SpatialDim>,
       fd::Tags::Reconstructor,
       Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<true>>,
@@ -1146,11 +1210,13 @@ void test_dirichlet_analytic_bc(const bool evolve_lapse_and_shift) {
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>,
       domain::Tags::ExternalBoundaryConditions<SpatialDim>,
       evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Inertial>,
+      evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Grid>,
       ::Tags::Time, domain::Tags::FunctionsOfTime,
       domain::Tags::ElementMap<SpatialDim, Frame::Grid>,
       domain::CoordinateMaps::Tags::CoordinateMap<SpatialDim, Frame::Grid,
                                                   Frame::Inertial>>>(
-      kappa_1, kappa_2, kappa_3, evolve_lapse_and_shift, element,
+      std::move(kappa_1_fn), std::move(kappa_2_fn), kappa_3,
+      evolve_lapse_and_shift, element,
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
       DummyEvolutionMetaVars<true>{}, evolved_vars, eta, k_0,
@@ -1159,8 +1225,9 @@ void test_dirichlet_analytic_bc(const bool evolve_lapse_and_shift) {
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
       cell_centered_logical_to_inertial_inv_hessian, all_ghost_data,
-      std::move(external_bcs_per_block), x, 0.0, std::move(functions_of_time),
-      std::move(element_map), grid_to_inertial_map.get_clone());
+      std::move(external_bcs_per_block), x, grid_coords, 0.0,
+      std::move(functions_of_time), std::move(element_map),
+      grid_to_inertial_map.get_clone());
 
   ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
 

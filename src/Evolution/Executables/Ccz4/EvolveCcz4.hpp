@@ -409,9 +409,10 @@ struct EvolutionMetavars {
                                     RandomizeInitialData>,
       ::Actions::LocalizedPerturbation<typename system::variables_tag,
                                        PerturbInitialData>,
-      Initialization::Actions::AddComputeTags<
+      Initialization::Actions::AddComputeTags<tmpl::push_back<
           StepChoosers::step_chooser_compute_tags<EvolutionMetavars,
-                                                  local_time_stepping>>,
+                                                  local_time_stepping>,
+          Ccz4::Tags::Kappa1Compute, Ccz4::Tags::Kappa2Compute>>,
       ::evolution::dg::Initialization::Mortars<volume_dim>,
       evolution::Actions::InitializeRunEventsAndDenseTriggers,
       Initialization::Actions::AddSimpleTags<
@@ -466,8 +467,8 @@ struct EvolutionMetavars {
                                      Ccz4::fd::Tags::KreissOligerEpsilon>,
                           tmpl::list<>>,
       Ccz4::fd::Tags::EvolveLapseAndShift, Ccz4::fd::Tags::ConstrainedEvolution,
-      Ccz4::fd::Tags::EtaConstant, Ccz4::Tags::Kappa1, Ccz4::Tags::Kappa2,
-      Ccz4::Tags::Kappa3, initial_data_tag,
+      Ccz4::fd::Tags::EtaConstant, Ccz4::Tags::DampingFunctionKappa1,
+      Ccz4::Tags::DampingFunctionKappa2, Ccz4::Tags::Kappa3, initial_data_tag,
       domain::Tags::ExternalBoundaryConditions<3>>;
 
   static constexpr Options::String help{

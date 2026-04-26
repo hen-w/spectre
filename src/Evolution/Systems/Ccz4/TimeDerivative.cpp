@@ -124,7 +124,8 @@ void TimeDerivative<Dim>::apply(
     const double c, const double cleaning_speed,  // e in the paper
     const Scalar<DataVector>& eta, const double f,
     const Scalar<DataVector>& k_0, const tnsr::i<DataVector, Dim>& d_k_0,
-    const double kappa_1, const double kappa_2, const double kappa_3,
+    const Scalar<DataVector>& kappa_1, const Scalar<DataVector>& kappa_2,
+    const double kappa_3,
     const double mu, const double one_over_relaxation_time,  // \tau^{-1}
     const EvolveShift evolve_shift,
     const SlicingConditionType slicing_condition_type,
@@ -443,7 +444,7 @@ void TimeDerivative<Dim>::apply(
           (*divergence_lapse)() +
           (*lapse_times_ricci_scalar_plus_divergence_z4_constraint)() +
           (*lapse)() * (trace_extrinsic_curvature() * (*k_minus_2_theta_c)() -
-                        3.0 * kappa_1 * (1.0 + kappa_2) * theta()));
+                        3.0 * kappa_1() * (1.0 + kappa_2()) * theta()));
 
   // eq. (12g) : time derivative of the projection of the Z4 four-vector along
   // the normal direction
@@ -457,7 +458,7 @@ void TimeDerivative<Dim>::apply(
                     a_tilde(ti::i, ti::j) * (*inv_a_tilde)(ti::I, ti::J)) -
                c * theta() * trace_extrinsic_curvature() -
                (*upper_spatial_z4_constraint)(ti::I)*field_a(ti::i) -
-               kappa_1 * (2.0 + kappa_2) * theta()));
+               kappa_1() * (2.0 + kappa_2()) * theta()));
 
   // eq. (12h) : time derivative \hat{\Gamma}^i
   // first, compute terms without s
@@ -489,7 +490,7 @@ void TimeDerivative<Dim>::apply(
                     2.0 * one_third * trace_extrinsic_curvature() *
                         (*spatial_z4_constraint)(ti::k)) -
                (*inv_a_tilde)(ti::I, ti::J) * field_a(ti::j) -
-               kappa_1 * (*inv_conformal_spatial_metric)(ti::I, ti::J) *
+               kappa_1() * (*inv_conformal_spatial_metric)(ti::I, ti::J) *
                    (*spatial_z4_constraint)(ti::j)));
   // now, if s == 1, also add terms with s
   if (static_cast<bool>(evolve_shift)) {

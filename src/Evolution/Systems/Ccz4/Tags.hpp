@@ -4,15 +4,30 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <string>
+#include <unordered_map>
 
 #include "DataStructures/DataBox/Tag.hpp"
+#include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
+#include "Domain/FunctionsOfTime/Tags.hpp"
+#include "Domain/Tags.hpp"
 #include "Evolution/Systems/Ccz4/TagsDeclarations.hpp"
 #include "Evolution/Tags.hpp"
 #include "Options/String.hpp"
+#include "PointwiseFunctions/ConstraintDamping/DampingFunction.hpp"
 #include "PointwiseFunctions/GeneralRelativity/Tags.hpp"
 #include "PointwiseFunctions/GeneralRelativity/Tags/Conformal.hpp"
+
+/// \cond
+namespace domain::FunctionsOfTime {
+class FunctionOfTime;
+}  // namespace domain::FunctionsOfTime
+namespace Tags {
+struct Time;
+}  // namespace Tags
+/// \endcond
 
 namespace Ccz4 {
 namespace OptionTags {
@@ -29,19 +44,21 @@ struct Ccz4Group {
 
 /// \copydoc Tags::Kappa1
 struct Kappa1 {
-  using type = double;
+  using type =
+      std::unique_ptr<ConstraintDamping::DampingFunction<3, Frame::Grid>>;
 
   static constexpr Options::String help = {
-      "The constraint damping parameter kappa_1."};
+      "DampingFunction for constraint damping parameter kappa_1."};
   using group = Ccz4Group;
 };
 
 /// \copydoc Tags::Kappa2
 struct Kappa2 {
-  using type = double;
+  using type =
+      std::unique_ptr<ConstraintDamping::DampingFunction<3, Frame::Grid>>;
 
   static constexpr Options::String help = {
-      "The constraint damping parameter kappa_2."};
+      "DampingFunction for constraint damping parameter kappa_2."};
   using group = Ccz4Group;
 };
 
@@ -441,16 +458,44 @@ struct GammaDriverParam
 };
 
 /*!
+ * \brief A DampingFunction to compute the constraint damping parameter
+ * \f$\kappa_1\f$.
+ */
+struct DampingFunctionKappa1 : db::SimpleTag {
+  using DampingFunctionType =
+      ConstraintDamping::DampingFunction<3, Frame::Grid>;
+  using type = std::unique_ptr<DampingFunctionType>;
+  using option_tags = tmpl::list<OptionTags::Kappa1>;
+
+  static constexpr bool pass_metavariables = false;
+  static type create_from_options(const type& damping_function) {
+    return damping_function->get_clone();
+  }
+};
+
+/*!
+ * \brief A DampingFunction to compute the constraint damping parameter
+ * \f$\kappa_2\f$.
+ */
+struct DampingFunctionKappa2 : db::SimpleTag {
+  using DampingFunctionType =
+      ConstraintDamping::DampingFunction<3, Frame::Grid>;
+  using type = std::unique_ptr<DampingFunctionType>;
+  using option_tags = tmpl::list<OptionTags::Kappa2>;
+
+  static constexpr bool pass_metavariables = false;
+  static type create_from_options(const type& damping_function) {
+    return damping_function->get_clone();
+  }
+};
+
+/*!
  * \brief Free parameter \f$ kappa_1 \f$ related to
  * constraint damping
  * in eq. 12f of \cite Dumbser2017okk.
  */
 struct Kappa1 : db::SimpleTag {
-  using type = double;
-  using option_tags = tmpl::list<OptionTags::Kappa1>;
-
-  static constexpr bool pass_metavariables = false;
-  static type create_from_options(const double kappa_1) { return kappa_1; }
+  using type = Scalar<DataVector>;
 };
 
 /*!
@@ -459,11 +504,57 @@ struct Kappa1 : db::SimpleTag {
  * in eq. 12f of \cite Dumbser2017okk.
  */
 struct Kappa2 : db::SimpleTag {
-  using type = double;
-  using option_tags = tmpl::list<OptionTags::Kappa2>;
+  using type = Scalar<DataVector>;
+};
 
-  static constexpr bool pass_metavariables = false;
-  static type create_from_options(const double kappa_2) { return kappa_2; }
+/*!
+ * \brief Computes the constraint damping parameter \f$\kappa_1\f$ from the
+ * coordinates and a DampingFunction.
+ */
+struct Kappa1Compute : Kappa1, db::ComputeTag {
+  using argument_tags =
+      tmpl::list<DampingFunctionKappa1,
+                 domain::Tags::Coordinates<3, Frame::Grid>, ::Tags::Time,
+                 ::domain::Tags::FunctionsOfTime>;
+  using return_type = Scalar<DataVector>;
+
+  static constexpr void function(
+      const gsl::not_null<Scalar<DataVector>*> kappa,
+      const ConstraintDamping::DampingFunction<3, Frame::Grid>& damping_fn,
+      const tnsr::I<DataVector, 3, Frame::Grid>& coords, const double time,
+      const std::unordered_map<
+          std::string,
+          std::unique_ptr<domain::FunctionsOfTime::FunctionOfTime>>&
+          functions_of_time) {
+    damping_fn(kappa, coords, time, functions_of_time);
+  }
+
+  using base = Kappa1;
+};
+
+/*!
+ * \brief Computes the constraint damping parameter \f$\kappa_2\f$ from the
+ * coordinates and a DampingFunction.
+ */
+struct Kappa2Compute : Kappa2, db::ComputeTag {
+  using argument_tags =
+      tmpl::list<DampingFunctionKappa2,
+                 domain::Tags::Coordinates<3, Frame::Grid>, ::Tags::Time,
+                 ::domain::Tags::FunctionsOfTime>;
+  using return_type = Scalar<DataVector>;
+
+  static constexpr void function(
+      const gsl::not_null<Scalar<DataVector>*> kappa,
+      const ConstraintDamping::DampingFunction<3, Frame::Grid>& damping_fn,
+      const tnsr::I<DataVector, 3, Frame::Grid>& coords, const double time,
+      const std::unordered_map<
+          std::string,
+          std::unique_ptr<domain::FunctionsOfTime::FunctionOfTime>>&
+          functions_of_time) {
+    damping_fn(kappa, coords, time, functions_of_time);
+  }
+
+  using base = Kappa2;
 };
 
 /*!

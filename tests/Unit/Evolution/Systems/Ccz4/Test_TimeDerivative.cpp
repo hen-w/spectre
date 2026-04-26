@@ -277,8 +277,10 @@ void test_minkowski(const Ccz4::EvolveShift evolve_shift,
   const double c = 1.0;
   const double cleaning_speed = 1.6;  // e
   const double f = 0.75;
-  const double kappa_1 = 0.1;
-  const double kappa_2 = 0.3;
+  const auto kappa_1 =
+      make_with_value<Scalar<DataVector>>(used_for_size, 0.1);
+  const auto kappa_2 =
+      make_with_value<Scalar<DataVector>>(used_for_size, 0.3);
   const double kappa_3 = 0.4;
   const double mu = 0.7;
   const double one_over_relaxation_time = 10.0;         // \tau^{-1}
@@ -881,8 +883,10 @@ void test_kerrschild(const Ccz4::EvolveShift evolve_shift,
   const double c = 1.0;
   const double cleaning_speed = 1.6;  // e in the paper
   const double f = 0.75;
-  const double kappa_1 = 0.1;
-  const double kappa_2 = 0.3;
+  const auto kappa_1 =
+      make_with_value<Scalar<DataVector>>(used_for_size, 0.1);
+  const auto kappa_2 =
+      make_with_value<Scalar<DataVector>>(used_for_size, 0.3);
   const double kappa_3 = 0.4;
   const double mu = 0.7;
   const double one_over_relaxation_time = 10.0;         // \tau^{-1}

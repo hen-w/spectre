@@ -152,8 +152,9 @@ static void apply(
     const double one_over_relaxation_time,        // \tau^{-1}
 
     // free params for SO-CCZ4
-    const Scalar<DataVector>& eta, const double f, const double kappa_1,
-    const double kappa_2, const double kappa_3, const Scalar<DataVector>& k_0,
+    const Scalar<DataVector>& eta, const double f,
+    const Scalar<DataVector>& kappa_1, const Scalar<DataVector>& kappa_2,
+    const double kappa_3, const Scalar<DataVector>& k_0,
 
     // evolved variables
     const tnsr::ii<DataVector, Dim>& conformal_spatial_metric,
@@ -454,7 +455,7 @@ static void apply(
           (*divergence_lapse)() +
           (*lapse_times_ricci_scalar_plus_divergence_z4_constraint)() +
           (lapse)() * (trace_extrinsic_curvature() * (*k_minus_2_theta_c)() -
-                       3.0 * kappa_1 * (1.0 + kappa_2) * theta()));
+                       3.0 * kappa_1() * (1.0 + kappa_2()) * theta()));
 
   // time derivative of the projection of the Z4 four-vector along
   // the normal direction
@@ -468,7 +469,7 @@ static void apply(
                     a_tilde(ti::i, ti::j) * (*inv_a_tilde)(ti::I, ti::J)) -
                c * theta() * trace_extrinsic_curvature() -
                (*upper_spatial_z4_constraint)(ti::I)*field_a(ti::i) -
-               kappa_1 * (2.0 + kappa_2) * theta()));
+               kappa_1() * (2.0 + kappa_2()) * theta()));
 
   // time derivative \hat{\Gamma}^i
   // first, compute terms without s
@@ -500,7 +501,7 @@ static void apply(
                     2.0 * one_third * trace_extrinsic_curvature() *
                         (*spatial_z4_constraint)(ti::k)) -
                (*inv_a_tilde)(ti::I, ti::J) * field_a(ti::j) -
-               kappa_1 * (*inv_conformal_spatial_metric)(ti::I, ti::J) *
+               kappa_1() * (*inv_conformal_spatial_metric)(ti::I, ti::J) *
                    (*spatial_z4_constraint)(ti::j)));
   // We add the following since s=1 (Gamma-driver gauge) is assumed in SoCcz4
   ::tenex::update<ti::I>(dt_gamma_hat,
@@ -743,8 +744,22 @@ struct SoTimeDerivative {
     const Scalar<DataVector>& eta = get<::Ccz4::Tags::Eta<DataVector>>(*box);
     const double f = Ccz4::fd::System::f;
     const Scalar<DataVector>& k_0 = get<::Ccz4::Tags::K0<DataVector>>(*box);
-    const double kappa_1 = get<::Ccz4::Tags::Kappa1>(*box);
-    const double kappa_2 = get<::Ccz4::Tags::Kappa2>(*box);
+    // Evaluate kappa_1 and kappa_2 at subcell grid coordinates (not DG
+    // coordinates) so the DataVector sizes match the subcell mesh.
+    // This follows the same pattern as GhValenciaDivClean's subcell
+    // TimeDerivative for constraint damping gammas.
+    const double time = db::get<::Tags::Time>(*box);
+    const auto& functions_of_time =
+        db::get<::domain::Tags::FunctionsOfTime>(*box);
+    const auto& subcell_grid_coords =
+        db::get<evolution::dg::subcell::Tags::Coordinates<Dim, Frame::Grid>>(
+            *box);
+    Scalar<DataVector> kappa_1(num_pts);
+    db::get<::Ccz4::Tags::DampingFunctionKappa1>(*box)(
+        make_not_null(&kappa_1), subcell_grid_coords, time, functions_of_time);
+    Scalar<DataVector> kappa_2(num_pts);
+    db::get<::Ccz4::Tags::DampingFunctionKappa2>(*box)(
+        make_not_null(&kappa_2), subcell_grid_coords, time, functions_of_time);
     const double kappa_3 = get<::Ccz4::Tags::Kappa3>(*box);
     const double one_over_relaxation_time = 0.0;  // \tau^{-1} = 0 in SO-CCZ4
     const bool shifting_shift = Ccz4::fd::System::shifting_shift;

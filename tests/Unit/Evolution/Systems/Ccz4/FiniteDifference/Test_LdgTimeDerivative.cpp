@@ -180,8 +180,10 @@ void test_minkowski() {
   const auto d_boundary_shift =
       make_with_value<tnsr::iJ<DataVector, 3>>(lapse_size, 0.0);
 
-  const double kappa_1 = 0.1;
-  const double kappa_2 = 0.2;
+  const auto kappa_1 =
+      make_with_value<Scalar<DataVector>>(lapse_size, 0.1);
+  const auto kappa_2 =
+      make_with_value<Scalar<DataVector>>(lapse_size, 0.2);
   const double kappa_3 = 0.3;
 
   // Call LdgTimeDerivative::apply directly
@@ -411,8 +413,10 @@ void test_kerrschild() {
       shift, lapse, d_lapse_spectral, slicing_condition, theta,
       trace_extrinsic_curvature);
 
-  const double kappa_1 = 0.1;
-  const double kappa_2 = 0.2;
+  const auto kappa_1 =
+      make_with_value<Scalar<DataVector>>(lapse, 0.1);
+  const auto kappa_2 =
+      make_with_value<Scalar<DataVector>>(lapse, 0.2);
   const double kappa_3 = 0.3;
 
   // Allocate dt output variables, NaN-initialized
