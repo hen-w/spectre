@@ -113,6 +113,18 @@ struct SetInterpolators {
         if (neighbor_block_id == my_block_id) {
           continue;
         }
+        // Skip DG-only neighbor blocks. Elements bordering DG-only blocks
+        // can never switch to FD (enforced by SetSubcellGrid), and DG-only
+        // blocks themselves never use FD, so none of the three
+        // interpolator types (FdToNeighborFd, DgToNeighborFd,
+        // NeighborDgToFd) will ever be used at runtime. Computing them
+        // would also fail for nonconforming interfaces because the
+        // neighbor's ghost zone coordinates cannot be mapped through our
+        // element_map.inverse().
+        if (alg::found(subcell_options.only_dg_block_ids(),
+                       neighbor_block_id)) {
+          continue;
+        }
         const auto& neighbor_block = domain.blocks()[neighbor_block_id];
         // InterpolatorsFromFdToNeighborFd &
         // InterpolatorsFromDgToNeighborFd

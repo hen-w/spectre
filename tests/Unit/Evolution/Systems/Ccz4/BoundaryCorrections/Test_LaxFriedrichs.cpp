@@ -12,6 +12,7 @@
 #include "DataStructures/Tensor/EagerMath/DeterminantAndInverse.hpp"
 #include "DataStructures/Tensor/EagerMath/DotProduct.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
+#include "DataStructures/Variables.hpp"
 #include "Domain/Structure/Direction.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryCorrections/LaxFriedrichs.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
@@ -175,16 +176,6 @@ void test_dg_package_data() {
       DataVector(face_size), 0.0);
   auto pkg_field_p = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
       DataVector(face_size), 0.0);
-  auto pkg_boundary_conformal_metric =
-      make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
-  auto pkg_boundary_conformal_factor =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  auto pkg_boundary_lapse =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  auto pkg_boundary_shift =
-      make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
   auto pkg_normal_covector =
       make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
@@ -202,9 +193,6 @@ void test_dg_package_data() {
       make_not_null(&pkg_shift), make_not_null(&pkg_auxiliary_shift_b),
       make_not_null(&pkg_field_a), make_not_null(&pkg_field_b),
       make_not_null(&pkg_field_d), make_not_null(&pkg_field_p),
-      make_not_null(&pkg_boundary_conformal_metric),
-      make_not_null(&pkg_boundary_conformal_factor),
-      make_not_null(&pkg_boundary_lapse), make_not_null(&pkg_boundary_shift),
       make_not_null(&pkg_normal_covector), conformal_metric,
       conformal_factor, a_tilde, trace_extrinsic_curvature, theta, gamma_hat,
       lapse, shift, auxiliary_shift_b, field_a, field_b, field_d, field_p,
@@ -308,14 +296,6 @@ void test_dg_auxiliary_package_data() {
   auto pkg_normal_covector =
       make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
-  auto pkg_field_a = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
-      DataVector(face_size), 0.0);
-  auto pkg_field_b = make_with_value<tnsr::iJ<DataVector, 3, Frame::Inertial>>(
-      DataVector(face_size), 0.0);
-  auto pkg_field_d = make_with_value<tnsr::ijj<DataVector, 3, Frame::Inertial>>(
-      DataVector(face_size), 0.0);
-  auto pkg_field_p = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
-      DataVector(face_size), 0.0);
 
   const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>> mesh_velocity =
       std::nullopt;
@@ -326,9 +306,7 @@ void test_dg_auxiliary_package_data() {
       make_not_null(&pkg_conformal_metric),
       make_not_null(&pkg_conformal_factor), make_not_null(&pkg_lapse),
       make_not_null(&pkg_shift), make_not_null(&pkg_normal_covector),
-      make_not_null(&pkg_field_a),
-      make_not_null(&pkg_field_b), make_not_null(&pkg_field_d),
-      make_not_null(&pkg_field_p), conformal_metric, conformal_factor, a_tilde,
+      conformal_metric, conformal_factor, a_tilde,
       trace_extrinsic_curvature, theta, gamma_hat, lapse, shift,
       auxiliary_shift_b, field_a, field_b, field_d, field_p,
       boundary_conformal_metric, boundary_conformal_factor, boundary_lapse,
@@ -392,17 +370,6 @@ void test_dg_boundary_terms() {
   const auto field_p_int =
       make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
           make_not_null(&gen), dist, DataVector(face_size));
-  // Boundary SO fields (zero, unused by LF)
-  const auto boundary_conformal_metric_int =
-      make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
-  const auto boundary_conformal_factor_int =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  const auto boundary_lapse_int =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  const auto boundary_shift_int =
-      make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
   const auto normal_covector_int = make_unit_normal(face_size);
 
   const auto conformal_metric_ext =
@@ -440,16 +407,6 @@ void test_dg_boundary_terms() {
   const auto field_p_ext =
       make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
           make_not_null(&gen), dist, DataVector(face_size));
-  const auto boundary_conformal_metric_ext =
-      make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
-  const auto boundary_conformal_factor_ext =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  const auto boundary_lapse_ext =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  const auto boundary_shift_ext =
-      make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
   // Exterior normal points opposite
   auto normal_covector_ext =
       make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
@@ -513,14 +470,11 @@ void test_dg_boundary_terms() {
       conformal_metric_int, conformal_factor_int, a_tilde_int,
       trace_extrinsic_curvature_int, theta_int, gamma_hat_int, lapse_int,
       shift_int, auxiliary_shift_b_int, field_a_int, field_b_int, field_d_int,
-      field_p_int, boundary_conformal_metric_int,
-      boundary_conformal_factor_int, boundary_lapse_int, boundary_shift_int,
-      normal_covector_int, conformal_metric_ext,
+      field_p_int, normal_covector_int, conformal_metric_ext,
       conformal_factor_ext, a_tilde_ext, trace_extrinsic_curvature_ext,
       theta_ext, gamma_hat_ext, lapse_ext, shift_ext, auxiliary_shift_b_ext,
       field_a_ext, field_b_ext, field_d_ext, field_p_ext,
-      boundary_conformal_metric_ext, boundary_conformal_factor_ext,
-      boundary_lapse_ext, boundary_shift_ext, normal_covector_ext,
+      normal_covector_ext,
       dg::Formulation::StrongInertial);
 
   // --- Check zero corrections ---
@@ -1055,18 +1009,6 @@ void test_dg_auxiliary_boundary_terms() {
       make_with_random_values<tnsr::I<DataVector, 3, Frame::Inertial>>(
           make_not_null(&gen), dist, DataVector(face_size));
   const auto normal_covector_int = make_unit_normal(face_size);
-  const auto field_a_int =
-      make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
-          make_not_null(&gen), dist, DataVector(face_size));
-  const auto field_b_int =
-      make_with_random_values<tnsr::iJ<DataVector, 3, Frame::Inertial>>(
-          make_not_null(&gen), dist, DataVector(face_size));
-  const auto field_d_int =
-      make_with_random_values<tnsr::ijj<DataVector, 3, Frame::Inertial>>(
-          make_not_null(&gen), dist, DataVector(face_size));
-  const auto field_p_int =
-      make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
-          make_not_null(&gen), dist, DataVector(face_size));
 
   // Exterior packaged aux data
   const auto conformal_metric_ext =
@@ -1083,18 +1025,6 @@ void test_dg_auxiliary_boundary_terms() {
       make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
   get<0>(normal_covector_ext) = -1.0;
-  const auto field_a_ext =
-      make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
-          make_not_null(&gen), dist, DataVector(face_size));
-  const auto field_b_ext =
-      make_with_random_values<tnsr::iJ<DataVector, 3, Frame::Inertial>>(
-          make_not_null(&gen), dist, DataVector(face_size));
-  const auto field_d_ext =
-      make_with_random_values<tnsr::ijj<DataVector, 3, Frame::Inertial>>(
-          make_not_null(&gen), dist, DataVector(face_size));
-  const auto field_p_ext =
-      make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
-          make_not_null(&gen), dist, DataVector(face_size));
 
   // Output corrections (all 17 evolved+aux+boundary fields)
   auto corr_conformal_metric =
@@ -1151,10 +1081,8 @@ void test_dg_auxiliary_boundary_terms() {
       make_not_null(&corr_boundary_conformal_factor),
       make_not_null(&corr_boundary_lapse), make_not_null(&corr_boundary_shift),
       conformal_metric_int, conformal_factor_int, lapse_int, shift_int,
-      normal_covector_int, field_a_int, field_b_int,
-      field_d_int, field_p_int, conformal_metric_ext, conformal_factor_ext,
+      normal_covector_int, conformal_metric_ext, conformal_factor_ext,
       lapse_ext, shift_ext, normal_covector_ext,
-      field_a_ext, field_b_ext, field_d_ext, field_p_ext,
       dg::Formulation::StrongInertial);
 
   // --- Check zero corrections ---
@@ -1287,16 +1215,6 @@ void test_use_central_flux_at_boundary_false() {
   const auto field_p_int =
       make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
           make_not_null(&gen), dist, DataVector(face_size));
-  const auto boundary_conformal_metric_int =
-      make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
-  const auto boundary_conformal_factor_int =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  const auto boundary_lapse_int =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  const auto boundary_shift_int =
-      make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
   const auto normal_covector_int = make_unit_normal(face_size);
 
   const auto conformal_metric_ext =
@@ -1334,16 +1252,6 @@ void test_use_central_flux_at_boundary_false() {
   const auto field_p_ext =
       make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
           make_not_null(&gen), dist, DataVector(face_size));
-  const auto boundary_conformal_metric_ext =
-      make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
-  const auto boundary_conformal_factor_ext =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  const auto boundary_lapse_ext =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  const auto boundary_shift_ext =
-      make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
-          DataVector(face_size), 0.0);
   auto normal_covector_ext =
       make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
           DataVector(face_size), 0.0);
@@ -1383,13 +1291,10 @@ void test_use_central_flux_at_boundary_false() {
       conformal_metric_int, conformal_factor_int, a_tilde_int,
       trace_extrinsic_curvature_int, theta_int, gamma_hat_int, lapse_int,
       shift_int, auxiliary_shift_b_int, field_a_int, field_b_int, field_d_int,
-      field_p_int, boundary_conformal_metric_int,
-      boundary_conformal_factor_int, boundary_lapse_int, boundary_shift_int,
-      normal_covector_int, conformal_metric_ext, conformal_factor_ext,
-      a_tilde_ext, trace_extrinsic_curvature_ext, theta_ext, gamma_hat_ext,
-      lapse_ext, shift_ext, auxiliary_shift_b_ext, field_a_ext, field_b_ext,
-      field_d_ext, field_p_ext, boundary_conformal_metric_ext,
-      boundary_conformal_factor_ext, boundary_lapse_ext, boundary_shift_ext,
+      field_p_int, normal_covector_int, conformal_metric_ext,
+      conformal_factor_ext, a_tilde_ext, trace_extrinsic_curvature_ext,
+      theta_ext, gamma_hat_ext, lapse_ext, shift_ext, auxiliary_shift_b_ext,
+      field_a_ext, field_b_ext, field_d_ext, field_p_ext,
       normal_covector_ext, dg::Formulation::StrongInertial);
 
   // Call ForExternalBoundary=true with use_central_flux_at_boundary=false
@@ -1422,13 +1327,10 @@ void test_use_central_flux_at_boundary_false() {
       conformal_metric_int, conformal_factor_int, a_tilde_int,
       trace_extrinsic_curvature_int, theta_int, gamma_hat_int, lapse_int,
       shift_int, auxiliary_shift_b_int, field_a_int, field_b_int, field_d_int,
-      field_p_int, boundary_conformal_metric_int,
-      boundary_conformal_factor_int, boundary_lapse_int, boundary_shift_int,
-      normal_covector_int, conformal_metric_ext, conformal_factor_ext,
-      a_tilde_ext, trace_extrinsic_curvature_ext, theta_ext, gamma_hat_ext,
-      lapse_ext, shift_ext, auxiliary_shift_b_ext, field_a_ext, field_b_ext,
-      field_d_ext, field_p_ext, boundary_conformal_metric_ext,
-      boundary_conformal_factor_ext, boundary_lapse_ext, boundary_shift_ext,
+      field_p_int, normal_covector_int, conformal_metric_ext,
+      conformal_factor_ext, a_tilde_ext, trace_extrinsic_curvature_ext,
+      theta_ext, gamma_hat_ext, lapse_ext, shift_ext, auxiliary_shift_b_ext,
+      field_a_ext, field_b_ext, field_d_ext, field_p_ext,
       normal_covector_ext, dg::Formulation::StrongInertial);
 
   // Call ForExternalBoundary=false (interior) with no_central — should match
@@ -1461,13 +1363,10 @@ void test_use_central_flux_at_boundary_false() {
       conformal_metric_int, conformal_factor_int, a_tilde_int,
       trace_extrinsic_curvature_int, theta_int, gamma_hat_int, lapse_int,
       shift_int, auxiliary_shift_b_int, field_a_int, field_b_int, field_d_int,
-      field_p_int, boundary_conformal_metric_int,
-      boundary_conformal_factor_int, boundary_lapse_int, boundary_shift_int,
-      normal_covector_int, conformal_metric_ext, conformal_factor_ext,
-      a_tilde_ext, trace_extrinsic_curvature_ext, theta_ext, gamma_hat_ext,
-      lapse_ext, shift_ext, auxiliary_shift_b_ext, field_a_ext, field_b_ext,
-      field_d_ext, field_p_ext, boundary_conformal_metric_ext,
-      boundary_conformal_factor_ext, boundary_lapse_ext, boundary_shift_ext,
+      field_p_int, normal_covector_int, conformal_metric_ext,
+      conformal_factor_ext, a_tilde_ext, trace_extrinsic_curvature_ext,
+      theta_ext, gamma_hat_ext, lapse_ext, shift_ext, auxiliary_shift_b_ext,
+      field_a_ext, field_b_ext, field_d_ext, field_p_ext,
       normal_covector_ext, dg::Formulation::StrongInertial);
 
   // With use_central_flux_at_boundary=false, external boundary should match
@@ -1518,14 +1417,6 @@ void test_serialization() {
   auto pkg_fd = make_with_value<tnsr::ijj<DataVector, 3, Frame::Inertial>>(
       DataVector(face_size), 0.0);
   auto pkg_fp = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
-      DataVector(face_size), 0.0);
-  auto pkg_bcm = make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
-      DataVector(face_size), 0.0);
-  auto pkg_bcf =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  auto pkg_blapse =
-      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
-  auto pkg_bshift = make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
       DataVector(face_size), 0.0);
   auto pkg_n = make_with_value<tnsr::i<DataVector, 3, Frame::Inertial>>(
       DataVector(face_size), 0.0);
@@ -1579,9 +1470,7 @@ void test_serialization() {
       make_not_null(&pkg_lapse), make_not_null(&pkg_shift),
       make_not_null(&pkg_b), make_not_null(&pkg_fa), make_not_null(&pkg_fb),
       make_not_null(&pkg_fd), make_not_null(&pkg_fp),
-      make_not_null(&pkg_bcm),
-      make_not_null(&pkg_bcf), make_not_null(&pkg_blapse),
-      make_not_null(&pkg_bshift), make_not_null(&pkg_n),
+      make_not_null(&pkg_n),
       cm, cf, at, K, theta, gh, lapse, shift, b, fa,
       fb, fd, fp, bcm, bcf, blapse, bshift, normal,
       mesh_velocity, normal_dot_mesh_velocity, direction);
@@ -1597,15 +1486,206 @@ void test_serialization() {
       make_not_null(&pkg_lapse), make_not_null(&pkg_shift),
       make_not_null(&pkg_b), make_not_null(&pkg_fa), make_not_null(&pkg_fb),
       make_not_null(&pkg_fd), make_not_null(&pkg_fp),
-      make_not_null(&pkg_bcm),
-      make_not_null(&pkg_bcf), make_not_null(&pkg_blapse),
-      make_not_null(&pkg_bshift), make_not_null(&pkg_n),
+      make_not_null(&pkg_n),
       cm, cf, at, K, theta, gh, lapse, shift, b, fa,
       fb, fd, fp, bcm, bcf, blapse, bshift, normal,
       mesh_velocity, normal_dot_mesh_velocity, direction);
 
   CHECK(result_orig == result_deser);
   CHECK_ITERABLE_APPROX(pkg_n, pkg_n_orig);
+}
+
+// Regression test: verify dg_package_data writes all components of the
+// packaged Variables buffer (no leftover sNaN from uninitialized memory).
+void test_dg_package_data_all_components_written() {
+  using package_tags =
+      Ccz4::BoundaryCorrections::LaxFriedrichs<3>::dg_package_field_tags;
+  Variables<package_tags> packaged_vars(face_size);
+
+  const auto direction = Direction<3>::upper_xi();
+  const double tau1 = 1.5;
+  const double tau2 = 2.3;
+  const Ccz4::BoundaryCorrections::LaxFriedrichs<3> correction(tau1, tau2);
+
+  MAKE_GENERATOR(gen);
+  std::uniform_real_distribution<> dist(0.1, 2.0);
+
+  const auto conformal_metric =
+      make_with_random_values<tnsr::ii<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto conformal_factor = make_with_random_values<Scalar<DataVector>>(
+      make_not_null(&gen), dist, DataVector(face_size));
+  const auto a_tilde =
+      make_with_random_values<tnsr::ii<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto trace_extrinsic_curvature =
+      make_with_random_values<Scalar<DataVector>>(make_not_null(&gen), dist,
+                                                  DataVector(face_size));
+  const auto theta = make_with_random_values<Scalar<DataVector>>(
+      make_not_null(&gen), dist, DataVector(face_size));
+  const auto gamma_hat =
+      make_with_random_values<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto lapse = make_with_random_values<Scalar<DataVector>>(
+      make_not_null(&gen), dist, DataVector(face_size));
+  const auto shift =
+      make_with_random_values<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto auxiliary_shift_b =
+      make_with_random_values<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto field_a =
+      make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto field_b =
+      make_with_random_values<tnsr::iJ<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto field_d =
+      make_with_random_values<tnsr::ijj<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto field_p =
+      make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto boundary_conformal_metric =
+      make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  const auto boundary_conformal_factor =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  const auto boundary_lapse =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  const auto boundary_shift =
+      make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  const auto normal_covector = make_unit_normal(face_size);
+  const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>> mesh_velocity =
+      std::nullopt;
+  const std::optional<Scalar<DataVector>> normal_dot_mesh_velocity =
+      std::nullopt;
+
+  correction.dg_package_data(
+      make_not_null(
+          &get<::Ccz4::Tags::ConformalMetric<DataVector, 3>>(packaged_vars)),
+      make_not_null(
+          &get<::Ccz4::Tags::ConformalFactor<DataVector>>(packaged_vars)),
+      make_not_null(
+          &get<::Ccz4::Tags::ATilde<DataVector, 3>>(packaged_vars)),
+      make_not_null(
+          &get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(packaged_vars)),
+      make_not_null(&get<::Ccz4::Tags::Theta<DataVector>>(packaged_vars)),
+      make_not_null(
+          &get<::Ccz4::Tags::GammaHat<DataVector, 3>>(packaged_vars)),
+      make_not_null(&get<gr::Tags::Lapse<DataVector>>(packaged_vars)),
+      make_not_null(&get<gr::Tags::Shift<DataVector, 3>>(packaged_vars)),
+      make_not_null(
+          &get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(packaged_vars)),
+      make_not_null(
+          &get<::Ccz4::Tags::FieldA<DataVector, 3>>(packaged_vars)),
+      make_not_null(
+          &get<::Ccz4::Tags::FieldB<DataVector, 3>>(packaged_vars)),
+      make_not_null(
+          &get<::Ccz4::Tags::FieldD<DataVector, 3>>(packaged_vars)),
+      make_not_null(
+          &get<::Ccz4::Tags::FieldP<DataVector, 3>>(packaged_vars)),
+      make_not_null(
+          &get<::Ccz4::Tags::NormalCovector<DataVector, 3>>(packaged_vars)),
+      conformal_metric, conformal_factor, a_tilde, trace_extrinsic_curvature,
+      theta, gamma_hat, lapse, shift, auxiliary_shift_b, field_a, field_b,
+      field_d, field_p, boundary_conformal_metric, boundary_conformal_factor,
+      boundary_lapse, boundary_shift, normal_covector, mesh_velocity,
+      normal_dot_mesh_velocity, direction);
+
+  for (size_t i = 0; i < packaged_vars.size(); ++i) {
+    CAPTURE(i);
+    CHECK(not std::isnan(packaged_vars.data()[i]));
+  }
+}
+
+// Regression test: verify dg_auxiliary_package_data writes all components of
+// the packaged Variables buffer (no leftover sNaN from uninitialized memory).
+void test_dg_auxiliary_package_data_all_components_written() {
+  using aux_package_tags =
+      Ccz4::BoundaryCorrections::LaxFriedrichs<3>::dg_auxiliary_package_field_tags;
+  Variables<aux_package_tags> packaged_vars(face_size);
+
+  const auto direction = Direction<3>::upper_xi();
+  const double tau1 = 1.5;
+  const double tau2 = 2.3;
+  const Ccz4::BoundaryCorrections::LaxFriedrichs<3> correction(tau1, tau2);
+
+  MAKE_GENERATOR(gen);
+  std::uniform_real_distribution<> dist(0.1, 2.0);
+
+  const auto conformal_metric =
+      make_with_random_values<tnsr::ii<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto conformal_factor = make_with_random_values<Scalar<DataVector>>(
+      make_not_null(&gen), dist, DataVector(face_size));
+  const auto a_tilde =
+      make_with_random_values<tnsr::ii<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto trace_extrinsic_curvature =
+      make_with_random_values<Scalar<DataVector>>(make_not_null(&gen), dist,
+                                                  DataVector(face_size));
+  const auto theta = make_with_random_values<Scalar<DataVector>>(
+      make_not_null(&gen), dist, DataVector(face_size));
+  const auto gamma_hat =
+      make_with_random_values<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto lapse = make_with_random_values<Scalar<DataVector>>(
+      make_not_null(&gen), dist, DataVector(face_size));
+  const auto shift =
+      make_with_random_values<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto auxiliary_shift_b =
+      make_with_random_values<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto field_a =
+      make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto field_b =
+      make_with_random_values<tnsr::iJ<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto field_d =
+      make_with_random_values<tnsr::ijj<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto field_p =
+      make_with_random_values<tnsr::i<DataVector, 3, Frame::Inertial>>(
+          make_not_null(&gen), dist, DataVector(face_size));
+  const auto boundary_conformal_metric =
+      make_with_value<tnsr::ii<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  const auto boundary_conformal_factor =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  const auto boundary_lapse =
+      make_with_value<Scalar<DataVector>>(DataVector(face_size), 0.0);
+  const auto boundary_shift =
+      make_with_value<tnsr::I<DataVector, 3, Frame::Inertial>>(
+          DataVector(face_size), 0.0);
+  const auto normal_covector = make_unit_normal(face_size);
+  const std::optional<tnsr::I<DataVector, 3, Frame::Inertial>> mesh_velocity =
+      std::nullopt;
+  const std::optional<Scalar<DataVector>> normal_dot_mesh_velocity =
+      std::nullopt;
+
+  correction.dg_auxiliary_package_data(
+      make_not_null(
+          &get<::Ccz4::Tags::ConformalMetric<DataVector, 3>>(packaged_vars)),
+      make_not_null(
+          &get<::Ccz4::Tags::ConformalFactor<DataVector>>(packaged_vars)),
+      make_not_null(&get<gr::Tags::Lapse<DataVector>>(packaged_vars)),
+      make_not_null(&get<gr::Tags::Shift<DataVector, 3>>(packaged_vars)),
+      make_not_null(
+          &get<::Ccz4::Tags::NormalCovector<DataVector, 3>>(packaged_vars)),
+      conformal_metric, conformal_factor, a_tilde, trace_extrinsic_curvature,
+      theta, gamma_hat, lapse, shift, auxiliary_shift_b, field_a, field_b,
+      field_d, field_p, boundary_conformal_metric, boundary_conformal_factor,
+      boundary_lapse, boundary_shift, normal_covector, mesh_velocity,
+      normal_dot_mesh_velocity, direction);
+
+  for (size_t i = 0; i < packaged_vars.size(); ++i) {
+    CAPTURE(i);
+    CHECK(not std::isnan(packaged_vars.data()[i]));
+  }
 }
 
 }  // namespace
@@ -1621,4 +1701,10 @@ SPECTRE_TEST_CASE(
     test_use_central_flux_at_boundary_false();
   }
   SECTION("serialization") { test_serialization(); }
+  SECTION("dg_package_data_all_components_written") {
+    test_dg_package_data_all_components_written();
+  }
+  SECTION("dg_auxiliary_package_data_all_components_written") {
+    test_dg_auxiliary_package_data_all_components_written();
+  }
 }

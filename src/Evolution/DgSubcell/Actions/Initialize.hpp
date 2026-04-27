@@ -195,6 +195,15 @@ struct SetSubcellGrid {
           neighbor_decisions_ptr->clear();
           for (const auto& [direction, neighbors_in_direction] :
                element.neighbors()) {
+            // HACK: Skip MultipleNonconforming directions to avoid
+            // overflowing the FixedHashMap<24>. This is not a proper fix —
+            // TCI decisions from these neighbors are silently dropped. This
+            // is safe only when the element is DG-only
+            // (OnlyDgBlocksAndGroups) and TCI is never consulted.
+            if (element.face_types().at(direction) ==
+                domain::FaceType::MultipleNonconforming) {
+              continue;
+            }
             for (const auto& neighbor : neighbors_in_direction.ids()) {
               neighbor_decisions_ptr->insert(
                   std::pair{DirectionalId<Dim>{direction, neighbor}, 0});
@@ -544,6 +553,12 @@ struct SetInitialGridFromTciData {
           [&element, &received](const auto neighbor_tci_decisions_ptr) {
             for (const auto& [directional_element_id,
                               neighbor_initial_tci_data] : received->second) {
+              // HACK: see comment in SetSubcellGrid above
+              if (element.face_types().at(
+                      directional_element_id.direction()) ==
+                  domain::FaceType::MultipleNonconforming) {
+                continue;
+              }
               (void)element;
               ASSERT(neighbor_initial_tci_data.tci_status.has_value(),
                      "Neighbor in direction "

@@ -65,12 +65,6 @@ double LaxFriedrichs<Dim>::dg_package_data(
     gsl::not_null<tnsr::ijj<DataVector, Dim, Frame::Inertial>*>
         packaged_field_d,
     gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> packaged_field_p,
-    gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
-    /*packaged_boundary_conformal_metric*/,
-    gsl::not_null<Scalar<DataVector>*> /*packaged_boundary_conformal_factor*/,
-    gsl::not_null<Scalar<DataVector>*> /*packaged_boundary_lapse*/,
-    gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
-    /*packaged_boundary_shift*/,
     gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
         packaged_normal_covector,
 
@@ -164,11 +158,6 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
     const tnsr::iJ<DataVector, Dim, Frame::Inertial>& field_b_int,
     const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d_int,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p_int,
-    const tnsr::ii<DataVector, Dim, Frame::Inertial>&
-    /*boundary_conformal_metric_int*/,
-    const Scalar<DataVector>& /*boundary_conformal_factor_int*/,
-    const Scalar<DataVector>& /*boundary_lapse_int*/,
-    const tnsr::I<DataVector, Dim, Frame::Inertial>& /*boundary_shift_int*/,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector_int,
 
     const tnsr::ii<DataVector, Dim, Frame::Inertial>& conformal_metric_ext,
@@ -184,11 +173,6 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
     const tnsr::iJ<DataVector, Dim, Frame::Inertial>& field_b_ext,
     const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d_ext,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p_ext,
-    const tnsr::ii<DataVector, Dim, Frame::Inertial>&
-    /*boundary_conformal_metric_ext*/,
-    const Scalar<DataVector>& /*boundary_conformal_factor_ext*/,
-    const Scalar<DataVector>& /*boundary_lapse_ext*/,
-    const tnsr::I<DataVector, Dim, Frame::Inertial>& /*boundary_shift_ext*/,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector_ext,
 
     dg::Formulation /*dg_formulation*/) const {
@@ -639,11 +623,6 @@ double LaxFriedrichs<Dim>::dg_auxiliary_package_data(
     gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> packaged_shift,
     gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
         packaged_normal_covector,
-    gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> packaged_field_a,
-    gsl::not_null<tnsr::iJ<DataVector, Dim, Frame::Inertial>*> packaged_field_b,
-    gsl::not_null<tnsr::ijj<DataVector, Dim, Frame::Inertial>*>
-        packaged_field_d,
-    gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> packaged_field_p,
 
     const tnsr::ii<DataVector, Dim, Frame::Inertial>& conformal_metric,
     const Scalar<DataVector>& conformal_factor,
@@ -654,10 +633,10 @@ double LaxFriedrichs<Dim>::dg_auxiliary_package_data(
     const Scalar<DataVector>& lapse,
     const tnsr::I<DataVector, Dim, Frame::Inertial>& shift,
     const tnsr::I<DataVector, Dim, Frame::Inertial>& /*auxiliary_shift_b*/,
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& field_a,
-    const tnsr::iJ<DataVector, Dim, Frame::Inertial>& field_b,
-    const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d,
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*field_a*/,
+    const tnsr::iJ<DataVector, Dim, Frame::Inertial>& /*field_b*/,
+    const tnsr::ijj<DataVector, Dim, Frame::Inertial>& /*field_d*/,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*field_p*/,
 
     const tnsr::ii<DataVector, Dim, Frame::Inertial>&
     /*boundary_conformal_metric*/,
@@ -675,10 +654,6 @@ double LaxFriedrichs<Dim>::dg_auxiliary_package_data(
   *packaged_lapse = lapse;
   *packaged_shift = shift;
   *packaged_normal_covector = normal_covector;
-  *packaged_field_a = field_a;
-  *packaged_field_b = field_b;
-  *packaged_field_d = field_d;
-  *packaged_field_p = field_p;
 
   return 0.0;
 }
@@ -721,20 +696,12 @@ void LaxFriedrichs<Dim>::dg_auxiliary_boundary_terms(
     const Scalar<DataVector>& lapse_int,
     const tnsr::I<DataVector, Dim, Frame::Inertial>& shift_int,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector_int,
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*field_a_int*/,
-    const tnsr::iJ<DataVector, Dim, Frame::Inertial>& /*field_b_int*/,
-    const tnsr::ijj<DataVector, Dim, Frame::Inertial>& /*field_d_int*/,
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*field_p_int*/,
 
     const tnsr::ii<DataVector, Dim, Frame::Inertial>& conformal_metric_ext,
     const Scalar<DataVector>& conformal_factor_ext,
     const Scalar<DataVector>& lapse_ext,
     const tnsr::I<DataVector, Dim, Frame::Inertial>& shift_ext,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector_ext,
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*field_a_ext*/,
-    const tnsr::iJ<DataVector, Dim, Frame::Inertial>& /*field_b_ext*/,
-    const tnsr::ijj<DataVector, Dim, Frame::Inertial>& /*field_d_ext*/,
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*field_p_ext*/,
 
     dg::Formulation /*dg_formulation*/) const {
   // only auxiliary reduction variables have nonzero boundary corrections
@@ -858,9 +825,6 @@ PUP::able::PUP_ID LaxFriedrichs<Dim>::my_PUP_ID = 0;
       const tnsr::iJ<DataVector, DIM(data), Frame::Inertial>&,                 \
       const tnsr::ijj<DataVector, DIM(data), Frame::Inertial>&,               \
       const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
-      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
-      const Scalar<DataVector>&, const Scalar<DataVector>&,                    \
-      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
       const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
       const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
       const Scalar<DataVector>&,                                               \
@@ -874,9 +838,6 @@ PUP::able::PUP_ID LaxFriedrichs<Dim>::my_PUP_ID = 0;
       const tnsr::iJ<DataVector, DIM(data), Frame::Inertial>&,                 \
       const tnsr::ijj<DataVector, DIM(data), Frame::Inertial>&,               \
       const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
-      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
-      const Scalar<DataVector>&, const Scalar<DataVector>&,                    \
-      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
       const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
       dg::Formulation) const;                                                  \
   template void LaxFriedrichs<DIM(data)>::dg_boundary_terms<true>(             \
@@ -909,9 +870,6 @@ PUP::able::PUP_ID LaxFriedrichs<Dim>::my_PUP_ID = 0;
       const tnsr::iJ<DataVector, DIM(data), Frame::Inertial>&,                 \
       const tnsr::ijj<DataVector, DIM(data), Frame::Inertial>&,               \
       const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
-      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
-      const Scalar<DataVector>&, const Scalar<DataVector>&,                    \
-      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
       const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
       const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
       const Scalar<DataVector>&,                                               \
@@ -925,9 +883,6 @@ PUP::able::PUP_ID LaxFriedrichs<Dim>::my_PUP_ID = 0;
       const tnsr::iJ<DataVector, DIM(data), Frame::Inertial>&,                 \
       const tnsr::ijj<DataVector, DIM(data), Frame::Inertial>&,               \
       const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
-      const tnsr::ii<DataVector, DIM(data), Frame::Inertial>&,                 \
-      const Scalar<DataVector>&, const Scalar<DataVector>&,                    \
-      const tnsr::I<DataVector, DIM(data), Frame::Inertial>&,                  \
       const tnsr::i<DataVector, DIM(data), Frame::Inertial>&,                  \
       dg::Formulation) const;
 

@@ -96,11 +96,6 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       // auxiliary reduction variables
       ::Ccz4::Tags::FieldA<DataVector, 3>, ::Ccz4::Tags::FieldB<DataVector, 3>,
       ::Ccz4::Tags::FieldD<DataVector, 3>, ::Ccz4::Tags::FieldP<DataVector, 3>,
-      // boundary second-order fields
-      ::Ccz4::Tags::BoundaryConformalMetric<DataVector, 3>,
-      ::Ccz4::Tags::BoundaryConformalFactor<DataVector>,
-      ::Ccz4::Tags::BoundaryLapse<DataVector>,
-      ::Ccz4::Tags::BoundaryShift<DataVector, 3>,
       // normal covector
       ::Ccz4::Tags::NormalCovector<DataVector, 3>>;
   using dg_package_data_temporary_tags = tmpl::list<>;
@@ -129,12 +124,6 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
           packaged_field_d,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
           packaged_field_p,
-      gsl::not_null<tnsr::ii<DataVector, Dim, Frame::Inertial>*>
-          packaged_boundary_conformal_metric,
-      gsl::not_null<Scalar<DataVector>*> packaged_boundary_conformal_factor,
-      gsl::not_null<Scalar<DataVector>*> packaged_boundary_lapse,
-      gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
-          packaged_boundary_shift,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
           packaged_normal_covector,
 
@@ -210,11 +199,6 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       const tnsr::iJ<DataVector, Dim, Frame::Inertial>& field_b_int,
       const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d_int,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p_int,
-      const tnsr::ii<DataVector, Dim, Frame::Inertial>&
-      /*boundary_conformal_metric_int*/,
-      const Scalar<DataVector>& /*boundary_conformal_factor_int*/,
-      const Scalar<DataVector>& /*boundary_lapse_int*/,
-      const tnsr::I<DataVector, Dim, Frame::Inertial>& /*boundary_shift_int*/,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector_int,
 
       const tnsr::ii<DataVector, Dim, Frame::Inertial>& conformal_metric_ext,
@@ -230,11 +214,6 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       const tnsr::iJ<DataVector, Dim, Frame::Inertial>& field_b_ext,
       const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d_ext,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p_ext,
-      const tnsr::ii<DataVector, Dim, Frame::Inertial>&
-      /*boundary_conformal_metric_ext*/,
-      const Scalar<DataVector>& /*boundary_conformal_factor_ext*/,
-      const Scalar<DataVector>& /*boundary_lapse_ext*/,
-      const tnsr::I<DataVector, Dim, Frame::Inertial>& /*boundary_shift_ext*/,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector_ext,
 
       dg::Formulation /*dg_formulation*/) const;
@@ -242,9 +221,8 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
   using dg_auxiliary_package_field_tags = tmpl::list<
       Ccz4::Tags::ConformalMetric<DataVector, 3>,
       Ccz4::Tags::ConformalFactor<DataVector>, gr::Tags::Lapse<DataVector>,
-      gr::Tags::Shift<DataVector, 3>, Ccz4::Tags::NormalCovector<DataVector, 3>,
-      Ccz4::Tags::FieldA<DataVector, 3>, Ccz4::Tags::FieldB<DataVector, 3>,
-      Ccz4::Tags::FieldD<DataVector, 3>, Ccz4::Tags::FieldP<DataVector, 3>>;
+      gr::Tags::Shift<DataVector, 3>,
+      Ccz4::Tags::NormalCovector<DataVector, 3>>;
   using dg_auxiliary_package_data_temporary_tags = tmpl::list<>;
   using dg_auxiliary_package_data_volume_tags = tmpl::list<>;
   using dg_auxiliary_boundary_terms_volume_tags = tmpl::list<>;
@@ -257,14 +235,6 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> packaged_shift,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
           packaged_normal_covector,
-      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
-          packaged_field_a,
-      gsl::not_null<tnsr::iJ<DataVector, Dim, Frame::Inertial>*>
-          packaged_field_b,
-      gsl::not_null<tnsr::ijj<DataVector, Dim, Frame::Inertial>*>
-          packaged_field_d,
-      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
-          packaged_field_p,
 
       const tnsr::ii<DataVector, Dim, Frame::Inertial>& conformal_metric,
       const Scalar<DataVector>& conformal_factor,
@@ -275,10 +245,10 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       const Scalar<DataVector>& lapse,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& shift,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& /*auxiliary_shift_b*/,
-      const tnsr::i<DataVector, Dim, Frame::Inertial>& field_a,
-      const tnsr::iJ<DataVector, Dim, Frame::Inertial>& field_b,
-      const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d,
-      const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p,
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& /*field_a*/,
+      const tnsr::iJ<DataVector, Dim, Frame::Inertial>& /*field_b*/,
+      const tnsr::ijj<DataVector, Dim, Frame::Inertial>& /*field_d*/,
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& /*field_p*/,
 
       const tnsr::ii<DataVector, Dim, Frame::Inertial>&
       /*boundary_conformal_metric*/,
@@ -329,20 +299,12 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       const Scalar<DataVector>& lapse_int,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& shift_int,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector_int,
-      const tnsr::i<DataVector, Dim, Frame::Inertial>& field_a_int,
-      const tnsr::iJ<DataVector, Dim, Frame::Inertial>& field_b_int,
-      const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d_int,
-      const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p_int,
 
       const tnsr::ii<DataVector, Dim, Frame::Inertial>& conformal_metric_ext,
       const Scalar<DataVector>& conformal_factor_ext,
       const Scalar<DataVector>& lapse_ext,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& shift_ext,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector_ext,
-      const tnsr::i<DataVector, Dim, Frame::Inertial>& field_a_ext,
-      const tnsr::iJ<DataVector, Dim, Frame::Inertial>& field_b_ext,
-      const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d_ext,
-      const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p_ext,
 
       dg::Formulation /*dg_formulation*/) const;
 
