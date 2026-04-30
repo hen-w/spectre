@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -180,6 +181,20 @@ class NonconformingSphericalShells : public DomainCreator<3> {
         "Outer radius of the outer spherical shell."};
   };
 
+  struct WedgesRadialPartitioning {
+    using type = std::vector<double>;
+    static constexpr Options::String help = {
+        "Radial coordinates of boundaries splitting the wedge region between "
+        "InnerRadius and InterfaceRadius."};
+  };
+
+  struct ShellsRadialPartitioning {
+    using type = std::vector<double>;
+    static constexpr Options::String help = {
+        "Radial coordinates of boundaries splitting the shell region between "
+        "InterfaceRadius and OuterRadius."};
+  };
+
   struct InitialRadialRefinement {
     using type = size_t;
     static constexpr Options::String help = {
@@ -240,6 +255,7 @@ class NonconformingSphericalShells : public DomainCreator<3> {
 
   using basic_options =
       tmpl::list<InnerRadius, InterfaceRadius, OuterRadius,
+                 WedgesRadialPartitioning, ShellsRadialPartitioning,
                  InitialRadialRefinement, InitialAngularRefinementOfWedges,
                  InitialNumberOfRadialGridPoints, InitialSphericalHarmonicL,
                  InitialNumberOfAngularGridPointsOfWedges, Interior,
@@ -261,6 +277,8 @@ class NonconformingSphericalShells : public DomainCreator<3> {
 
   NonconformingSphericalShells(
       double inner_radius, double interface_radius, double outer_radius,
+      std::vector<double> wedges_radial_partitioning,
+      std::vector<double> shells_radial_partitioning,
       size_t initial_radial_refinement,
       size_t initial_angular_refinement,
       size_t initial_number_of_radial_grid_points,
@@ -292,6 +310,9 @@ class NonconformingSphericalShells : public DomainCreator<3> {
 
   std::vector<std::string> block_names() const override;
 
+  std::unordered_map<std::string, std::unordered_set<std::string>> block_groups()
+      const override;
+
   std::vector<std::array<size_t, 3>> initial_extents() const override;
 
   std::vector<std::array<size_t, 3>> initial_refinement_levels() const override;
@@ -299,6 +320,10 @@ class NonconformingSphericalShells : public DomainCreator<3> {
   double inner_radius_{};
   double interface_radius_{};
   double outer_radius_{};
+  std::vector<double> wedges_radial_partitioning_{};
+  std::vector<double> shells_radial_partitioning_{};
+  size_t num_wedge_layers_{};
+  size_t num_shells_{};
   size_t initial_radial_refinement_{};
   size_t initial_angular_refinement_{};
   size_t initial_number_of_radial_grid_points_{};
@@ -313,5 +338,8 @@ class NonconformingSphericalShells : public DomainCreator<3> {
       outer_boundary_condition_{};
   std::unordered_map<std::string, tnsr::I<double, 3, Frame::Grid>>
       grid_anchors_{};
+  std::vector<std::string> block_names_{};
+  std::unordered_map<std::string, std::unordered_set<std::string>>
+      block_groups_{};
 };
 }  // namespace domain::creators

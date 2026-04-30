@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -22,6 +23,7 @@
 #include "Domain/CoordinateMaps/BulgedCube.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.tpp"
+#include "Domain/CoordinateMaps/Distribution.hpp"
 #include "Domain/CoordinateMaps/Equiangular.hpp"
 #include "Domain/CoordinateMaps/Identity.hpp"
 #include "Domain/CoordinateMaps/Interval.hpp"
@@ -30,6 +32,7 @@
 #include "Domain/CoordinateMaps/SphericalToCartesianPfaffian.hpp"
 #include "Domain/CoordinateMaps/Wedge.hpp"
 #include "Domain/Creators/DomainCreator.hpp"
+#include "Domain/Creators/ShellDistribution.hpp"
 #include "Domain/Domain.hpp"
 #include "Domain/DomainHelpers.hpp"
 #include "Domain/Structure/BlockNeighbors.hpp"
@@ -45,7 +48,10 @@ namespace domain::creators {
 
 NonconformingSphericalShells::NonconformingSphericalShells(
     const double inner_radius, const double interface_radius,
-    const double outer_radius, const size_t initial_radial_refinement,
+    const double outer_radius,
+    std::vector<double> wedges_radial_partitioning,
+    std::vector<double> shells_radial_partitioning,
+    const size_t initial_radial_refinement,
     const size_t initial_angular_refinement,
     const size_t initial_number_of_radial_grid_points,
     const size_t initial_spherical_harmonic_l,
@@ -58,6 +64,8 @@ NonconformingSphericalShells::NonconformingSphericalShells(
     : inner_radius_(inner_radius),
       interface_radius_(interface_radius),
       outer_radius_(outer_radius),
+      wedges_radial_partitioning_(std::move(wedges_radial_partitioning)),
+      shells_radial_partitioning_(std::move(shells_radial_partitioning)),
       initial_radial_refinement_(initial_radial_refinement),
       initial_angular_refinement_(initial_angular_refinement),
       initial_number_of_radial_grid_points_(
@@ -68,15 +76,6 @@ NonconformingSphericalShells::NonconformingSphericalShells(
       interior_(std::move(interior)),
       fill_interior_(std::holds_alternative<InnerCube>(interior_)),
       use_equiangular_map_(use_equiangular_map),
-      initial_refinement_levels_{
-          fill_interior_ ? 8_st : 7_st,
-          {{initial_angular_refinement_, initial_angular_refinement_,
-            initial_radial_refinement_}}},
-      initial_number_of_grid_points_{
-          fill_interior_ ? 8_st : 7_st,
-          {{initial_number_of_angular_grid_points_of_wedges_,
-            initial_number_of_angular_grid_points_of_wedges_,
-            initial_number_of_radial_grid_points_}}},
       outer_boundary_condition_(std::move(outer_boundary_condition)),
       grid_anchors_{{{"Center", tnsr::I<double, 3, Frame::Grid>{
                                     std::array{0.0, 0.0, 0.0}}}}} {
@@ -96,6 +95,61 @@ NonconformingSphericalShells::NonconformingSphericalShells(
         "radius is " +
             std::to_string(interface_radius_) + " and outer radius is " +
             std::to_string(outer_radius_) + ".");
+  }
+
+  // Validate wedges partitioning
+  {
+    std::vector<CoordinateMaps::Distribution> wedge_radial_dist;
+    set_shell_distribution(
+        make_not_null(&num_wedge_layers_),
+        make_not_null(&wedge_radial_dist), wedges_radial_partitioning_,
+        CoordinateMaps::Distribution::Linear, inner_radius_,
+        interface_radius_, "inner", "interface", context);
+  }
+
+  // Validate shells partitioning
+  {
+    std::vector<CoordinateMaps::Distribution> shell_radial_dist;
+    set_shell_distribution(
+        make_not_null(&num_shells_), make_not_null(&shell_radial_dist),
+        shells_radial_partitioning_, CoordinateMaps::Distribution::Linear,
+        interface_radius_, outer_radius_, "interface", "outer", context);
+  }
+
+  const size_t num_wedge_blocks = 6 * num_wedge_layers_;
+  const size_t num_blocks =
+      num_wedge_blocks + (fill_interior_ ? 1 : 0) + num_shells_;
+
+  // Initialize refinement and grid points
+  initial_refinement_levels_.assign(
+      num_blocks, {{initial_angular_refinement_, initial_angular_refinement_,
+                    initial_radial_refinement_}});
+  initial_number_of_grid_points_.assign(
+      num_blocks,
+      {{initial_number_of_angular_grid_points_of_wedges_,
+        initial_number_of_angular_grid_points_of_wedges_,
+        initial_number_of_radial_grid_points_}});
+
+  // Correct for inner cube block (z-refinement = y-refinement)
+  if (fill_interior_) {
+    const size_t cube_index = num_wedge_blocks;
+    initial_refinement_levels_[cube_index][2] =
+        initial_refinement_levels_[cube_index][1];
+    initial_number_of_grid_points_[cube_index][2] =
+        initial_number_of_grid_points_[cube_index][1];
+  }
+
+  // Correct for all shell blocks
+  const size_t first_shell_index =
+      num_wedge_blocks + (fill_interior_ ? 1 : 0);
+  for (size_t i = 0; i < num_shells_; ++i) {
+    const size_t shell_index = first_shell_index + i;
+    initial_number_of_grid_points_[shell_index] = {
+        {initial_number_of_radial_grid_points_,
+         initial_spherical_harmonic_l_ + 1,
+         2 * initial_spherical_harmonic_l_ + 1}};
+    initial_refinement_levels_[shell_index] = {
+        {initial_radial_refinement_, 0_st, 0_st}};
   }
 
   // Validate boundary conditions
@@ -134,55 +188,71 @@ NonconformingSphericalShells::NonconformingSphericalShells(
     }
   }
 
-  // Correct for inner cube block (z-refinement = y-refinement)
-  if (fill_interior_) {
-    const size_t cube_index = 6;
-    initial_refinement_levels_[cube_index][2] =
-        initial_refinement_levels_[cube_index][1];
-    initial_number_of_grid_points_[cube_index][2] =
-        initial_number_of_grid_points_[cube_index][1];
+  // Build block names and groups
+  block_names_.reserve(num_blocks);
+  for (size_t layer = 0; layer < num_wedge_layers_; ++layer) {
+    const std::string group_name = "WedgedShell" + std::to_string(layer);
+    for (size_t wedge = 0; wedge < 6; ++wedge) {
+      const std::string name =
+          "Wedge" + std::to_string(layer * 6 + wedge);
+      block_names_.emplace_back(name);
+      block_groups_[group_name].insert(name);
+    }
   }
-
-  // Correct for outer spherical shell (last block)
-  const size_t shell_index = fill_interior_ ? 7 : 6;
-  initial_number_of_grid_points_[shell_index] = {
-      {initial_number_of_radial_grid_points_, initial_spherical_harmonic_l_ + 1,
-       2 * initial_spherical_harmonic_l_ + 1}};
-  initial_refinement_levels_[shell_index] = {
-      {initial_radial_refinement_, 0_st, 0_st}};
+  if (fill_interior_) {
+    block_names_.emplace_back("InnerCube");
+  }
+  for (size_t i = 0; i < num_shells_; ++i) {
+    const std::string name = "Shell" + std::to_string(i);
+    block_names_.emplace_back(name);
+    block_groups_[name].insert(name);
+  }
 }
 
 Domain<3> NonconformingSphericalShells::create_domain() const {
-  const size_t num_blocks = fill_interior_ ? 8 : 7;
+  const size_t num_wedge_blocks = 6 * num_wedge_layers_;
+  const size_t num_blocks =
+      num_wedge_blocks + (fill_interior_ ? 1 : 0) + num_shells_;
   std::vector<Block<3>> blocks;
   blocks.reserve(num_blocks);
 
   const std::vector<std::array<size_t, 8>> corners =
-      corners_for_radially_layered_domains(1, fill_interior_);
+      corners_for_radially_layered_domains(num_wedge_layers_, fill_interior_);
   std::vector<DirectionMap<3, BlockNeighbors<3>>> neighbors_of_all_blocks{};
   set_internal_boundaries<3>(make_not_null(&neighbors_of_all_blocks), corners);
 
-  // Set up nonconforming shell neighbors
-  const size_t shell_id = fill_interior_ ? 7 : 6;
+  // Set up nonconforming shell neighbors.
+  // The outermost wedge layer connects to the innermost shell.
+  const size_t outermost_wedge_start = 6 * (num_wedge_layers_ - 1);
+  const size_t first_shell_id =
+      num_wedge_blocks + (fill_interior_ ? 1 : 0);
   const OrientationMap<3> shell_to_wedge{
       {{Direction<3>::upper_zeta(), Direction<3>::self(),
         Direction<3>::self()}}};
-  DirectionMap<3, BlockNeighbors<3>> neighbors_of_shell{};
-  neighbors_of_shell.emplace(std::pair{Direction<3>::lower_xi(),
-                                       BlockNeighbors<3>{{0, 1, 2, 3, 4, 5},
-                                                         {{0, shell_to_wedge},
-                                                          {1, shell_to_wedge},
-                                                          {2, shell_to_wedge},
-                                                          {3, shell_to_wedge},
-                                                          {4, shell_to_wedge},
-                                                          {5, shell_to_wedge}},
-                                                         false}});
+
+  // Innermost shell's lower_xi neighbor = outermost wedge layer
+  DirectionMap<3, BlockNeighbors<3>> neighbors_of_innermost_shell{};
+  {
+    std::unordered_set<size_t> wedge_ids;
+    std::unordered_map<size_t, OrientationMap<3>> orientations;
+    for (size_t i = 0; i < 6; ++i) {
+      const size_t wedge_id = outermost_wedge_start + i;
+      wedge_ids.insert(wedge_id);
+      orientations.emplace(wedge_id, shell_to_wedge);
+    }
+    neighbors_of_innermost_shell.emplace(std::pair{
+        Direction<3>::lower_xi(),
+        BlockNeighbors<3>{std::move(wedge_ids), std::move(orientations),
+                          false}});
+  }
+
+  // Outermost wedge layer's upper_zeta neighbor = innermost shell
   for (size_t i = 0; i < 6; ++i) {
-    neighbors_of_all_blocks[i].emplace(std::pair{
+    neighbors_of_all_blocks[outermost_wedge_start + i].emplace(std::pair{
         Direction<3>::upper_zeta(),
         BlockNeighbors<3>{
-            {shell_id},
-            {{shell_id, shell_to_wedge.inverse_map()}},
+            {first_shell_id},
+            {{first_shell_id, shell_to_wedge.inverse_map()}},
             false}});
   }
 
@@ -191,30 +261,24 @@ Domain<3> NonconformingSphericalShells::create_domain() const {
       fill_interior_ ? std::get<InnerCube>(interior_).sphericity : 1.0;
   auto wedge_coord_maps =
       make_vector_coordinate_map_base<Frame::BlockLogical, Frame::Inertial, 3>(
-          sph_wedge_coordinate_maps(inner_radius_, interface_radius_,
-                                    inner_sphericity, 1.0,
-                                    use_equiangular_map_));
-
-  // Create shell coordinate map
-  auto sphere_map =
-      make_coordinate_map_base<Frame::BlockLogical, Frame::Inertial>(
-          CoordinateMaps::ProductOf2Maps<CoordinateMaps::Affine,
-                                         CoordinateMaps::Identity<2>>{
-              CoordinateMaps::Affine{-1.0, 1.0, interface_radius_,
-                                     outer_radius_},
-              CoordinateMaps::Identity<2>{}},
-          CoordinateMaps::SphericalToCartesianPfaffian{});
+          sph_wedge_coordinate_maps(
+              inner_radius_, interface_radius_, inner_sphericity, 1.0,
+              use_equiangular_map_, std::nullopt, false,
+              wedges_radial_partitioning_,
+              std::vector<CoordinateMaps::Distribution>(
+                  num_wedge_layers_, CoordinateMaps::Distribution::Linear)));
 
   // Build wedge blocks
-  for (size_t i = 0; i < 6; ++i) {
+  for (size_t i = 0; i < num_wedge_blocks; ++i) {
     blocks.emplace_back(
         std::move(wedge_coord_maps[i]), i,
         std::move(neighbors_of_all_blocks[i]),
-        "Wedge" + std::to_string(i), domain::topologies::hypercube<3>);
+        block_names_.at(i), domain::topologies::hypercube<3>);
   }
 
   // Build inner cube block (if filled)
   if (fill_interior_) {
+    const size_t cube_id = num_wedge_blocks;
     const double inner_cube_sphericity =
         std::get<InnerCube>(interior_).sphericity;
     std::unique_ptr<
@@ -247,16 +311,49 @@ Domain<3> NonconformingSphericalShells::create_domain() const {
               BulgedCube{inner_radius_, inner_cube_sphericity,
                          use_equiangular_map_});
     }
-    blocks.emplace_back(std::move(inner_cube_map), 6_st,
-                        std::move(neighbors_of_all_blocks[6]), "InnerCube",
+    blocks.emplace_back(std::move(inner_cube_map), cube_id,
+                        std::move(neighbors_of_all_blocks[cube_id]),
+                        block_names_.at(cube_id),
                         domain::topologies::hypercube<3>);
   }
 
-  // Build shell block
-  blocks.emplace_back(std::move(sphere_map), shell_id,
-                      std::move(neighbors_of_shell), "Shell",
-                      domain::topologies::spherical_shell);
-  return Domain(std::move(blocks));
+  // Build shell blocks
+  const auto aligned = OrientationMap<3>::create_aligned();
+  for (size_t i = 0; i < num_shells_; ++i) {
+    const size_t shell_id = first_shell_id + i;
+    const double shell_inner =
+        (i == 0) ? interface_radius_ : shells_radial_partitioning_[i - 1];
+    const double shell_outer =
+        (i == num_shells_ - 1) ? outer_radius_
+                               : shells_radial_partitioning_[i];
+    auto shell_map =
+        make_coordinate_map_base<Frame::BlockLogical, Frame::Inertial>(
+            CoordinateMaps::ProductOf2Maps<CoordinateMaps::Affine,
+                                           CoordinateMaps::Identity<2>>{
+                CoordinateMaps::Affine{-1.0, 1.0, shell_inner, shell_outer},
+                CoordinateMaps::Identity<2>{}},
+            CoordinateMaps::SphericalToCartesianPfaffian{});
+
+    DirectionMap<3, BlockNeighbors<3>> neighbors;
+    if (i == 0) {
+      neighbors = std::move(neighbors_of_innermost_shell);
+    } else {
+      // Connect to previous shell conformingly
+      neighbors.emplace(std::pair{Direction<3>::lower_xi(),
+                                  BlockNeighbors<3>{shell_id - 1, aligned}});
+    }
+    if (i < num_shells_ - 1) {
+      // Connect to next shell conformingly
+      neighbors.emplace(std::pair{Direction<3>::upper_xi(),
+                                  BlockNeighbors<3>{shell_id + 1, aligned}});
+    }
+
+    blocks.emplace_back(std::move(shell_map), shell_id, std::move(neighbors),
+                        block_names_.at(shell_id),
+                        domain::topologies::spherical_shell);
+  }
+
+  return Domain(std::move(blocks), {}, block_groups_);
 }
 
 std::unordered_map<std::string, tnsr::I<double, 3, Frame::Grid>>
@@ -270,36 +367,35 @@ NonconformingSphericalShells::external_boundary_conditions() const {
   if (outer_boundary_condition_ == nullptr) {
     return {};
   }
-  const size_t num_blocks = fill_interior_ ? 8 : 7;
-  const size_t shell_index = fill_interior_ ? 7 : 6;
+  const size_t num_wedge_blocks = 6 * num_wedge_layers_;
+  const size_t num_blocks =
+      num_wedge_blocks + (fill_interior_ ? 1 : 0) + num_shells_;
+  const size_t last_shell_index = num_blocks - 1;
   std::vector<DirectionMap<
       3, std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>
       boundary_conditions{num_blocks};
   if (not fill_interior_) {
     const auto& inner_bc =
         std::get<Excision>(interior_).boundary_condition;
+    // Inner BC on lower_zeta of the 6 innermost wedges (indices 0-5)
     for (size_t i = 0; i < 6; ++i) {
       boundary_conditions[i][Direction<3>::lower_zeta()] =
           inner_bc->get_clone();
     }
   }
-  boundary_conditions[shell_index][Direction<3>::upper_xi()] =
+  // Outer BC on upper_xi of the outermost shell
+  boundary_conditions[last_shell_index][Direction<3>::upper_xi()] =
       outer_boundary_condition_->get_clone();
   return boundary_conditions;
 }
 
 std::vector<std::string> NonconformingSphericalShells::block_names() const {
-  const size_t num_blocks = fill_interior_ ? 8 : 7;
-  std::vector<std::string> names{};
-  names.reserve(num_blocks);
-  for (size_t i = 0; i < 6; ++i) {
-    names.emplace_back("Wedge" + std::to_string(i));
-  }
-  if (fill_interior_) {
-    names.emplace_back("InnerCube");
-  }
-  names.emplace_back("Shell");
-  return names;
+  return block_names_;
+}
+
+std::unordered_map<std::string, std::unordered_set<std::string>>
+NonconformingSphericalShells::block_groups() const {
+  return block_groups_;
 }
 
 std::vector<std::array<size_t, 3>>
