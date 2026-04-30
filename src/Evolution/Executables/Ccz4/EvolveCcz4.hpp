@@ -440,6 +440,12 @@ struct EvolutionMetavars {
                                      Parallel::Actions::TerminatePhase>>,
 
                  Parallel::PhaseActions<
+                     Parallel::Phase::WriteCheckpoint,
+                     tmpl::list<evolution::Actions::RunEventsAndTriggers<
+                                    Triggers::WhenToCheck::AtCheckpoints>,
+                                Parallel::Actions::TerminatePhase>>,
+
+                 Parallel::PhaseActions<
                      Parallel::Phase::Evolve,
                      tmpl::list<evolution::Actions::RunEventsAndTriggers<
                                     Triggers::WhenToCheck::AtSlabs>,
