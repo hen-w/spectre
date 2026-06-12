@@ -16,7 +16,6 @@ from click.testing import CliRunner
 import spectre.Informer as spectre_informer
 from spectre.support.Logging import configure_logging
 from spectre.Visualization.GenerateXdmf import (
-    _count_cells_in_mixed_connectivity,
     generate_xdmf,
     generate_xdmf_command,
 )
@@ -408,74 +407,6 @@ class TestGenerateXdmf(unittest.TestCase):
         for attr in grid.findall("Attribute"):
             if attr.attrib["Name"] == "Phi":
                 self.assertEqual(attr.attrib.get("Center"), "Node")
-
-    def test_count_cells_empty(self):
-        self.assertEqual(
-            _count_cells_in_mixed_connectivity(np.array([], dtype=np.int32)), 0
-        )
-
-    def test_count_cells_single_wedge(self):
-        # Single Wedge: tag 8 + 6 vertex indices = 7 ints → 1 cell
-        conn = np.array([8, 0, 1, 2, 3, 4, 5], dtype=np.int32)
-        self.assertEqual(_count_cells_in_mixed_connectivity(conn), 1)
-
-    def test_count_cells_mixed_hex_wedge_triangle(self):
-        # 2 Hex (tag 9, 8 verts each) + 3 Wedge (tag 8, 6 verts each)
-        # + 1 Triangle (tag 4, 3 verts) = 6 cells
-        conn = np.array(
-            [
-                9,
-                0,
-                1,
-                2,
-                3,
-                4,
-                5,
-                6,
-                7,  # Hex 1
-                9,
-                8,
-                9,
-                10,
-                11,
-                12,
-                13,
-                14,
-                15,  # Hex 2
-                8,
-                0,
-                1,
-                2,
-                4,
-                5,
-                6,  # Wedge 1
-                8,
-                1,
-                2,
-                3,
-                5,
-                6,
-                7,  # Wedge 2
-                8,
-                2,
-                3,
-                4,
-                6,
-                7,
-                8,  # Wedge 3
-                4,
-                0,
-                1,
-                2,  # Triangle
-            ],
-            dtype=np.int32,
-        )
-        self.assertEqual(_count_cells_in_mixed_connectivity(conn), 6)
-
-    def test_count_cells_invalid_type_tag(self):
-        conn = np.array([99, 0, 1, 2], dtype=np.int32)
-        with self.assertRaises(ValueError):
-            _count_cells_in_mixed_connectivity(conn)
 
     def write_wedge_h5_file(self, filename):
         """Create an H5 file with mixed Hex+Wedge connectivity."""
