@@ -50,11 +50,14 @@ def _xmf_dtype(dtype: type):
 
 
 class _ObservationCache:
-    """Cache tensor component names and dtypes across observations.
+    """Hold per-grid metadata (component names, dtypes, point and cell counts,
+    connectivity lengths) for one volume subfile.
 
-    On the first call to update(), reads all component names and dtypes
-    from the observation. On subsequent calls, only re-reads if the
-    number of datasets has changed.
+    In the default mode every observation is re-read, so a changing grid or a
+    changing set of observed fields is always reflected. In fast mode the
+    metadata is read once from the first observation and reused for all
+    subsequent observations (the caller asserts that the grid and the observed
+    variables do not change over time).
     """
 
     def __init__(self, fast_mode: bool = False):
@@ -63,31 +66,35 @@ class _ObservationCache:
         self._components = []
         self._dtypes = {}
         self._all_dataset_names = set()
-        # Grid metadata cached in fast mode
+        # Grid metadata (only reused across observations in fast mode)
         self._num_points = None
         self._number_of_cells = None
+        self._pole_number_of_cells = None
         self._connectivity_lengths = {}
 
     def update(self, observation):
+        # Only fast mode reuses metadata across observations. In the default
+        # mode the component names and dtypes are re-read on every observation
+        # so a changing set of observed fields (even at a constant dataset
+        # count) is always reflected correctly.
         if self._fast_mode and self._num_datasets is not None:
             return
-        num_datasets = len(observation)
-        if num_datasets != self._num_datasets:
-            self._num_datasets = num_datasets
-            all_names = list(observation.keys())
-            self._all_dataset_names = set(all_names)
-            self._components = [
-                name for name in all_names if name not in _NON_TENSOR_COMPONENTS
-            ]
-            self._dtypes = {
-                name: _xmf_dtype(observation[name].dtype)
-                for name in self._components
-            }
+        all_names = list(observation.keys())
+        self._num_datasets = len(all_names)
+        self._all_dataset_names = set(all_names)
+        self._components = [
+            name for name in all_names if name not in _NON_TENSOR_COMPONENTS
+        ]
+        self._dtypes = {
+            name: _xmf_dtype(observation[name].dtype)
+            for name in self._components
+        }
 
     def update_grid_metadata(self, observation, topo_dim):
-        """Cache num_points, number_of_cells, and connectivity lengths.
+        """Read num_points, cell counts, and connectivity lengths.
 
-        In fast mode, only reads from HDF5 on the first call.
+        Re-read on every observation in the default mode; read only on the
+        first call in fast mode.
         """
         if self._fast_mode and self._num_points is not None:
             return
@@ -97,6 +104,13 @@ class _ObservationCache:
         self._num_points = int(np.sum(np.prod(extents, axis=1)))
         if self.has_dataset("ElementId"):
             self._number_of_cells = observation["ElementId"].shape[0]
+            # The new mixed-topology pole-filling grid has no per-cell
+            # 'ElementId', and its cell count differs from the main grid, so it
+            # must be counted from the pole connectivity itself.
+            if self.has_dataset("pole_connectivity"):
+                self._pole_number_of_cells = _count_cells_in_mixed_connectivity(
+                    observation["pole_connectivity"][:]
+                )
         for conn_name in [
             "connectivity",
             "pole_connectivity",
@@ -114,6 +128,10 @@ class _ObservationCache:
     @property
     def number_of_cells(self):
         return self._number_of_cells
+
+    @property
+    def pole_number_of_cells(self):
+        return self._pole_number_of_cells
 
     def connectivity_length(self, name: str):
         return self._connectivity_lengths[name]
@@ -157,6 +175,22 @@ def _xmf_topology(
     )
     xmf_data_item.text = os.path.join(grid_path, connectivity_name)
     return xmf_topology
+
+
+def _count_cells_in_mixed_connectivity(connectivity):
+    """Count cells in an XDMF mixed-topology connectivity array."""
+    # Map from XDMF type integer to number of vertices per cell
+    verts_per_type = {2: 2, 4: 3, 5: 4, 8: 6, 9: 8}
+    number_of_cells = 0
+    i = 0
+    while i < len(connectivity):
+        type_tag = int(connectivity[i])
+        n_verts = verts_per_type.get(type_tag)
+        if n_verts is None:
+            raise ValueError(f"Unknown XDMF topology type tag: {type_tag}")
+        i += 1 + n_verts
+        number_of_cells += 1
+    return number_of_cells
 
 
 def _xmf_mixed_topology(
@@ -347,7 +381,7 @@ def _xmf_grid(
                 xmf_topology = _xmf_mixed_topology(
                     cache,
                     connectivity_name="pole_connectivity",
-                    number_of_cells=number_of_cells,
+                    number_of_cells=cache.pole_number_of_cells,
                     grid_path=grid_path,
                 )
             else:
