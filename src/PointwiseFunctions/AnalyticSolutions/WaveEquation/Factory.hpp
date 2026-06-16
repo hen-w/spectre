@@ -6,10 +6,12 @@
 #include "PointwiseFunctions/AnalyticSolutions/WaveEquation/PlaneWave.hpp"
 #include "PointwiseFunctions/AnalyticSolutions/WaveEquation/RegularSphericalWave.hpp"
 #include "PointwiseFunctions/AnalyticSolutions/WaveEquation/SemidiscretizedDg.hpp"
+#include "PointwiseFunctions/AnalyticSolutions/WaveEquation/SoPlaneWave.hpp"
+#include "PointwiseFunctions/AnalyticSolutions/WaveEquation/SoStandingWave.hpp"
 #include "Utilities/TMPL.hpp"
 
 namespace ScalarWave::Solutions {
-/// \brief List of all analytic solutions
+/// \brief List of all analytic solutions for the first-order scalar wave system
 template <size_t Dim>
 using all_solutions = tmpl::append<
     tmpl::list<PlaneWave<Dim>>,
@@ -17,3 +19,12 @@ using all_solutions = tmpl::append<
     tmpl::conditional_t<Dim == 3, tmpl::list<RegularSphericalWave>,
                         tmpl::list<>>>;
 }  // namespace ScalarWave::Solutions
+
+namespace SoScalarWave::Solutions {
+/// \brief List of all analytic solutions for the second-order in space scalar
+/// wave system
+template <size_t Dim>
+using all_solutions =
+    tmpl::append<tmpl::list<SoPlaneWave<Dim>, SoStandingWave<Dim>>,
+                 tmpl::list<>>;
+}  // namespace SoScalarWave::Solutions
