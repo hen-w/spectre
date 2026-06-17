@@ -104,6 +104,29 @@ template <typename T>
 using get_dg_auxiliary_boundary_terms_volume_tags_or_empty_t =
     typename get_dg_auxiliary_boundary_terms_volume_tags_or_empty<T>::type;
 
+// An evolution `System` may declare an `auxiliary_variables` type alias whose
+// first derivatives are computed in the physical DG pass and supplied to the
+// volume time-derivative terms (sourced from the auxiliary-variable storage).
+// Systems without that alias do not define it, so this "detect-or-default"
+// metafunction yields the alias when present and an empty `tmpl::list<>`
+// otherwise.
+CREATE_HAS_TYPE_ALIAS(auxiliary_variables)
+CREATE_HAS_TYPE_ALIAS_V(auxiliary_variables)
+
+template <typename T, bool = has_auxiliary_variables_v<T>>
+struct get_auxiliary_variables_or_empty {
+  using type = tmpl::list<>;
+};
+
+template <typename T>
+struct get_auxiliary_variables_or_empty<T, true> {
+  using type = typename T::auxiliary_variables;
+};
+
+template <typename T>
+using get_auxiliary_variables_or_empty_t =
+    typename get_auxiliary_variables_or_empty<T>::type;
+
 template <bool HasPrimitiveVars = false>
 struct get_primitive_vars {
   template <typename BoundaryCorrection>
