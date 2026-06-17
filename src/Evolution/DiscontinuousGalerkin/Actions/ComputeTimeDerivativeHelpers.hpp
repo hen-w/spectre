@@ -31,6 +31,79 @@ template <typename System>
 using inverse_spatial_metric_tag = typename inverse_spatial_metric_tag_impl<
     has_inverse_spatial_metric_tag_v<System>>::template f<System>;
 
+// The LDG auxiliary pass uses additional `dg_auxiliary_*` aliases on the
+// boundary correction. Non-LDG corrections do not define them, so these
+// "detect-or-default" metafunctions yield the alias when present and an empty
+// `tmpl::list<>` otherwise. This keeps both arms of `tmpl::conditional_t`
+// well-formed even when `ComputeAuxiliary` is `false`.
+CREATE_HAS_TYPE_ALIAS(dg_auxiliary_package_data_temporary_tags)
+CREATE_HAS_TYPE_ALIAS_V(dg_auxiliary_package_data_temporary_tags)
+
+template <typename T, bool = has_dg_auxiliary_package_data_temporary_tags_v<T>>
+struct get_dg_auxiliary_package_data_temporary_tags_or_empty {
+  using type = tmpl::list<>;
+};
+
+template <typename T>
+struct get_dg_auxiliary_package_data_temporary_tags_or_empty<T, true> {
+  using type = typename T::dg_auxiliary_package_data_temporary_tags;
+};
+
+template <typename T>
+using get_dg_auxiliary_package_data_temporary_tags_or_empty_t =
+    typename get_dg_auxiliary_package_data_temporary_tags_or_empty<T>::type;
+
+CREATE_HAS_TYPE_ALIAS(dg_auxiliary_package_field_tags)
+CREATE_HAS_TYPE_ALIAS_V(dg_auxiliary_package_field_tags)
+
+template <typename T, bool = has_dg_auxiliary_package_field_tags_v<T>>
+struct get_dg_auxiliary_package_field_tags_or_empty {
+  using type = tmpl::list<>;
+};
+
+template <typename T>
+struct get_dg_auxiliary_package_field_tags_or_empty<T, true> {
+  using type = typename T::dg_auxiliary_package_field_tags;
+};
+
+template <typename T>
+using get_dg_auxiliary_package_field_tags_or_empty_t =
+    typename get_dg_auxiliary_package_field_tags_or_empty<T>::type;
+
+CREATE_HAS_TYPE_ALIAS(dg_auxiliary_package_data_volume_tags)
+CREATE_HAS_TYPE_ALIAS_V(dg_auxiliary_package_data_volume_tags)
+
+template <typename T, bool = has_dg_auxiliary_package_data_volume_tags_v<T>>
+struct get_dg_auxiliary_package_data_volume_tags_or_empty {
+  using type = tmpl::list<>;
+};
+
+template <typename T>
+struct get_dg_auxiliary_package_data_volume_tags_or_empty<T, true> {
+  using type = typename T::dg_auxiliary_package_data_volume_tags;
+};
+
+template <typename T>
+using get_dg_auxiliary_package_data_volume_tags_or_empty_t =
+    typename get_dg_auxiliary_package_data_volume_tags_or_empty<T>::type;
+
+CREATE_HAS_TYPE_ALIAS(dg_auxiliary_boundary_terms_volume_tags)
+CREATE_HAS_TYPE_ALIAS_V(dg_auxiliary_boundary_terms_volume_tags)
+
+template <typename T, bool = has_dg_auxiliary_boundary_terms_volume_tags_v<T>>
+struct get_dg_auxiliary_boundary_terms_volume_tags_or_empty {
+  using type = tmpl::list<>;
+};
+
+template <typename T>
+struct get_dg_auxiliary_boundary_terms_volume_tags_or_empty<T, true> {
+  using type = typename T::dg_auxiliary_boundary_terms_volume_tags;
+};
+
+template <typename T>
+using get_dg_auxiliary_boundary_terms_volume_tags_or_empty_t =
+    typename get_dg_auxiliary_boundary_terms_volume_tags_or_empty<T>::type;
+
 template <bool HasPrimitiveVars = false>
 struct get_primitive_vars {
   template <typename BoundaryCorrection>

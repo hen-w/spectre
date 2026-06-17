@@ -149,6 +149,22 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
   using dg_boundary_terms_volume_tags = tmpl::conditional_t<
       HasPrims, tmpl::list<Tags::BoundaryCorrectionVolumeTag>, tmpl::list<>>;
 
+  // auxiliary-pass analogues of the package-data/boundary-terms aliases, copied
+  // and renamed for the LDG auxiliary communication pass. Note: there is no
+  // auxiliary primitive-tags alias because the production code projects the
+  // primitive vars using the physical `dg_package_data_primitive_tags` even in
+  // the auxiliary pass.
+  using dg_auxiliary_package_field_tags = tmpl::push_back<
+      tmpl::append<db::wrap_tags_in<::Tags::NormalDotFlux, variables_tags>,
+                   variables_tags>,
+      MaxAbsCharSpeed>;
+  using dg_auxiliary_package_data_temporary_tags =
+      tmpl::list<Tags::Var3Squared>;
+  using dg_auxiliary_package_data_volume_tags = tmpl::conditional_t<
+      HasPrims, tmpl::list<Tags::BoundaryCorrectionVolumeTag>, tmpl::list<>>;
+  using dg_auxiliary_boundary_terms_volume_tags = tmpl::conditional_t<
+      HasPrims, tmpl::list<Tags::BoundaryCorrectionVolumeTag>, tmpl::list<>>;
+
   // Conservative system, flat background
   double dg_package_data(
       const gsl::not_null<Scalar<DataVector>*> out_normal_dot_flux_var1,
@@ -708,6 +724,572 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
                       int_var1, int_var2, int_max_abs_char_speed,
                       ext_normal_dot_flux_var1, ext_normal_dot_flux_var2,
                       ext_var1, ext_var2, ext_max_abs_char_speed, formulation);
+  }
+
+  // auxiliary-pass analogues of the dg_package_data / dg_boundary_terms
+  // overloads, copied and renamed for the LDG auxiliary communication pass.
+  // dg_auxiliary_package_data returns `double` exactly like the physical one.
+
+  // Conservative system, flat background
+  double dg_auxiliary_package_data(
+      const gsl::not_null<Scalar<DataVector>*> out_normal_dot_flux_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
+          out_normal_dot_flux_var2,
+      const gsl::not_null<Scalar<DataVector>*> out_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
+      const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+
+      const Scalar<DataVector>& var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& flux_var1,
+      const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
+
+      const Scalar<DataVector>& var3_squared,
+
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+      const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+          mesh_velocity,
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+    if (mesh_velocity.has_value()) {
+      REQUIRE(normal_dot_mesh_velocity.has_value());
+      CHECK_ITERABLE_APPROX(*normal_dot_mesh_velocity,
+                            dot_product(normal_covector, *mesh_velocity));
+    }
+
+    *out_normal_dot_flux_var1 = dot_product(flux_var1, normal_covector);
+    if (mesh_velocity.has_value()) {
+      get(*out_normal_dot_flux_var1) -=
+          get(var1) * get(dot_product(*mesh_velocity, normal_covector));
+    }
+    for (size_t i = 0; i < Dim; ++i) {
+      out_normal_dot_flux_var2->get(i) =
+          flux_var2.get(i, 0) * normal_covector.get(0);
+      if (mesh_velocity.has_value()) {
+        out_normal_dot_flux_var2->get(i) -=
+            var2.get(i) * get<0>(*mesh_velocity) * normal_covector.get(0);
+      }
+      for (size_t j = 1; j < Dim; ++j) {
+        out_normal_dot_flux_var2->get(i) +=
+            flux_var2.get(i, j) * normal_covector.get(j);
+        if (mesh_velocity.has_value()) {
+          out_normal_dot_flux_var2->get(i) -=
+              var2.get(i) * mesh_velocity->get(j) * normal_covector.get(j);
+        }
+      }
+    }
+    *out_var1 = var1;
+    *out_var2 = var2;
+
+    get(*max_abs_char_speed) = 2.0 * max(get(var3_squared));
+
+    if (normal_dot_mesh_velocity.has_value()) {
+      get(*max_abs_char_speed) += get(*normal_dot_mesh_velocity);
+    }
+    return max(get(*max_abs_char_speed));
+  }
+
+  // Conservative system, curved background
+  double dg_auxiliary_package_data(
+      const gsl::not_null<Scalar<DataVector>*> out_normal_dot_flux_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
+          out_normal_dot_flux_var2,
+      const gsl::not_null<Scalar<DataVector>*> out_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
+      const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+
+      const Scalar<DataVector>& var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& flux_var1,
+      const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
+
+      const Scalar<DataVector>& var3_squared,
+
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& normal_vector,
+      const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+          mesh_velocity,
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+    CHECK_ITERABLE_APPROX(get(dot_product(normal_covector, normal_vector)),
+                          DataVector(get(var1).size(), 1.0));
+    return dg_auxiliary_package_data(
+        out_normal_dot_flux_var1, out_normal_dot_flux_var2, out_var1, out_var2,
+        max_abs_char_speed, var1, var2, flux_var1, flux_var2, var3_squared,
+        normal_covector, mesh_velocity, normal_dot_mesh_velocity);
+  }
+
+  // Conservative system with prim vars, flat background
+  double dg_auxiliary_package_data(
+      const gsl::not_null<Scalar<DataVector>*> out_normal_dot_flux_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
+          out_normal_dot_flux_var2,
+      const gsl::not_null<Scalar<DataVector>*> out_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
+      const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+
+      const Scalar<DataVector>& var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& flux_var1,
+      const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
+
+      const Scalar<DataVector>& var3_squared,
+      const Scalar<DataVector>& prim_var1,
+
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+      const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+          mesh_velocity,
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+
+      const double volume_number) const {
+    dg_auxiliary_package_data(
+        out_normal_dot_flux_var1, out_normal_dot_flux_var2, out_var1, out_var2,
+        max_abs_char_speed, var1, var2, flux_var1, flux_var2, var3_squared,
+        normal_covector, mesh_velocity, normal_dot_mesh_velocity);
+    get(*out_var1) += get(prim_var1) + volume_number;
+    if (mesh_velocity.has_value()) {
+      get(*out_normal_dot_flux_var1) -=
+          (get(prim_var1) + volume_number) *
+          get(dot_product(*mesh_velocity, normal_covector));
+    }
+    return max(get(*max_abs_char_speed));
+  }
+
+  // Conservative system with prim vars, curved background
+  double dg_auxiliary_package_data(
+      const gsl::not_null<Scalar<DataVector>*> out_normal_dot_flux_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
+          out_normal_dot_flux_var2,
+      const gsl::not_null<Scalar<DataVector>*> out_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
+      const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+
+      const Scalar<DataVector>& var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& flux_var1,
+      const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
+
+      const Scalar<DataVector>& var3_squared,
+      const Scalar<DataVector>& prim_var1,
+
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& normal_vector,
+      const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+          mesh_velocity,
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+
+      const double volume_number) const {
+    CHECK_ITERABLE_APPROX(get(dot_product(normal_covector, normal_vector)),
+                          DataVector(get(var1).size(), 1.0));
+    return dg_auxiliary_package_data(
+        out_normal_dot_flux_var1, out_normal_dot_flux_var2, out_var1, out_var2,
+        max_abs_char_speed, var1, var2, flux_var1, flux_var2, var3_squared,
+        prim_var1, normal_covector, mesh_velocity, normal_dot_mesh_velocity,
+        volume_number);
+  }
+
+  // Nonconservative system, flat background
+  double dg_auxiliary_package_data(
+      const gsl::not_null<Scalar<DataVector>*> out_normal_dot_flux_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
+          out_normal_dot_flux_var2,
+      const gsl::not_null<Scalar<DataVector>*> out_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
+      const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+
+      const Scalar<DataVector>& var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+
+      const Scalar<DataVector>& var3_squared,
+
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+      const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+          mesh_velocity,
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+    if (mesh_velocity.has_value()) {
+      REQUIRE(normal_dot_mesh_velocity.has_value());
+      CHECK_ITERABLE_APPROX(*normal_dot_mesh_velocity,
+                            dot_product(normal_covector, *mesh_velocity));
+    }
+
+    get(*out_normal_dot_flux_var1) =
+        get(var1) + get(dot_product(var2, normal_covector));
+    if (mesh_velocity.has_value()) {
+      get(*out_normal_dot_flux_var1) -=
+          get(dot_product(*mesh_velocity, normal_covector));
+    }
+    for (size_t i = 0; i < Dim; ++i) {
+      out_normal_dot_flux_var2->get(i) =
+          normal_covector.get(i) * normal_covector.get(0) * var2.get(0);
+      if (mesh_velocity.has_value()) {
+        out_normal_dot_flux_var2->get(i) -=
+            var2.get(i) * get<0>(*mesh_velocity) * normal_covector.get(0);
+      }
+      for (size_t j = 1; j < Dim; ++j) {
+        out_normal_dot_flux_var2->get(i) +=
+            normal_covector.get(i) * normal_covector.get(j) * var2.get(j);
+        if (mesh_velocity.has_value()) {
+          out_normal_dot_flux_var2->get(i) -=
+              var2.get(i) * mesh_velocity->get(j) * normal_covector.get(j);
+        }
+      }
+    }
+    *out_var1 = var1;
+    *out_var2 = var2;
+
+    get(*max_abs_char_speed) = 2.0 * max(get(var3_squared));
+
+    if (normal_dot_mesh_velocity.has_value()) {
+      get(*max_abs_char_speed) += get(*normal_dot_mesh_velocity);
+    }
+    return max(get(*max_abs_char_speed));
+  }
+
+  // Nonconservative system, curved background
+  double dg_auxiliary_package_data(
+      const gsl::not_null<Scalar<DataVector>*> out_normal_dot_flux_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
+          out_normal_dot_flux_var2,
+      const gsl::not_null<Scalar<DataVector>*> out_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
+      const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+
+      const Scalar<DataVector>& var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+
+      const Scalar<DataVector>& var3_squared,
+
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& normal_vector,
+      const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+          mesh_velocity,
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+    CHECK_ITERABLE_APPROX(get(dot_product(normal_covector, normal_vector)),
+                          DataVector(get(var1).size(), 1.0));
+    return dg_auxiliary_package_data(
+        out_normal_dot_flux_var1, out_normal_dot_flux_var2, out_var1, out_var2,
+        max_abs_char_speed, var1, var2, var3_squared, normal_covector,
+        mesh_velocity, normal_dot_mesh_velocity);
+  }
+
+  // Mixed system, no prims, flat background
+  double dg_auxiliary_package_data(
+      const gsl::not_null<Scalar<DataVector>*> out_normal_dot_flux_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
+          out_normal_dot_flux_var2,
+      const gsl::not_null<Scalar<DataVector>*> out_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
+      const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+
+      const Scalar<DataVector>& var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+
+      const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
+
+      const Scalar<DataVector>& var3_squared,
+
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+      const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+          mesh_velocity,
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+    if (mesh_velocity.has_value()) {
+      REQUIRE(normal_dot_mesh_velocity.has_value());
+      CHECK_ITERABLE_APPROX(*normal_dot_mesh_velocity,
+                            dot_product(normal_covector, *mesh_velocity));
+    }
+
+    get(*out_normal_dot_flux_var1) =
+        get(var1) + get(dot_product(var2, normal_covector));
+    if (mesh_velocity.has_value()) {
+      get(*out_normal_dot_flux_var1) -=
+          get(dot_product(*mesh_velocity, normal_covector));
+    }
+    for (size_t i = 0; i < Dim; ++i) {
+      out_normal_dot_flux_var2->get(i) =
+          flux_var2.get(i, 0) * normal_covector.get(0);
+      if (mesh_velocity.has_value()) {
+        out_normal_dot_flux_var2->get(i) -=
+            var2.get(i) * get<0>(*mesh_velocity) * normal_covector.get(0);
+      }
+      for (size_t j = 1; j < Dim; ++j) {
+        out_normal_dot_flux_var2->get(i) +=
+            flux_var2.get(i, j) * normal_covector.get(j);
+        if (mesh_velocity.has_value()) {
+          out_normal_dot_flux_var2->get(i) -=
+              var2.get(i) * mesh_velocity->get(j) * normal_covector.get(j);
+        }
+      }
+    }
+    *out_var1 = var1;
+    *out_var2 = var2;
+
+    get(*max_abs_char_speed) = 2.0 * max(get(var3_squared));
+
+    if (normal_dot_mesh_velocity.has_value()) {
+      get(*max_abs_char_speed) += get(*normal_dot_mesh_velocity);
+    }
+    return max(get(*max_abs_char_speed));
+  }
+
+  // Mixed system, no prims, curved background
+  double dg_auxiliary_package_data(
+      const gsl::not_null<Scalar<DataVector>*> out_normal_dot_flux_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
+          out_normal_dot_flux_var2,
+      const gsl::not_null<Scalar<DataVector>*> out_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
+      const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+
+      const Scalar<DataVector>& var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+
+      const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
+
+      const Scalar<DataVector>& var3_squared,
+
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& normal_vector,
+      const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+          mesh_velocity,
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+    CHECK_ITERABLE_APPROX(get(dot_product(normal_covector, normal_vector)),
+                          DataVector(get(var1).size(), 1.0));
+    return dg_auxiliary_package_data(
+        out_normal_dot_flux_var1, out_normal_dot_flux_var2, out_var1, out_var2,
+        max_abs_char_speed, var1, var2, flux_var2, var3_squared,
+        normal_covector, mesh_velocity, normal_dot_mesh_velocity);
+  }
+
+  // Mixed system with prims, flat background
+  double dg_auxiliary_package_data(
+      const gsl::not_null<Scalar<DataVector>*> out_normal_dot_flux_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
+          out_normal_dot_flux_var2,
+      const gsl::not_null<Scalar<DataVector>*> out_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
+      const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+
+      const Scalar<DataVector>& var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+
+      const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
+
+      const Scalar<DataVector>& var3_squared,
+
+      const Scalar<DataVector>& prim_var1,
+
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+      const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+          mesh_velocity,
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+
+      const double volume_number) const {
+    dg_auxiliary_package_data(
+        out_normal_dot_flux_var1, out_normal_dot_flux_var2, out_var1, out_var2,
+        max_abs_char_speed, var1, var2, flux_var2, var3_squared,
+        normal_covector, mesh_velocity, normal_dot_mesh_velocity);
+    get(*out_var1) += get(prim_var1) + volume_number;
+    return max(get(*max_abs_char_speed));
+  }
+
+  // Mixed system with prims, curved background
+  double dg_auxiliary_package_data(
+      const gsl::not_null<Scalar<DataVector>*> out_normal_dot_flux_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
+          out_normal_dot_flux_var2,
+      const gsl::not_null<Scalar<DataVector>*> out_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
+      const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+
+      const Scalar<DataVector>& var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+
+      const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
+
+      const Scalar<DataVector>& var3_squared,
+
+      const Scalar<DataVector>& prim_var1,
+
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& normal_vector,
+      const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+          mesh_velocity,
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
+
+      const double volume_number) const {
+    CHECK_ITERABLE_APPROX(get(dot_product(normal_covector, normal_vector)),
+                          DataVector(get(var1).size(), 1.0));
+    return dg_auxiliary_package_data(
+        out_normal_dot_flux_var1, out_normal_dot_flux_var2, out_var1, out_var2,
+        max_abs_char_speed, var1, var2, flux_var2, var3_squared, prim_var1,
+        normal_covector, mesh_velocity, normal_dot_mesh_velocity,
+        volume_number);
+  }
+
+  void dg_auxiliary_boundary_terms(
+      const gsl::not_null<Scalar<DataVector>*> boundary_correction_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
+          boundary_correction_var2,
+      const Scalar<DataVector>& int_normal_dot_flux_var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& int_normal_dot_flux_var2,
+      const Scalar<DataVector>& int_var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& int_var2,
+      const Scalar<DataVector>& int_max_abs_char_speed,
+      const Scalar<DataVector>& ext_normal_dot_flux_var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& ext_normal_dot_flux_var2,
+      const Scalar<DataVector>& ext_var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& ext_var2,
+      const Scalar<DataVector>& ext_max_abs_char_speed,
+      const dg::Formulation formulation) const {
+    static_assert(Dim == 1,
+                  "Flux dot normal assumes 1d, mostly because normal vector is "
+                  "assumed to be 1d.");
+
+    get(*boundary_correction_var1) =
+        offset_boundary_correction *
+        (formulation == dg::Formulation::WeakInertial ? 2.0 : 1.0);
+    for (size_t i = 0; i < Dim; ++i) {
+      boundary_correction_var2->get(i) = offset_boundary_correction + 1.0 + i;
+    }
+    const size_t num_pts = get(int_var1).size();
+
+    const double mesh_velocity = mesh_is_moving_ ? 1.2 : 0.0;
+    const double normalization_factor =
+        HasInverseSpatialMetric ? sqrt(offset_temporaries + 1.0) : 1.0;
+    if (SysType == SystemType::Conservative) {
+      CHECK_ITERABLE_APPROX(
+          get(int_normal_dot_flux_var1),
+          DataVector(sign_of_normal_ / normalization_factor *
+                     (offset_volume_fluxes - mesh_velocity * get(int_var1))));
+    } else {
+      CHECK_ITERABLE_APPROX(
+          get(int_normal_dot_flux_var1),
+          DataVector(offset_evolved_vars +
+                     sign_of_normal_ / normalization_factor * get<0>(int_var2) -
+                     sign_of_normal_ / normalization_factor * mesh_velocity));
+    }
+
+    if (SysType == SystemType::Conservative) {
+      for (size_t i = 0; i < Dim; ++i) {
+        CHECK_ITERABLE_APPROX(
+            int_normal_dot_flux_var2.get(i),
+            DataVector(sign_of_normal_ / normalization_factor *
+                       (offset_volume_fluxes + 1.0 + i -
+                        mesh_velocity * int_var2.get(i))));
+      }
+    } else if (SysType == SystemType::Mixed) {
+      for (size_t i = 0; i < Dim; ++i) {
+        CHECK_ITERABLE_APPROX(
+            int_normal_dot_flux_var2.get(i),
+            DataVector(
+                sign_of_normal_ / normalization_factor *
+                (offset_volume_fluxes + i - mesh_velocity * int_var2.get(i))));
+      }
+    } else {
+      for (size_t i = 0; i < Dim; ++i) {
+        DataVector expected{num_pts, 0.0};
+        for (size_t j = 0; j < Dim; ++j) {
+          expected += int_var2.get(j) /
+                          square(normalization_factor)  // n_i n_j var2^j, bot
+                                                        // n_i = (\pm 1) in 1d
+                      - sign_of_normal_ / normalization_factor *
+                            int_var2.get(i) * mesh_velocity;  // var2^i v^j n_j
+        }
+        CHECK_ITERABLE_APPROX(int_normal_dot_flux_var2.get(i), expected);
+      }
+    }
+    CHECK_ITERABLE_APPROX(
+        get(int_var1),
+        DataVector(num_pts,
+                   offset_evolved_vars +
+                       (HasPrims ? offset_primitive_vars + 3.5 : 0.0)));
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(int_var2.get(i),
+                            DataVector(num_pts, offset_evolved_vars + 1.0 + i));
+    }
+    CHECK_ITERABLE_APPROX(
+        get(int_max_abs_char_speed),
+        DataVector(num_pts,
+                   2.0 * offset_temporaries +
+                       sign_of_normal_ / normalization_factor * mesh_velocity));
+
+    if (SysType == SystemType::Conservative) {
+      // The two comes from the dg_package_data also subtracting off the mesh
+      // velocity.
+      CHECK_ITERABLE_APPROX(
+          get(ext_normal_dot_flux_var1),
+          DataVector{-sign_of_normal_ / normalization_factor *
+                     (offset_boundary_condition + 1.0 + Dim -
+                      2 * mesh_velocity * offset_boundary_condition -
+                      (HasPrims ? mesh_velocity * (offset_boundary_condition +
+                                                   3.0 + 2 * Dim + 3.5)
+                                : 0.0))});
+    } else {
+      CHECK_ITERABLE_APPROX(
+          get(ext_normal_dot_flux_var1),
+          DataVector(
+              (offset_boundary_condition -
+               sign_of_normal_ / normalization_factor * get<0>(ext_var2) +
+               sign_of_normal_ / normalization_factor * mesh_velocity)));
+    }
+    if (SysType == SystemType::Conservative or SysType == SystemType::Mixed) {
+      for (size_t i = 0; i < Dim; ++i) {
+        CHECK_ITERABLE_APPROX(
+            ext_normal_dot_flux_var2.get(i),
+            DataVector(-sign_of_normal_ / normalization_factor *
+                       (offset_boundary_condition + 2.0 + Dim + i -
+                        2.0 * mesh_velocity * ext_var2.get(i))));
+      }
+    } else {
+      static_assert(Dim == 1);
+      CHECK_ITERABLE_APPROX(
+          get<0>(ext_normal_dot_flux_var2),
+          DataVector((get<0>(ext_var2) / square(normalization_factor) +
+                      sign_of_normal_ / normalization_factor *
+                          get<0>(ext_var2) * mesh_velocity)));
+    }
+    CHECK_ITERABLE_APPROX(
+        get(ext_var1),
+        DataVector(num_pts, offset_boundary_condition +
+                                (HasPrims ? offset_boundary_condition +
+                                                2.0 * Dim + 3.0 + 3.5
+                                          : 0.0)));
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(
+          ext_var2.get(i),
+          DataVector(num_pts, offset_boundary_condition + 1.0 + i));
+    }
+    CHECK_ITERABLE_APPROX(
+        get(ext_max_abs_char_speed),
+        DataVector(num_pts,
+                   2.0 * (offset_boundary_condition + 2.0 + 2 * Dim) -
+                       sign_of_normal_ / normalization_factor * mesh_velocity));
+  }
+
+  void dg_auxiliary_boundary_terms(
+      const gsl::not_null<Scalar<DataVector>*> boundary_correction_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
+          boundary_correction_var2,
+      const Scalar<DataVector>& int_normal_dot_flux_var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& int_normal_dot_flux_var2,
+      const Scalar<DataVector>& int_var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& int_var2,
+      const Scalar<DataVector>& int_max_abs_char_speed,
+      const Scalar<DataVector>& ext_normal_dot_flux_var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& ext_normal_dot_flux_var2,
+      const Scalar<DataVector>& ext_var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& ext_var2,
+      const Scalar<DataVector>& ext_max_abs_char_speed,
+      const dg::Formulation formulation, const double& volume_number) const {
+    CHECK(volume_number == 3.5);
+    dg_auxiliary_boundary_terms(
+        boundary_correction_var1, boundary_correction_var2,
+        int_normal_dot_flux_var1, int_normal_dot_flux_var2, int_var1, int_var2,
+        int_max_abs_char_speed, ext_normal_dot_flux_var1,
+        ext_normal_dot_flux_var2, ext_var1, ext_var2, ext_max_abs_char_speed,
+        formulation);
   }
 
  private:
@@ -2612,6 +3194,503 @@ void test_1d(const bool moving_mesh, const dg::Formulation formulation,
   check_ghost_and_dt_combined_bc(Direction<Dim>::lower_xi());
 }
 
+// auxiliary-pass analogue of test_1d
+template <typename System, size_t Dim = System::volume_dim>
+void test_auxiliary_1d(const bool moving_mesh,
+                       const dg::Formulation formulation,
+                       const Spectral::Quadrature quadrature) {
+  CAPTURE(moving_mesh);
+  CAPTURE(formulation);
+  CAPTURE(quadrature);
+  CAPTURE(System::has_primitive_and_conservative_vars);
+  CAPTURE(System::system_type);
+  // gcc-8 complains that there are no definitions for the destructors of None
+  // and Periodic. We can generate them via explicit instantiations or by just
+  // creating an empty dummy object.
+  [[maybe_unused]] const domain::BoundaryConditions::None<
+      BoundaryCondition<System>>
+      instantiate_none_for_gcc_8{};
+  [[maybe_unused]] const domain::BoundaryConditions::Periodic<
+      BoundaryCondition<System>>
+      instantiate_periodic_for_gcc_8{};
+  static_assert(System::volume_dim == 1);
+
+  using dt_variables_tag =
+      db::add_tag_prefix<::Tags::dt, typename System::variables_tag>;
+  const Mesh<Dim> mesh{5, Spectral::Basis::Legendre, quadrature};
+  const ElementId<Dim> self_id{0, {{{1, 0}}}};
+  const Element<Dim> element{self_id, {}};
+  ElementMap<Dim, Frame::Grid> element_map{
+      self_id,
+      domain::make_coordinate_map_base<Frame::BlockLogical, Frame::Grid>(
+          domain::CoordinateMaps::Identity<Dim>{})};
+  auto grid_to_inertial_map =
+      domain::make_coordinate_map_base<Frame::Grid, Frame::Inertial>(
+          domain::CoordinateMaps::Identity<Dim>{});
+  const double time{1.2};
+  std::unordered_map<std::string,
+                     std::unique_ptr<domain::FunctionsOfTime::FunctionOfTime>>
+      functions_of_time{};
+  std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>> mesh_velocity{};
+  if (moving_mesh) {
+    const std::array<double, 3> velocities = {{1.2, -1.4, 0.3}};
+    mesh_velocity =
+        tnsr::I<DataVector, Dim, Frame::Inertial>{mesh.number_of_grid_points()};
+    for (size_t i = 0; i < Dim; ++i) {
+      mesh_velocity->get(i) = gsl::at(velocities, i);
+    }
+  }
+  // Set the Jacobian to not be the identity because otherwise bugs creep in
+  // easily.
+  ::InverseJacobian<DataVector, Dim, Frame::ElementLogical, Frame::Inertial>
+      inv_jacobian{mesh.number_of_grid_points(), 0.0};
+  for (size_t i = 0; i < Dim; ++i) {
+    inv_jacobian.get(i, i) = 2.0;
+  }
+  const auto det_inv_jacobian = determinant(inv_jacobian);
+  DirectionMap<Dim, std::optional<Variables<
+                        tmpl::list<evolution::dg::Tags::MagnitudeOfNormal,
+                                   evolution::dg::Tags::NormalCovector<Dim>>>>>
+      normal_covector_and_magnitude{};
+  normal_covector_and_magnitude[Direction<Dim>::lower_xi()] = std::nullopt;
+  normal_covector_and_magnitude[Direction<Dim>::upper_xi()] = std::nullopt;
+  const double boundary_condition_volume_tag_number{2.5};
+  const double boundary_correction_volume_tag_number{3.5};
+
+  Variables<
+      db::wrap_tags_in<::Tags::dt, typename System::variables_tag::tags_list>>
+      dt_evolved_vars{mesh.number_of_grid_points()};
+  fill_variables(make_not_null(&dt_evolved_vars), offset_dt_evolved_vars);
+  Variables<typename System::variables_tag::tags_list> evolved_vars{
+      mesh.number_of_grid_points()};
+  fill_variables(make_not_null(&evolved_vars), offset_evolved_vars);
+  Variables<
+      typename System::compute_volume_time_derivative_terms::temporary_tags>
+      temporaries{mesh.number_of_grid_points()};
+  fill_variables(make_not_null(&temporaries), offset_temporaries);
+  Variables<db::wrap_tags_in<::Tags::Flux, typename System::flux_variables,
+                             tmpl::size_t<Dim>, Frame::Inertial>>
+      volume_fluxes{mesh.number_of_grid_points()};
+  fill_variables(make_not_null(&volume_fluxes), offset_volume_fluxes);
+  Variables<db::wrap_tags_in<::Tags::deriv, typename System::gradient_variables,
+                             tmpl::size_t<Dim>, Frame::Inertial>>
+      partial_derivs{mesh.number_of_grid_points()};
+  fill_variables(make_not_null(&partial_derivs), offset_partial_derivs);
+  Variables<tmpl::conditional_t<
+      System::has_primitive_and_conservative_vars,
+      typename System::primitive_variables_tag::tags_list, tmpl::list<>>>
+      primitive_vars{mesh.number_of_grid_points()};
+  fill_variables(make_not_null(&primitive_vars), offset_primitive_vars);
+  const Variables<tmpl::conditional_t<
+      System::has_primitive_and_conservative_vars,
+      typename System::primitive_variables_tag::tags_list, tmpl::list<>>>*
+      primitive_vars_ptr =
+          System::has_primitive_and_conservative_vars ? &primitive_vars
+                                                      : nullptr;
+  constexpr bool has_prims = System::has_primitive_and_conservative_vars;
+  using BndryTerms = BoundaryTerms<Dim, has_prims, System::system_type,
+                                   System::has_inverse_spatial_metric>;
+
+  Domain<Dim> domain{};
+  std::vector<DirectionMap<
+      Dim, std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>
+      external_boundary_conditions{1};
+  {
+    // For the initial tests, set the boundary conditions to:
+    // lower_xi: DemandOutgoingCharSpeeds
+    // upper_xi: DemandOutgoingCharSpeeds
+    external_boundary_conditions[0][Direction<Dim>::lower_xi()] =
+        std::make_unique<DemandOutgoingCharSpeeds<System>>(moving_mesh);
+    external_boundary_conditions[0][Direction<Dim>::upper_xi()] =
+        std::make_unique<DemandOutgoingCharSpeeds<System>>(moving_mesh);
+    domain = Domain<Dim>{make_vector(Block<Dim>{
+        domain::make_coordinate_map_base<Frame::BlockLogical, Frame::Inertial>(
+            domain::CoordinateMaps::Identity<Dim>{}),
+        0,
+        {}})};
+    domain.inject_time_dependent_map_for_block(
+        0, grid_to_inertial_map->get_clone());
+  }
+
+  using simple_tags = tmpl::list<
+      Parallel::Tags::MetavariablesImpl<Metavariables<System>>,
+      domain::Tags::Domain<Dim>, domain::Tags::ExternalBoundaryConditions<Dim>,
+      domain::Tags::Mesh<Dim>, domain::Tags::Element<Dim>,
+      domain::Tags::ElementMap<Dim, Frame::Grid>,
+      domain::CoordinateMaps::Tags::CoordinateMap<Dim, Frame::Grid,
+                                                  Frame::Inertial>,
+      ::Tags::Time, domain::Tags::FunctionsOfTimeInitialize,
+      domain::Tags::MeshVelocity<Dim>,
+      domain::Tags::InverseJacobian<Dim, Frame::ElementLogical,
+                                    Frame::Inertial>,
+      domain::Tags::DetInvJacobian<Frame::ElementLogical, Frame::Inertial>,
+      evolution::dg::Tags::NormalCovectorAndMagnitude<Dim>,
+      typename System::variables_tag, dt_variables_tag,
+      Tags::BoundaryConditionVolumeTag, Tags::BoundaryCorrectionVolumeTag,
+      ::dg::Tags::Formulation>;
+  using compute_tags = tmpl::list<>;
+
+  auto box = db::create<simple_tags, compute_tags>(
+      Metavariables<System>{}, std::move(domain),
+      std::move(external_boundary_conditions), mesh, element,
+      std::move(element_map), grid_to_inertial_map->get_clone(), time,
+      clone_unique_ptrs(functions_of_time), mesh_velocity, inv_jacobian,
+      det_inv_jacobian, normal_covector_and_magnitude, evolved_vars,
+      dt_evolved_vars, boundary_condition_volume_tag_number,
+      boundary_correction_volume_tag_number, formulation);
+
+  {
+    INFO("DemandOutgoingCharSpeeds only");
+    // DemandOutgoingCharSpeeds both sides, evolved vars in volume shouldn't
+    // change (no boundary correction is lifted).
+    // Deviation: ComputeAuxiliary=true, so the auxiliary pass is exercised.
+    evolution::dg::Actions::detail::
+        apply_boundary_conditions_on_all_external_faces<
+            System, Dim, /*ComputeAuxiliary=*/true>(
+            make_not_null(&box), BndryTerms{moving_mesh, 0.0}, temporaries,
+            volume_fluxes, partial_derivs, primitive_vars_ptr);
+    // Deviation: assert the evolved variables (variables_tag), not the time
+    // derivatives, are unchanged.
+    CHECK_ITERABLE_APPROX(
+        get(get<Tags::Var1>(box)),
+        DataVector(mesh.number_of_grid_points(), offset_evolved_vars));
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(get<Tags::Var2<Dim>>(box).get(i),
+                            DataVector(mesh.number_of_grid_points(),
+                                       offset_evolved_vars + 1 + i));
+    }
+  }
+
+  const auto expected_ghost_correction = [&box, &formulation,
+                                          &mesh](const auto& ghost_direction) {
+    Variables<tmpl::list<::Tags::dt<Tags::Var1>, ::Tags::dt<Tags::Var2<Dim>>>>
+        expected_on_boundary{mesh.slice_away(ghost_direction.dimension())
+                                 .number_of_grid_points()};
+    get(get<::Tags::dt<Tags::Var1>>(expected_on_boundary)) =
+        offset_boundary_correction *
+        (formulation == dg::Formulation::WeakInertial ? 2.0 : 1.0);
+    for (size_t i = 0; i < Dim; ++i) {
+      get<::Tags::dt<Tags::Var2<Dim>>>(expected_on_boundary).get(i) =
+          offset_boundary_correction + 1.0 + i;
+    }
+    // lift into volume and add to volume evolved variables
+    Variables<tmpl::list<::Tags::dt<Tags::Var1>, ::Tags::dt<Tags::Var2<Dim>>>>
+        expected_volume_correction{mesh.number_of_grid_points(), 0.0};
+    const Scalar<DataVector>& volume_det_inv_jacobian = db::get<
+        domain::Tags::DetInvJacobian<Frame::ElementLogical, Frame::Inertial>>(
+        box);
+    const Scalar<DataVector>& magnitude_of_interior_face_normal =
+        get<evolution::dg::Tags::MagnitudeOfNormal>(
+            *db::get<evolution::dg::Tags::NormalCovectorAndMagnitude<Dim>>(box)
+                 .at(ghost_direction));
+    if (mesh.quadrature(ghost_direction.dimension()) ==
+        Spectral::Quadrature::Gauss) {
+      Scalar<DataVector> face_det_inv_jacobian{
+          mesh.slice_away(ghost_direction.dimension()).number_of_grid_points()};
+      const Matrix identity{};
+      auto interpolation_matrices = make_array<Dim>(std::cref(identity));
+      const std::pair<Matrix, Matrix>& matrices =
+          Spectral::boundary_interpolation_matrices(
+              mesh.slice_through(ghost_direction.dimension()));
+      gsl::at(interpolation_matrices, ghost_direction.dimension()) =
+          ghost_direction.side() == Side::Upper ? matrices.second
+                                                : matrices.first;
+      apply_matrices(make_not_null(&get(face_det_inv_jacobian)),
+                     interpolation_matrices, get(volume_det_inv_jacobian),
+                     mesh.extents());
+      Scalar<DataVector> face_det_jacobian{1.0 / get(face_det_inv_jacobian)};
+
+      ::dg::lift_boundary_terms_gauss_points(
+          make_not_null(&expected_volume_correction), volume_det_inv_jacobian,
+          mesh, ghost_direction, expected_on_boundary,
+          magnitude_of_interior_face_normal, face_det_jacobian);
+    } else {
+      ::dg::lift_flux(make_not_null(&expected_on_boundary),
+                      mesh.extents(ghost_direction.dimension()),
+                      magnitude_of_interior_face_normal,
+                      mesh.basis(ghost_direction.dimension()));
+      add_slice_to_data(make_not_null(&expected_volume_correction),
+                        expected_on_boundary, mesh.extents(),
+                        ghost_direction.dimension(),
+                        index_to_slice_at(mesh.extents(), ghost_direction));
+    }
+    return expected_volume_correction;
+  };
+
+  const auto check_outgoing_and_ghost = [&box, &evolved_vars,
+                                         &expected_ghost_correction,
+                                         &moving_mesh, &partial_derivs,
+                                         &primitive_vars_ptr, &temporaries,
+                                         &volume_fluxes](
+                                            const Direction<Dim>&
+                                                outgoing_direction) {
+    INFO("Ghost");
+    CAPTURE(outgoing_direction);
+    // Deviation: reset the evolved variables (variables_tag) rather than the
+    // time derivatives, since the auxiliary correction is lifted into them.
+    db::mutate<domain::Tags::ExternalBoundaryConditions<Dim>,
+               typename System::variables_tag>(
+        [&moving_mesh, &outgoing_direction](const auto all_boundary_conditions,
+                                            const auto vars_ptr) {
+          DirectionMap<Dim, std::unique_ptr<
+                                domain::BoundaryConditions::BoundaryCondition>>
+              boundary_conditions{};
+          boundary_conditions[outgoing_direction.opposite()] =
+              std::make_unique<Ghost<System>>(moving_mesh);
+          boundary_conditions[outgoing_direction] =
+              std::make_unique<DemandOutgoingCharSpeeds<System>>(moving_mesh);
+          (*all_boundary_conditions)[0] = std::move(boundary_conditions);
+
+          fill_variables(vars_ptr, offset_evolved_vars);
+        },
+        make_not_null(&box));
+    // Deviation: ComputeAuxiliary=true.
+    evolution::dg::Actions::detail::
+        apply_boundary_conditions_on_all_external_faces<
+            System, Dim, /*ComputeAuxiliary=*/true>(
+            make_not_null(&box),
+            BndryTerms{moving_mesh, outgoing_direction.opposite().sign()},
+            temporaries, volume_fluxes, partial_derivs, primitive_vars_ptr);
+
+    // Deviation: the lifted correction is added to the evolved variables.
+    auto expected_evolved_vars = evolved_vars;
+    expected_evolved_vars +=
+        expected_ghost_correction(outgoing_direction.opposite());
+    CHECK_ITERABLE_APPROX(get(get<Tags::Var1>(box)),
+                          get(get<Tags::Var1>(expected_evolved_vars)));
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(get<Tags::Var2<Dim>>(box).get(i),
+                            get<Tags::Var2<Dim>>(expected_evolved_vars).get(i));
+    }
+  };
+  // DemandOutgoingCharSpeeds +xi, Ghost -xi
+  check_outgoing_and_ghost(Direction<Dim>::upper_xi());
+  // Ghost +xi, DemandOutgoingCharSpeeds -xi
+  check_outgoing_and_ghost(Direction<Dim>::lower_xi());
+
+  // Auxiliary analogue of test_1d's check_outgoing_and_dt. One side carries a
+  // pure TimeDerivative (dt-condition) boundary condition and the other a
+  // DemandOutgoingCharSpeeds boundary condition. In the auxiliary pass the
+  // dg_time_derivative path is guarded by `not ComputeAuxiliary` and is
+  // therefore skipped, so dt_variables_tag is left untouched. Neither boundary
+  // condition `uses_ghost_condition` (TimeDerivative has
+  // bc_type::TimeDerivative and DemandOutgoingCharSpeeds has
+  // bc_type::DemandOutgoingCharSpeeds), so no auxiliary correction is lifted
+  // into the volume variables_tag either: the auxiliary pass is a complete
+  // no-op here. This asserts the actual production behavior.
+  const auto check_outgoing_and_dt = [&box, &dt_evolved_vars, &evolved_vars,
+                                      &moving_mesh, &partial_derivs,
+                                      &primitive_vars_ptr, &temporaries,
+                                      &volume_fluxes](const Direction<Dim>&
+                                                          outgoing_direction) {
+    INFO("TimeDerivative");
+    CAPTURE(outgoing_direction);
+    // Reset both the evolved variables (variables_tag) and the time
+    // derivatives (dt_variables_tag) to a known baseline so that both the
+    // "untouched" checks below start from a known state.
+    db::mutate<domain::Tags::ExternalBoundaryConditions<Dim>,
+               typename System::variables_tag, dt_variables_tag>(
+        [&moving_mesh, &outgoing_direction](const auto all_boundary_conditions,
+                                            const auto vars_ptr,
+                                            const auto dt_vars_ptr) {
+          DirectionMap<Dim, std::unique_ptr<
+                                domain::BoundaryConditions::BoundaryCondition>>
+              boundary_conditions{};
+          boundary_conditions[outgoing_direction.opposite()] =
+              std::make_unique<TimeDerivative<System>>(moving_mesh,
+                                                       offset_dt_evolved_vars);
+          boundary_conditions[outgoing_direction] =
+              std::make_unique<DemandOutgoingCharSpeeds<System>>(moving_mesh);
+          (*all_boundary_conditions)[0] = std::move(boundary_conditions);
+
+          fill_variables(vars_ptr, offset_evolved_vars);
+          fill_variables(dt_vars_ptr, offset_dt_evolved_vars);
+        },
+        make_not_null(&box));
+    // Deviation: ComputeAuxiliary=true, so the auxiliary pass is exercised.
+    evolution::dg::Actions::detail::
+        apply_boundary_conditions_on_all_external_faces<
+            System, Dim, /*ComputeAuxiliary=*/true>(
+            make_not_null(&box),
+            BndryTerms{moving_mesh, outgoing_direction.opposite().sign()},
+            temporaries, volume_fluxes, partial_derivs, primitive_vars_ptr);
+
+    // (a) Neither boundary condition uses a ghost condition, so no
+    // auxiliary correction is lifted: the evolved variables are untouched.
+    CHECK_ITERABLE_APPROX(get(get<Tags::Var1>(box)),
+                          get(get<Tags::Var1>(evolved_vars)));
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(get<Tags::Var2<Dim>>(box).get(i),
+                            get<Tags::Var2<Dim>>(evolved_vars).get(i));
+    }
+    // (b) The dg_time_derivative path is skipped in the auxiliary pass, so
+    // the time derivatives are left untouched.
+    CHECK_ITERABLE_APPROX(get(get<::Tags::dt<Tags::Var1>>(box)),
+                          get(get<::Tags::dt<Tags::Var1>>(dt_evolved_vars)));
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(
+          get<::Tags::dt<Tags::Var2<Dim>>>(box).get(i),
+          get<::Tags::dt<Tags::Var2<Dim>>>(dt_evolved_vars).get(i));
+    }
+  };
+  // DemandOutgoingCharSpeeds +xi, TimeDerivative -xi
+  check_outgoing_and_dt(Direction<Dim>::upper_xi());
+  // DemandOutgoingCharSpeeds -xi, TimeDerivative +xi
+  check_outgoing_and_dt(Direction<Dim>::lower_xi());
+
+  // Auxiliary analogue of test_1d's check_ghost_and_dt_opposite. One side
+  // carries a Ghost boundary condition and the opposite side a pure
+  // TimeDerivative (dt-condition) boundary condition. In the auxiliary pass:
+  // - the Ghost side `uses_ghost_condition`, so its auxiliary boundary
+  //   correction IS lifted into the evolved variables_tag, exactly as in the
+  //   other auxiliary ghost scenarios;
+  // - the TimeDerivative side does not use a ghost condition, and the
+  //   dg_time_derivative path is guarded by `not ComputeAuxiliary`, so it
+  //   contributes nothing and dt_variables_tag is left untouched.
+  // This asserts the actual production behavior: dt untouched, volume variables
+  // modified on the ghost side.
+  const auto check_ghost_and_dt_opposite = [&box, &dt_evolved_vars,
+                                            &evolved_vars,
+                                            &expected_ghost_correction,
+                                            &moving_mesh, &partial_derivs,
+                                            &primitive_vars_ptr, &temporaries,
+                                            &volume_fluxes](
+                                               const Direction<Dim>&
+                                                   ghost_direction) {
+    INFO("Ghost and TimeDerivative on opposite sides");
+    CAPTURE(ghost_direction);
+    // Reset both the evolved variables (variables_tag), into which the
+    // auxiliary ghost correction is lifted, and the time derivatives
+    // (dt_variables_tag), which must remain untouched by the auxiliary
+    // pass.
+    db::mutate<domain::Tags::ExternalBoundaryConditions<Dim>,
+               typename System::variables_tag, dt_variables_tag>(
+        [&moving_mesh, &ghost_direction](const auto all_boundary_conditions,
+                                         const auto vars_ptr,
+                                         const auto dt_vars_ptr) {
+          DirectionMap<Dim, std::unique_ptr<
+                                domain::BoundaryConditions::BoundaryCondition>>
+              boundary_conditions{};
+          boundary_conditions[ghost_direction.opposite()] =
+              std::make_unique<TimeDerivative<System>>(moving_mesh,
+                                                       offset_dt_evolved_vars);
+          boundary_conditions[ghost_direction] =
+              std::make_unique<Ghost<System>>(moving_mesh);
+          (*all_boundary_conditions)[0] = std::move(boundary_conditions);
+
+          fill_variables(vars_ptr, offset_evolved_vars);
+          fill_variables(dt_vars_ptr, offset_dt_evolved_vars);
+        },
+        make_not_null(&box));
+    // Deviation: ComputeAuxiliary=true, so the auxiliary pass is exercised.
+    evolution::dg::Actions::detail::
+        apply_boundary_conditions_on_all_external_faces<
+            System, Dim, /*ComputeAuxiliary=*/true>(
+            make_not_null(&box),
+            BndryTerms{moving_mesh, ghost_direction.sign()}, temporaries,
+            volume_fluxes, partial_derivs, primitive_vars_ptr);
+
+    // (a) The auxiliary ghost correction is lifted into the evolved
+    // variables on the ghost side, exactly as in the other auxiliary ghost
+    // scenarios. The TimeDerivative side contributes nothing.
+    auto expected_evolved_vars = evolved_vars;
+    expected_evolved_vars += expected_ghost_correction(ghost_direction);
+    CHECK_ITERABLE_APPROX(get(get<Tags::Var1>(box)),
+                          get(get<Tags::Var1>(expected_evolved_vars)));
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(get<Tags::Var2<Dim>>(box).get(i),
+                            get<Tags::Var2<Dim>>(expected_evolved_vars).get(i));
+    }
+    // (b) The dg_time_derivative path is skipped in the auxiliary pass, so
+    // the time derivatives are left untouched.
+    CHECK_ITERABLE_APPROX(get(get<::Tags::dt<Tags::Var1>>(box)),
+                          get(get<::Tags::dt<Tags::Var1>>(dt_evolved_vars)));
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(
+          get<::Tags::dt<Tags::Var2<Dim>>>(box).get(i),
+          get<::Tags::dt<Tags::Var2<Dim>>>(dt_evolved_vars).get(i));
+    }
+  };
+  // Ghost +xi, TimeDerivative -xi
+  check_ghost_and_dt_opposite(Direction<Dim>::upper_xi());
+  // Ghost -xi, TimeDerivative +xi
+  check_ghost_and_dt_opposite(Direction<Dim>::lower_xi());
+
+  // Auxiliary analogue of test_1d's check_ghost_and_dt_combined_bc. The
+  // GhostAndTimeDerivative boundary condition supplies BOTH ghost data and a
+  // dg_time_derivative condition. In the auxiliary pass the ghost part's
+  // auxiliary boundary correction is lifted into the evolved variables_tag,
+  // while the dg_time_derivative path is guarded by `not ComputeAuxiliary` in
+  // the production code and therefore skipped: this means dt_variables_tag must
+  // be left untouched. This is the key behavior under test.
+  const auto check_ghost_and_dt_combined_bc = [&box, &evolved_vars,
+                                               &expected_ghost_correction,
+                                               &mesh, &moving_mesh,
+                                               &partial_derivs,
+                                               &primitive_vars_ptr,
+                                               &temporaries, &volume_fluxes](
+                                                  const Direction<Dim>&
+                                                      outgoing_direction) {
+    INFO("GhostAndTimeDerivative combined on one side");
+    CAPTURE(outgoing_direction);
+    // Reset both the evolved variables (variables_tag), into which the
+    // auxiliary ghost correction is lifted, and the time derivatives
+    // (dt_variables_tag), which must remain untouched by the auxiliary
+    // pass.
+    db::mutate<domain::Tags::ExternalBoundaryConditions<Dim>,
+               typename System::variables_tag, dt_variables_tag>(
+        [&moving_mesh, &outgoing_direction](const auto all_boundary_conditions,
+                                            const auto vars_ptr,
+                                            const auto dt_vars_ptr) {
+          DirectionMap<Dim, std::unique_ptr<
+                                domain::BoundaryConditions::BoundaryCondition>>
+              boundary_conditions{};
+          boundary_conditions[outgoing_direction.opposite()] =
+              std::make_unique<GhostAndTimeDerivative<System>>(moving_mesh);
+          boundary_conditions[outgoing_direction] =
+              std::make_unique<DemandOutgoingCharSpeeds<System>>(moving_mesh);
+          (*all_boundary_conditions)[0] = std::move(boundary_conditions);
+
+          fill_variables(vars_ptr, offset_evolved_vars);
+          fill_variables(dt_vars_ptr, offset_dt_evolved_vars);
+        },
+        make_not_null(&box));
+    // Deviation: ComputeAuxiliary=true, so the auxiliary pass is exercised.
+    evolution::dg::Actions::detail::
+        apply_boundary_conditions_on_all_external_faces<
+            System, Dim, /*ComputeAuxiliary=*/true>(
+            make_not_null(&box),
+            BndryTerms{moving_mesh, outgoing_direction.opposite().sign()},
+            temporaries, volume_fluxes, partial_derivs, primitive_vars_ptr);
+
+    // (a) The auxiliary ghost correction is lifted into the evolved
+    // variables, exactly as in the other auxiliary ghost scenarios.
+    auto expected_evolved_vars = evolved_vars;
+    expected_evolved_vars +=
+        expected_ghost_correction(outgoing_direction.opposite());
+    CHECK_ITERABLE_APPROX(get(get<Tags::Var1>(box)),
+                          get(get<Tags::Var1>(expected_evolved_vars)));
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(get<Tags::Var2<Dim>>(box).get(i),
+                            get<Tags::Var2<Dim>>(expected_evolved_vars).get(i));
+    }
+    // (b) The dg_time_derivative path is skipped in the auxiliary pass, so
+    // the time derivatives are left untouched.
+    CHECK_ITERABLE_APPROX(
+        get(get<::Tags::dt<Tags::Var1>>(box)),
+        DataVector(mesh.number_of_grid_points(), offset_dt_evolved_vars));
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(get<::Tags::dt<Tags::Var2<Dim>>>(box).get(i),
+                            DataVector(mesh.number_of_grid_points(),
+                                       offset_dt_evolved_vars + 1 + i));
+    }
+  };
+  // DemandOutgoingCharSpeeds +xi, GhostAndTimeDerivative -xi
+  check_ghost_and_dt_combined_bc(Direction<Dim>::upper_xi());
+  // DemandOutgoingCharSpeeds -xi, GhostAndTimeDerivative +xi
+  check_ghost_and_dt_combined_bc(Direction<Dim>::lower_xi());
+}
+
 void test_cartoon_mesh_compatibility() {
   INFO("Test that non-cartoon mesh throws with cartoon boundary conditions");
 
@@ -2807,6 +3886,36 @@ SPECTRE_TEST_CASE("Unit.Evolution.DG.ComputeTimeDerivative.BoundaryConditions",
         test_1d<System<1, SystemType::Mixed, false, true>>(
             moving_mesh, formulation, quadrature);
         test_1d<System<1, SystemType::Mixed, true, true>>(
+            moving_mesh, formulation, quadrature);
+
+        // auxiliary-pass analogues across the same System configurations
+        // last template parameter on System being `false` means flat background
+        test_auxiliary_1d<System<1, SystemType::Conservative, false, false>>(
+            moving_mesh, formulation, quadrature);
+        test_auxiliary_1d<System<1, SystemType::Conservative, true, false>>(
+            moving_mesh, formulation, quadrature);
+
+        test_auxiliary_1d<System<1, SystemType::Nonconservative, false, false>>(
+            moving_mesh, formulation, quadrature);
+
+        test_auxiliary_1d<System<1, SystemType::Mixed, false, false>>(
+            moving_mesh, formulation, quadrature);
+        test_auxiliary_1d<System<1, SystemType::Mixed, true, false>>(
+            moving_mesh, formulation, quadrature);
+
+        // last template parameter on System being `true` means curved
+        // background
+        test_auxiliary_1d<System<1, SystemType::Conservative, false, true>>(
+            moving_mesh, formulation, quadrature);
+        test_auxiliary_1d<System<1, SystemType::Conservative, true, true>>(
+            moving_mesh, formulation, quadrature);
+
+        test_auxiliary_1d<System<1, SystemType::Nonconservative, false, true>>(
+            moving_mesh, formulation, quadrature);
+
+        test_auxiliary_1d<System<1, SystemType::Mixed, false, true>>(
+            moving_mesh, formulation, quadrature);
+        test_auxiliary_1d<System<1, SystemType::Mixed, true, true>>(
             moving_mesh, formulation, quadrature);
       }
     }

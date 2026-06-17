@@ -131,6 +131,92 @@ void test() {
   CHECK(inbox.set_missing_messages(1));
 }
 
+// auxiliary-pass analogue of test
+template <size_t Dim, bool UseNodegroupDgElements>
+void test_auxiliary() {
+  CAPTURE(Dim);
+  CAPTURE(UseNodegroupDgElements);
+
+  const Slab slab(1.2, 3.4);
+  const TimeStepId time_step_1(true, 5, slab.start());
+  const TimeStepId time_step_2 =
+      time_step_1.next_substep(slab.duration() / 2, 0.3);
+  const TimeStepId time_step_3 = time_step_2.next_step(slab.duration() / 2);
+  const TimeStepId time_step_4 =
+      time_step_3.next_substep(slab.duration() / 2, 0.3);
+
+  const ElementId<Dim> element_upper(2);
+  const ElementId<Dim> element_lower(4);
+  const DirectionalId<Dim> mortar_upper{Direction<Dim>::upper_xi(),
+                                        element_upper};
+  const DirectionalId<Dim> mortar_lower{Direction<Dim>::lower_xi(),
+                                        element_lower};
+
+  // Deviation: use the auxiliary-pass inbox tag (IsAuxiliary=true).
+  using Inbox = evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
+      Dim, UseNodegroupDgElements, /*IsAuxiliary=*/true>;
+
+  typename Inbox::type inbox{};
+
+  const auto data_upper_1 =
+      make_boundary_data<Dim>(0, time_step_2, SendType::AllData);
+  CHECK(not Inbox::insert_into_inbox(&inbox, time_step_1,
+                                     std::pair{mortar_upper, data_upper_1}));
+  inbox.collect_messages();
+  const auto data_lower_2 =
+      make_boundary_data<Dim>(1, time_step_3, SendType::DgData);
+  CHECK(not Inbox::insert_into_inbox(&inbox, time_step_2,
+                                     std::pair{mortar_lower, data_lower_2}));
+
+  CHECK(not inbox.set_missing_messages(3));
+
+  const auto data_lower_3 =
+      make_boundary_data<Dim>(2, time_step_4, SendType::DgData);
+  CHECK(not Inbox::insert_into_inbox(&inbox, time_step_3,
+                                     std::pair{mortar_lower, data_lower_3}));
+  const auto data_lower_1 =
+      make_boundary_data<Dim>(3, time_step_2, SendType::DgData);
+  CHECK(Inbox::insert_into_inbox(&inbox, time_step_1,
+                                 std::pair{mortar_lower, data_lower_1}));
+  const auto data_upper_3 =
+      make_boundary_data<Dim>(4, time_step_4, SendType::GhostData);
+  CHECK(not Inbox::insert_into_inbox(&inbox, time_step_3,
+                                     std::pair{mortar_upper, data_upper_3}));
+
+  inbox.collect_messages();
+
+  CHECK(inbox.messages.size() == 3);
+  {
+    const auto& time1_messages = inbox.messages.at(time_step_1);
+    CHECK(time1_messages.size() == 2);
+    CHECK(alg::find(time1_messages, std::pair{mortar_upper, data_upper_1}) !=
+          time1_messages.end());
+    CHECK(alg::find(time1_messages, std::pair{mortar_lower, data_lower_1}) !=
+          time1_messages.end());
+  }
+  {
+    const auto& time2_messages = inbox.messages.at(time_step_2);
+    CHECK(time2_messages.size() == 1);
+    CHECK(alg::find(time2_messages, std::pair{mortar_lower, data_lower_2}) !=
+          time2_messages.end());
+  }
+  {
+    const auto& time3_messages = inbox.messages.at(time_step_3);
+    CHECK(time3_messages.size() == 2);
+    CHECK(alg::find(time3_messages, std::pair{mortar_upper, data_upper_3}) !=
+          time3_messages.end());
+    CHECK(alg::find(time3_messages, std::pair{mortar_lower, data_lower_3}) !=
+          time3_messages.end());
+  }
+
+  const auto data_upper_2 =
+      make_boundary_data<Dim>(5, time_step_2, SendType::GhostData);
+  CHECK(not Inbox::insert_into_inbox(&inbox, time_step_2,
+                                     std::pair{mortar_upper, data_upper_3}));
+
+  CHECK(inbox.set_missing_messages(1));
+}
+
 SPECTRE_TEST_CASE("Unit.Evolution.DG.InboxTags", "[Unit][Evolution]") {
   test<1, false>();
   test<2, false>();
@@ -138,5 +224,11 @@ SPECTRE_TEST_CASE("Unit.Evolution.DG.InboxTags", "[Unit][Evolution]") {
   test<1, true>();
   test<2, true>();
   test<3, true>();
+  test_auxiliary<1, false>();
+  test_auxiliary<2, false>();
+  test_auxiliary<3, false>();
+  test_auxiliary<1, true>();
+  test_auxiliary<2, true>();
+  test_auxiliary<3, true>();
 }
 }  // namespace
