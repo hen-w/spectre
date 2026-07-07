@@ -19,8 +19,6 @@
 
 /// \cond
 class DataVector;
-template <size_t Dim>
-class Direction;
 namespace gsl {
 template <typename T>
 class not_null;
@@ -90,8 +88,8 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
       /*mesh_velocity*/,
-      const std::optional<Scalar<DataVector>>& /*normal_dot_mesh_velocity*/,
-      const Direction<Dim>& /*face_direction*/) const;
+      const std::optional<Scalar<DataVector>>& /*normal_dot_mesh_velocity*/)
+      const;
 
   template <bool ForExternalBoundary = false>
   void dg_boundary_terms(
@@ -127,8 +125,8 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
       /*mesh_velocity*/,
-      const std::optional<Scalar<DataVector>>& /*normal_dot_mesh_velocity*/,
-      const Direction<Dim>& /*face_direction*/) const;
+      const std::optional<Scalar<DataVector>>& /*normal_dot_mesh_velocity*/)
+      const;
 
   void dg_auxiliary_boundary_terms(
       gsl::not_null<Scalar<DataVector>*> psi_boundary_correction,

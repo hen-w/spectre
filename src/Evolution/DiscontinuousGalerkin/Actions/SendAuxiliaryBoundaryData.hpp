@@ -17,6 +17,9 @@
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Variables.hpp"
 #include "DataStructures/VariablesTag.hpp"
+#include "Domain/BoundaryConditions/Cartoon.hpp"
+#include "Domain/BoundaryConditions/None.hpp"
+#include "Domain/BoundaryConditions/Periodic.hpp"
 #include "Domain/Structure/Element.hpp"
 #include "Domain/Tags.hpp"
 #include "Evolution/BoundaryCorrection.hpp"
@@ -111,9 +114,18 @@ struct auxiliary_send_reads_only_initialized_face_data {
   using derived_boundary_corrections =
       tmpl::at<typename Metavariables::factory_creation::factory_classes,
                evolution::BoundaryCorrection>;
-  using derived_boundary_conditions =
+  // Mirror the physical boundary-condition path (BoundaryConditionsImpl.hpp):
+  // the Cartoon/None/Periodic marker conditions are handled specially and do
+  // not declare the interior-data interface (e.g. dg_interior_temporary_tags),
+  // so they are excluded before inspecting that interface.
+  using derived_boundary_conditions = tmpl::remove_if<
       tmpl::at<typename Metavariables::factory_creation::factory_classes,
-               typename EvolutionSystem::boundary_conditions_base>;
+               typename EvolutionSystem::boundary_conditions_base>,
+      tmpl::or_<
+          std::is_base_of<domain::BoundaryConditions::MarkAsCartoon, tmpl::_1>,
+          std::is_base_of<domain::BoundaryConditions::MarkAsNone, tmpl::_1>,
+          std::is_base_of<domain::BoundaryConditions::MarkAsPeriodic,
+                          tmpl::_1>>>;
 
   // (3) Volume temporaries the boundary corrections would project.
   using all_correction_volume_temporary_tags = tmpl::flatten<

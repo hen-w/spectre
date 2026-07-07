@@ -10,7 +10,6 @@
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
-#include "Domain/Structure/Direction.hpp"
 #include "Evolution/BoundaryCorrection.hpp"
 #include "Evolution/Systems/SoScalarWave/BoundaryCorrections/LaxFriedrichs.hpp"
 #include "Evolution/Systems/SoScalarWave/System.hpp"
@@ -46,10 +45,9 @@ void test_package_data(const gsl::not_null<std::mt19937*> gen) {
 
   Scalar<DataVector> packaged_pi{num_pts};
   Scalar<DataVector> packaged_normal_dot_phi{num_pts};
-  correction.dg_package_data(make_not_null(&packaged_pi),
-                             make_not_null(&packaged_normal_dot_phi), psi, pi,
-                             phi, boundary_psi, normal_covector, std::nullopt,
-                             std::nullopt, Direction<Dim>::upper_xi());
+  correction.dg_package_data(
+      make_not_null(&packaged_pi), make_not_null(&packaged_normal_dot_phi), psi,
+      pi, phi, boundary_psi, normal_covector, std::nullopt, std::nullopt);
 
   // Check pi is just copied
   CHECK_ITERABLE_APPROX(get(packaged_pi), get(pi));
@@ -136,8 +134,7 @@ void test_auxiliary_package_data(const gsl::not_null<std::mt19937*> gen) {
 
   correction.dg_auxiliary_package_data(
       make_not_null(&packaged_psi), make_not_null(&psi_times_normal), psi, pi,
-      phi, boundary_psi, normal_covector, std::nullopt, std::nullopt,
-      Direction<Dim>::upper_xi());
+      phi, boundary_psi, normal_covector, std::nullopt, std::nullopt);
 
   // Check psi is just copied
   CHECK_ITERABLE_APPROX(get(packaged_psi), get(psi));
@@ -228,8 +225,7 @@ void test_factory_creation() {
   normal.get(0) = 1.0;
   serialized.dg_package_data(make_not_null(&packaged_pi),
                              make_not_null(&packaged_ndphi), psi, pi, phi,
-                             boundary_psi, normal, std::nullopt, std::nullopt,
-                             Direction<Dim>::upper_xi());
+                             boundary_psi, normal, std::nullopt, std::nullopt);
   CHECK(get(packaged_pi)[0] == approx(2.0));
   CHECK(get(packaged_ndphi)[0] == approx(3.0));
 }

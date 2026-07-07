@@ -8,7 +8,6 @@
 
 #include <optional>
 #include <pup.h>
-#include "Domain/Structure/Direction.hpp"
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
@@ -52,8 +51,8 @@ double LaxFriedrichs<Dim>::dg_package_data(
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
     const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
     /*mesh_velocity*/,
-    const std::optional<Scalar<DataVector>>& /*normal_dot_mesh_velocity*/,
-    const Direction<Dim>& /*face_direction*/) const {
+    const std::optional<Scalar<DataVector>>& /*normal_dot_mesh_velocity*/)
+    const {
   get(*packaged_pi) = get(pi);
   get(*packaged_normal_dot_phi) = 0.0;
   for (size_t d = 0; d < Dim; ++d) {
@@ -104,8 +103,8 @@ double LaxFriedrichs<Dim>::dg_auxiliary_package_data(
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
     const std::optional<
         tnsr::I<DataVector, Dim, Frame::Inertial>>& /*mesh_velocity*/,
-    const std::optional<Scalar<DataVector>>& /*normal_dot_mesh_velocity*/,
-    const Direction<Dim>& /*face_direction*/) const {
+    const std::optional<Scalar<DataVector>>& /*normal_dot_mesh_velocity*/)
+    const {
   get(*packaged_psi) = get(psi);
   for (size_t d = 0; d < Dim; ++d) {
     psi_times_normal->get(d) = get(psi) * normal_covector.get(d);

@@ -11,6 +11,7 @@ set(LIBRARY_SOURCES
   Test_Characteristics.cpp
   Test_Tags.cpp
   Test_TimeDerivative.cpp
+  Test_UpdateAuxiliaryVariables.cpp
   )
 
 add_test_library(${LIBRARY} "${LIBRARY_SOURCES}")

@@ -7,7 +7,6 @@ spectre_target_sources(
   BoundaryCondition.cpp
   DirichletAnalytic.cpp
   DirichletCharacteristics.cpp
-  TimeDerivativeDirichlet.cpp
   )
 
 spectre_target_headers(
@@ -18,5 +17,4 @@ spectre_target_headers(
   DirichletAnalytic.hpp
   DirichletCharacteristics.hpp
   Factory.hpp
-  TimeDerivativeDirichlet.hpp
   )
