@@ -164,6 +164,34 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
     }
     CHECK(volume_tag == 10);
   }
+
+  // LDG auxiliary interface. We package only the variables themselves (a
+  // smaller and structurally different package than the physical
+  // `dg_package_field_tags`) and produce a deterministic correction that is
+  // easy to distinguish from the physical path: a simple average of the
+  // interior and exterior variables. The auxiliary pass writes this into the
+  // dt-prefixed Variables buffer, which is then lifted into `variables_tag`.
+  using dg_auxiliary_package_field_tags = tmpl::list<Var1, Var2<Dim>>;
+  using dg_auxiliary_package_data_temporary_tags = tmpl::list<>;
+  using dg_auxiliary_package_data_volume_tags = tmpl::list<>;
+  using dg_auxiliary_boundary_terms_volume_tags = tmpl::list<>;
+
+  void dg_auxiliary_boundary_terms(
+      const gsl::not_null<Scalar<DataVector>*> boundary_correction_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
+          boundary_correction_var2,
+      const Scalar<DataVector>& interior_var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& interior_var2,
+      const Scalar<DataVector>& exterior_var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& exterior_var2,
+      const dg::Formulation /*dg_formulation*/) const {
+    get(*boundary_correction_var1) =
+        0.5 * (get(interior_var1) + get(exterior_var1));
+    for (size_t i = 0; i < Dim; ++i) {
+      boundary_correction_var2->get(i) =
+          0.5 * (interior_var2.get(i) + exterior_var2.get(i));
+    }
+  }
 };
 
 template <size_t Dim>
@@ -1080,6 +1108,337 @@ void test() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// LDG auxiliary boundary corrections (GTS-only)
+// ---------------------------------------------------------------------------
+
+template <typename Metavariables>
+struct AuxiliaryComponent {
+  using metavariables = Metavariables;
+  using chare_type = ActionTesting::MockArrayChare;
+  using array_index = ElementId<Metavariables::volume_dim>;
+  static constexpr bool local_time_stepping = false;
+
+  using simple_tags = tmpl::list<
+      VolumeTag, ::Tags::TimeStepId, ::Tags::Next<::Tags::TimeStepId>,
+      ::Tags::TimeStep, Tags::ConcreteTimeStepper<TimeStepper>,
+      db::add_tag_prefix<::Tags::dt,
+                         typename Metavariables::system::variables_tag>,
+      typename Metavariables::system::variables_tag,
+      domain::Tags::Mesh<Metavariables::volume_dim>,
+      domain::Tags::Element<Metavariables::volume_dim>,
+      domain::Tags::Coordinates<Metavariables::volume_dim, Frame::Inertial>,
+      domain::Tags::InverseJacobian<Metavariables::volume_dim,
+                                    Frame::ElementLogical, Frame::Inertial>,
+      evolution::dg::Tags::Quadrature,
+      domain::Tags::NeighborMesh<Metavariables::volume_dim>,
+      Filters::Tags::SpectralFilter<
+          Metavariables::volume_dim,
+          typename Metavariables::system::variables_tag::tags_list>,
+      ::Tags::StepNumberWithinSlab,
+      domain::Tags::Jacobian<Metavariables::volume_dim, Frame::Grid,
+                             Frame::Inertial>,
+      domain::Tags::InverseJacobian<Metavariables::volume_dim, Frame::Grid,
+                                    Frame::Inertial>>;
+  using compute_tags = tmpl::push_back<
+      time_stepper_ref_tags<TimeStepper>,
+      domain::Tags::JacobianCompute<Metavariables::volume_dim,
+                                    Frame::ElementLogical, Frame::Inertial>,
+      domain::Tags::DetInvJacobianCompute<
+          Metavariables::volume_dim, Frame::ElementLogical, Frame::Inertial>>;
+
+  using aux_action =
+      ::evolution::dg::Actions::ApplyAuxiliaryBoundaryCorrectionsToVariables<
+          Metavariables::volume_dim, Metavariables::use_nodegroup_dg_elements>;
+
+  using phase_dependent_action_list = tmpl::list<
+      Parallel::PhaseActions<
+          Parallel::Phase::Initialization,
+          tmpl::list<
+              ActionTesting::InitializeDataBox<simple_tags, compute_tags>,
+              ::evolution::dg::Initialization::Mortars<
+                  Metavariables::volume_dim>>>,
+      Parallel::PhaseActions<Parallel::Phase::Testing, tmpl::list<aux_action>>>;
+};
+
+template <size_t Dim, bool UseNodegroupDgElements>
+struct AuxiliaryMetavariables {
+  static constexpr size_t volume_dim = Dim;
+  static constexpr bool local_time_stepping = false;
+  static constexpr bool use_nodegroup_dg_elements = UseNodegroupDgElements;
+  using system = System<Dim, TestHelpers::SystemType::Conservative>;
+  using const_global_cache_tags =
+      tmpl::list<domain::Tags::Domain<Dim>, domain::Tags::InitialExtents<Dim>>;
+  struct factory_creation
+      : tt::ConformsTo<Options::protocols::FactoryCreation> {
+    using factory_classes =
+        tmpl::map<tmpl::pair<evolution::BoundaryCorrection,
+                             tmpl::list<BoundaryTerms<Dim>>>>;
+  };
+
+  using component_list = tmpl::list<AuxiliaryComponent<AuxiliaryMetavariables>>;
+};
+
+// Conforming GTS auxiliary test. We set up a single conforming neighbor in the
+// +xi direction with matching meshes (so no projection is needed), inject the
+// neighbor's auxiliary data on the auxiliary inbox channel, run
+// `ApplyAuxiliaryBoundaryCorrectionsToVariables`, and check that the lifted
+// auxiliary correction lands in `variables_tag` (not the dt-variables).
+template <size_t Dim, bool UseNodegroupDgElements>
+void test_auxiliary_conforming(const Spectral::Quadrature quadrature,
+                               const ::dg::Formulation dg_formulation) {
+  CAPTURE(Dim);
+  CAPTURE(quadrature);
+  CAPTURE(dg_formulation);
+  using metavars = AuxiliaryMetavariables<Dim, UseNodegroupDgElements>;
+  register_factory_classes_with_charm<metavars>();
+  using comp = AuxiliaryComponent<metavars>;
+  using MockRuntimeSystem = ActionTesting::MockRuntimeSystem<metavars>;
+  using variables_tag = typename metavars::system::variables_tag;
+  using variables_tags = typename variables_tag::tags_list;
+  using dt_variables_tag = db::add_tag_prefix<::Tags::dt, variables_tag>;
+  // The auxiliary boundary-correction package consists of the variables
+  // themselves (Var1, Var2).
+  using aux_mortar_tags_list =
+      typename BoundaryTerms<Dim>::dg_auxiliary_package_field_tags;
+  constexpr size_t number_of_aux_components =
+      Variables<aux_mortar_tags_list>::number_of_independent_components;
+
+  const TimeSteppers::AdamsBashforth time_stepper{1};
+
+  DirectionMap<Dim, Neighbors<Dim>> neighbors{};
+  ElementId<Dim> self_id{};
+  ElementId<Dim> east_id{};
+  if constexpr (Dim == 1) {
+    self_id = ElementId<Dim>{0, {{{1, 0}}}};
+    east_id = ElementId<Dim>{0, {{{1, 1}}}};
+  } else if constexpr (Dim == 2) {
+    self_id = ElementId<Dim>{0, {{{1, 0}, {0, 0}}}};
+    east_id = ElementId<Dim>{0, {{{1, 1}, {0, 0}}}};
+  } else {
+    static_assert(Dim == 3, "Only implemented tests in 1, 2, and 3d");
+    self_id = ElementId<Dim>{0, {{{1, 0}, {0, 0}, {0, 0}}}};
+    east_id = ElementId<Dim>{0, {{{1, 1}, {0, 0}, {0, 0}}}};
+  }
+  neighbors[Direction<Dim>::upper_xi()] =
+      Neighbors<Dim>{{east_id}, OrientationMap<Dim>::create_aligned()};
+  const DirectionalId<Dim> mortar_id{Direction<Dim>::upper_xi(), east_id};
+  const Element<Dim> element{self_id, neighbors};
+
+  std::vector<Block<Dim>> blocks{1};
+  blocks[0] = Block<Dim>(nullptr, element.id().block_id(), {});
+  Domain<Dim> domain{std::move(blocks)};
+  MockRuntimeSystem runner{{std::move(domain),
+                            std::vector<std::array<size_t, Dim>>{
+                                make_array<Dim>(1_st), make_array<Dim>(1_st)},
+                            std::make_unique<BoundaryTerms<Dim>>(),
+                            dg_formulation}};
+
+  const size_t number_of_grid_points_per_dimension = 5;
+  const Mesh<Dim> mesh{number_of_grid_points_per_dimension,
+                       Spectral::Basis::Legendre, quadrature};
+  typename domain::Tags::NeighborMesh<Dim>::type neighbor_mesh{};
+  neighbor_mesh[mortar_id] = mesh;
+
+  ::InverseJacobian<DataVector, Dim, Frame::ElementLogical, Frame::Inertial>
+      inv_jac{mesh.number_of_grid_points(), 0.0};
+  for (size_t i = 0; i < Dim; ++i) {
+    inv_jac.get(i, i) = 2.0;
+  }
+  const auto det_inv_jacobian = determinant(inv_jac);
+
+  const auto logical_coords = logical_coordinates(mesh);
+  tnsr::I<DataVector, Dim, Frame::Inertial> inertial_coords{};
+  for (size_t i = 0; i < logical_coords.size(); ++i) {
+    inertial_coords[i] = logical_coords[i];
+  }
+
+  Variables<db::wrap_tags_in<::Tags::dt, variables_tags>> dt_evolved_vars{
+      mesh.number_of_grid_points(), 0.0};
+  Variables<variables_tags> evolved_vars{mesh.number_of_grid_points(), 0.0};
+
+  const TimeDelta time_step{Slab{0.2, 3.4}, {1, 4}};
+  // The auxiliary pass processes data at the current temporal id, and
+  // `MortarNextTemporalId` is initialized from `Next<TimeStepId>`.  We
+  // therefore use the same id for both so the auxiliary mortar data is
+  // processed (mirroring the LDG ordering where the auxiliary pass runs while
+  // `MortarNextTemporalId` is still at the current id).
+  const TimeStepId time_step_id{true, 3, Time{Slab{0.2, 3.4}, {2, 4}}};
+  const TimeStepId& next_time_step_id = time_step_id;
+
+  register_classes_with_charm<Filters::None<Dim, variables_tags>>();
+
+  ActionTesting::emplace_component_and_initialize<comp>(
+      &runner, self_id,
+      {10, time_step_id, next_time_step_id, time_step,
+       std::make_unique<TimeSteppers::AdamsBashforth>(time_stepper),
+       dt_evolved_vars, evolved_vars, mesh, element, inertial_coords, inv_jac,
+       quadrature, neighbor_mesh,
+       // No filtering so the exact lifted-value assertions below remain valid.
+       std::unique_ptr<Filters::Filter<Dim, variables_tags>>{
+           std::make_unique<Filters::None<Dim, variables_tags>>(std::nullopt)},
+       static_cast<uint64_t>(0),
+       Jacobian<DataVector, Dim, Frame::Grid, Frame::Inertial>{},
+       InverseJacobian<DataVector, Dim, Frame::Grid, Frame::Inertial>{}});
+
+  // Initialize the mortars
+  ActionTesting::next_action<comp>(make_not_null(&runner), self_id);
+  ActionTesting::set_phase(make_not_null(&runner), Parallel::Phase::Testing);
+
+  const Mesh<Dim - 1> face_mesh =
+      mesh.slice_away(mortar_id.direction().dimension());
+  const auto& mortar_meshes =
+      ActionTesting::get_databox_tag<comp,
+                                     evolution::dg::Tags::MortarMesh<Dim>>(
+          runner, self_id);
+  const Mesh<Dim - 1>& mortar_mesh = mortar_meshes.at(mortar_id);
+  REQUIRE(mortar_mesh == face_mesh);
+
+  // Set the face normal magnitude (deterministic).
+  using CovectorAndMag =
+      Variables<tmpl::list<evolution::dg::Tags::MagnitudeOfNormal,
+                           evolution::dg::Tags::NormalCovector<Dim>>>;
+  CovectorAndMag covector_and_mag{face_mesh.number_of_grid_points()};
+  Scalar<DataVector> face_normal_magnitude{face_mesh.number_of_grid_points(),
+                                           0.0};
+  alg::iota(get(face_normal_magnitude), 1.0);
+  get<evolution::dg::Tags::MagnitudeOfNormal>(covector_and_mag) =
+      face_normal_magnitude;
+  db::mutate<evolution::dg::Tags::NormalCovectorAndMagnitude<Dim>>(
+      [&covector_and_mag](const auto covector_and_mag_ptr,
+                          const auto& local_direction) {
+        (*covector_and_mag_ptr)[local_direction] = covector_and_mag;
+      },
+      make_not_null(
+          &ActionTesting::get_databox<comp>(make_not_null(&runner), self_id)),
+      mortar_id.direction());
+
+  // Set the local mortar data with deterministic auxiliary-package values.
+  DataVector local_aux_data{
+      mortar_mesh.number_of_grid_points() * number_of_aux_components, 0.0};
+  alg::iota(local_aux_data, 1.0);
+  db::mutate<evolution::dg::Tags::MortarData<Dim>>(
+      [&face_mesh, &local_aux_data, &mortar_id,
+       &mortar_mesh](const auto mortar_data_ptr) {
+        mortar_data_ptr->at(mortar_id).local().face_mesh = face_mesh;
+        mortar_data_ptr->at(mortar_id).local().mortar_mesh = mortar_mesh;
+        mortar_data_ptr->at(mortar_id).local().mortar_data = local_aux_data;
+      },
+      make_not_null(
+          &ActionTesting::get_databox<comp>(make_not_null(&runner), self_id)));
+
+  // Build the neighbor auxiliary data and inject it on the auxiliary inbox.
+  DataVector neighbor_aux_data{
+      mortar_mesh.number_of_grid_points() * number_of_aux_components, 0.0};
+  alg::iota(neighbor_aux_data, 100.0);
+  const evolution::dg::BoundaryData<Dim> data{mesh,
+                                              std::nullopt,
+                                              mortar_mesh,
+                                              std::nullopt,
+                                              {neighbor_aux_data},
+                                              next_time_step_id,
+                                              1,
+                                              1};
+  runner.template mock_distributed_objects<comp>()
+      .at(self_id)
+      .template receive_data<
+          evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
+              Dim, UseNodegroupDgElements, /*IsAuxiliary=*/true>>(
+          time_step_id, std::pair{mortar_id, data});
+
+  ActionTesting::next_action<comp>(make_not_null(&runner), self_id);
+
+  // The auxiliary inbox should be drained.
+  CHECK(runner
+            .template nonempty_inboxes<
+                comp, evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
+                          Dim, UseNodegroupDgElements, /*IsAuxiliary=*/true>>()
+            .empty());
+
+  // Compute the expected lifted auxiliary correction by reproducing the
+  // production path: run the toy auxiliary boundary terms on the mortar, then
+  // lift into the volume.
+  Variables<aux_mortar_tags_list> local_data_on_mortar{
+      mortar_mesh.number_of_grid_points()};
+  Variables<aux_mortar_tags_list> neighbor_data_on_mortar{
+      mortar_mesh.number_of_grid_points()};
+  std::copy(local_aux_data.begin(), local_aux_data.end(),
+            local_data_on_mortar.data());
+  std::copy(neighbor_aux_data.begin(), neighbor_aux_data.end(),
+            neighbor_data_on_mortar.data());
+
+  Variables<db::wrap_tags_in<::Tags::dt, variables_tags>>
+      dt_correction_on_mortar{mortar_mesh.number_of_grid_points()};
+  BoundaryTerms<Dim>{}.dg_auxiliary_boundary_terms(
+      make_not_null(&get<Tags::dt<Var1>>(dt_correction_on_mortar)),
+      make_not_null(&get<Tags::dt<Var2<Dim>>>(dt_correction_on_mortar)),
+      get<Var1>(local_data_on_mortar), get<Var2<Dim>>(local_data_on_mortar),
+      get<Var1>(neighbor_data_on_mortar),
+      get<Var2<Dim>>(neighbor_data_on_mortar), dg_formulation);
+
+  Variables<variables_tags> expected_evolved_variables{
+      mesh.number_of_grid_points(), 0.0};
+  const size_t dimension = mortar_id.direction().dimension();
+  const bool using_points_on_face =
+      mesh.quadrature(dimension) == Spectral::Quadrature::GaussLobatto or
+      mesh.quadrature(dimension) == Spectral::Quadrature::GaussRadauUpper;
+  if (using_points_on_face) {
+    ::dg::lift_flux(make_not_null(&dt_correction_on_mortar),
+                    mesh.extents(dimension), face_normal_magnitude,
+                    mesh.basis(dimension));
+    add_slice_to_data(make_not_null(&expected_evolved_variables),
+                      dt_correction_on_mortar, mesh.extents(), dimension,
+                      index_to_slice_at(mesh.extents(), mortar_id.direction()));
+  } else {
+    Scalar<DataVector> face_det_jacobian{face_mesh.number_of_grid_points()};
+    const Matrix identity{};
+    auto interpolation_matrices = make_array<Dim>(std::cref(identity));
+    const std::pair<Matrix, Matrix>& matrices =
+        Spectral::boundary_interpolation_matrices(
+            mesh.slice_through(dimension));
+    gsl::at(interpolation_matrices, dimension) =
+        mortar_id.direction().side() == Side::Upper ? matrices.second
+                                                    : matrices.first;
+    apply_matrices(make_not_null(&get(face_det_jacobian)),
+                   interpolation_matrices,
+                   DataVector{1.0 / get(det_inv_jacobian)}, mesh.extents());
+    ::dg::lift_boundary_terms_gauss_points(
+        make_not_null(&expected_evolved_variables), det_inv_jacobian, mesh,
+        mortar_id.direction(), dt_correction_on_mortar, face_normal_magnitude,
+        face_det_jacobian);
+  }
+
+  // The dt-variables must be untouched (the auxiliary pass writes
+  // variables_tag instead).
+  const Variables<db::wrap_tags_in<::Tags::dt, variables_tags>>
+      expected_dt_variables{mesh.number_of_grid_points(), 0.0};
+  CHECK(
+      expected_dt_variables ==
+      ActionTesting::get_databox_tag<comp, dt_variables_tag>(runner, self_id));
+
+  Approx custom_approx = Approx::custom().epsilon(5.e-11);
+  tmpl::for_each<variables_tags>([&custom_approx, &expected_evolved_variables,
+                                  &runner, &self_id](auto tag_v) {
+    using tag = tmpl::type_from<decltype(tag_v)>;
+    CHECK_ITERABLE_CUSTOM_APPROX(
+        get<tag>(ActionTesting::get_databox_tag<comp, variables_tag>(runner,
+                                                                     self_id)),
+        get<tag>(expected_evolved_variables), custom_approx);
+  });
+}
+
+void test_auxiliary_conforming() {
+  for (const auto dg_formulation :
+       {::dg::Formulation::StrongInertial, ::dg::Formulation::WeakInertial}) {
+    for (const auto quadrature :
+         {Spectral::Quadrature::GaussLobatto, Spectral::Quadrature::Gauss}) {
+      test_auxiliary_conforming<1, false>(quadrature, dg_formulation);
+      test_auxiliary_conforming<2, false>(quadrature, dg_formulation);
+      test_auxiliary_conforming<3, false>(quadrature, dg_formulation);
+    }
+  }
+}
+
 template <typename Metavariables>
 struct ReceiveOrderComponent {
   using metavariables = Metavariables;
@@ -1729,6 +2088,424 @@ void test_boundary_filter_jacobians_not_passed_when_not_needed() {
       });
 }
 
+// Runs a 1D GTS GaussLobatto auxiliary-pass scenario with the given filter and
+// calls callback(runner, self_id) after the auxiliary action completes.  This
+// mirrors `run_boundary_filter_test_1d_gts` but drives the LDG auxiliary action
+// `ApplyAuxiliaryBoundaryCorrectionsToVariables` (which goes through the same
+// `ApplyBoundaryCorrections` mutator with `ComputeAuxiliary == true`).
+template <typename Callback>
+void run_auxiliary_boundary_filter_test_1d_gts(
+    std::unique_ptr<Filters::Filter<1, tmpl::list<Var1, Var2<1>>>> filter_ptr,
+    Callback&& callback) {
+  constexpr size_t Dim = 1;
+  using TagList = tmpl::list<Var1, Var2<Dim>>;
+  using metavars = AuxiliaryMetavariables<Dim, false>;
+  using comp = AuxiliaryComponent<metavars>;
+  using MockRuntimeSystem = ActionTesting::MockRuntimeSystem<metavars>;
+  using aux_mortar_tags_list =
+      typename BoundaryTerms<Dim>::dg_auxiliary_package_field_tags;
+  constexpr size_t number_of_aux_components =
+      Variables<aux_mortar_tags_list>::number_of_independent_components;
+
+  register_factory_classes_with_charm<metavars>();
+
+  const TimeSteppers::AdamsBashforth time_stepper{1};
+
+  const ElementId<Dim> self_id{0, {{{1, 0}}}};
+  const ElementId<Dim> east_id{0, {{{1, 1}}}};
+  DirectionMap<Dim, Neighbors<Dim>> neighbors{};
+  neighbors[Direction<Dim>::upper_xi()] =
+      Neighbors<Dim>{{east_id}, OrientationMap<Dim>::create_aligned()};
+  const DirectionalId<Dim> mortar_id{Direction<Dim>::upper_xi(), east_id};
+  const Element<Dim> element{self_id, neighbors};
+
+  std::vector<Block<Dim>> blocks{1};
+  blocks[0] = Block<Dim>(nullptr, element.id().block_id(), {});
+  Domain<Dim> domain{std::move(blocks)};
+
+  MockRuntimeSystem runner{{std::move(domain),
+                            std::vector<std::array<size_t, Dim>>{
+                                make_array<Dim>(1_st), make_array<Dim>(1_st)},
+                            std::make_unique<BoundaryTerms<Dim>>(),
+                            dg::Formulation::StrongInertial}};
+
+  const Mesh<Dim> mesh{5, Spectral::Basis::Legendre,
+                       Spectral::Quadrature::GaussLobatto};
+  typename domain::Tags::NeighborMesh<Dim>::type neighbor_mesh{};
+  neighbor_mesh[mortar_id] = mesh;
+
+  ::InverseJacobian<DataVector, Dim, Frame::ElementLogical, Frame::Inertial>
+      inv_jac{mesh.number_of_grid_points(), 0.0};
+  for (size_t i = 0; i < Dim; ++i) {
+    inv_jac.get(i, i) = 2.0;
+  }
+  tnsr::I<DataVector, Dim, Frame::Inertial> inertial_coords{
+      mesh.number_of_grid_points(), 0.0};
+
+  Variables<db::wrap_tags_in<::Tags::dt, TagList>> dt_evolved_vars{
+      mesh.number_of_grid_points(), 0.0};
+  Variables<TagList> evolved_vars{mesh.number_of_grid_points(), 0.0};
+
+  const TimeDelta time_step{Slab{0.2, 3.4}, {1, 4}};
+  // The auxiliary pass processes data at the current temporal id, so use the
+  // same id for the current and next step (see `test_auxiliary_conforming`).
+  const TimeStepId time_step_id{true, 3, Time{Slab{0.2, 3.4}, {2, 4}}};
+  const TimeStepId& next_time_step_id = time_step_id;
+
+  // Identity Grid->Inertial Jacobians (Grid == ElementLogical in this test).
+  Jacobian<DataVector, Dim, Frame::Grid, Frame::Inertial> grid_jac{
+      mesh.number_of_grid_points(), 0.0};
+  InverseJacobian<DataVector, Dim, Frame::Grid, Frame::Inertial> grid_inv_jac{
+      mesh.number_of_grid_points(), 0.0};
+  for (size_t i = 0; i < Dim; ++i) {
+    grid_jac.get(i, i) = 1.0;
+    grid_inv_jac.get(i, i) = 1.0;
+  }
+
+  ActionTesting::emplace_component_and_initialize<comp>(
+      &runner, self_id,
+      {10, time_step_id, next_time_step_id, time_step,
+       std::make_unique<TimeSteppers::AdamsBashforth>(time_stepper),
+       dt_evolved_vars, evolved_vars, mesh, element, inertial_coords, inv_jac,
+       Spectral::Quadrature::GaussLobatto, neighbor_mesh, std::move(filter_ptr),
+       static_cast<uint64_t>(0), grid_jac, grid_inv_jac});
+
+  // Initialize the mortars.
+  ActionTesting::next_action<comp>(make_not_null(&runner), self_id);
+  ActionTesting::set_phase(make_not_null(&runner), Parallel::Phase::Testing);
+
+  const Mesh<Dim - 1> face_mesh =
+      mesh.slice_away(mortar_id.direction().dimension());
+  const auto& mortar_meshes =
+      ActionTesting::get_databox_tag<comp,
+                                     evolution::dg::Tags::MortarMesh<Dim>>(
+          runner, self_id);
+  const Mesh<Dim - 1>& mortar_mesh = mortar_meshes.at(mortar_id);
+
+  // Set the face normal magnitude (needed for lifting).
+  using CovectorAndMag =
+      Variables<tmpl::list<evolution::dg::Tags::MagnitudeOfNormal,
+                           evolution::dg::Tags::NormalCovector<Dim>>>;
+  CovectorAndMag covector_and_mag{face_mesh.number_of_grid_points()};
+  Scalar<DataVector> face_normal_magnitude{face_mesh.number_of_grid_points(),
+                                           0.0};
+  alg::iota(get(face_normal_magnitude), 1.0);
+  get<evolution::dg::Tags::MagnitudeOfNormal>(covector_and_mag) =
+      face_normal_magnitude;
+  db::mutate<evolution::dg::Tags::NormalCovectorAndMagnitude<Dim>>(
+      [&covector_and_mag](const auto covector_and_mag_ptr,
+                          const auto& local_direction) {
+        (*covector_and_mag_ptr)[local_direction] = covector_and_mag;
+      },
+      make_not_null(
+          &ActionTesting::get_databox<comp>(make_not_null(&runner), self_id)),
+      mortar_id.direction());
+
+  // Set the local mortar data with deterministic auxiliary-package values.
+  DataVector local_aux_data{
+      mortar_mesh.number_of_grid_points() * number_of_aux_components, 1.0};
+  db::mutate<evolution::dg::Tags::MortarData<Dim>>(
+      [&face_mesh, &local_aux_data, &mortar_id,
+       &mortar_mesh](const auto mortar_data_ptr) {
+        mortar_data_ptr->at(mortar_id).local().face_mesh = face_mesh;
+        mortar_data_ptr->at(mortar_id).local().mortar_mesh = mortar_mesh;
+        mortar_data_ptr->at(mortar_id).local().mortar_data = local_aux_data;
+      },
+      make_not_null(
+          &ActionTesting::get_databox<comp>(make_not_null(&runner), self_id)));
+
+  // Inject the neighbor's auxiliary data on the auxiliary inbox channel.
+  DataVector neighbor_aux_data{
+      mortar_mesh.number_of_grid_points() * number_of_aux_components, 2.0};
+  const evolution::dg::BoundaryData<Dim> data{mesh,
+                                              std::nullopt,
+                                              mortar_mesh,
+                                              std::nullopt,
+                                              {neighbor_aux_data},
+                                              next_time_step_id,
+                                              1,
+                                              1};
+  runner.template mock_distributed_objects<comp>()
+      .at(self_id)
+      .template receive_data<
+          evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
+              Dim, false, /*IsAuxiliary=*/true>>(time_step_id,
+                                                 std::pair{mortar_id, data});
+
+  // Run the auxiliary action.
+  ActionTesting::next_action<comp>(make_not_null(&runner), self_id);
+
+  std::forward<Callback>(callback)(runner, self_id);
+}
+
+// Returns a pointer to the MockBoundaryFilter stored in the auxiliary
+// component's DataBox, or nullptr if the filter is not a MockBoundaryFilter.
+template <typename MockRuntimeSystem>
+const MockBoundaryFilter* get_auxiliary_mock_boundary_filter(
+    const MockRuntimeSystem& runner, const ElementId<1>& self_id) {
+  using metavars = AuxiliaryMetavariables<1, false>;
+  using comp = AuxiliaryComponent<metavars>;
+  using FilterTag = Filters::Tags::SpectralFilter<1, tmpl::list<Var1, Var2<1>>>;
+  const auto& filter_ref =
+      ActionTesting::get_databox_tag<comp, FilterTag>(runner, self_id);
+  return dynamic_cast<const MockBoundaryFilter*>(&filter_ref);
+}
+
+// Auxiliary-path boundary-filter tests.  The auxiliary boundary correction
+// goes through the same `ApplyBoundaryCorrections` mutator with
+// `ComputeAuxiliary == true`, so the only aux-specific behavior is that the
+// auxiliary correction reaches the shared boundary-filter block and receives
+// the Grid->Inertial face jacobians when the filter needs them.  The
+// apply-cadence gating is shared, path-agnostic code already covered by the
+// physical `test_boundary_filter_*` tests above and is not re-tested here.
+// There is a single mortar/face, so an active filter is invoked once.
+void test_auxiliary_boundary_filter_jacobians_passed_when_needed() {
+  run_auxiliary_boundary_filter_test_1d_gts(
+      std::make_unique<MockBoundaryFilter>(true, false, true),
+      [](const auto& runner, const ElementId<1>& self_id) {
+        const MockBoundaryFilter* mock =
+            get_auxiliary_mock_boundary_filter(runner, self_id);
+        REQUIRE(mock != nullptr);
+        CHECK(mock->call_count() == 1);
+        CHECK(mock->saw_inv_jac());
+        CHECK(mock->saw_jac());
+      });
+}
+
+void test_auxiliary_boundary_filter_jacobians_not_passed_when_not_needed() {
+  run_auxiliary_boundary_filter_test_1d_gts(
+      std::make_unique<MockBoundaryFilter>(true, false, false),
+      [](const auto& runner, const ElementId<1>& self_id) {
+        const MockBoundaryFilter* mock =
+            get_auxiliary_mock_boundary_filter(runner, self_id);
+        REQUIRE(mock != nullptr);
+        CHECK(mock->call_count() == 1);
+        CHECK(not mock->saw_inv_jac());
+        CHECK(not mock->saw_jac());
+      });
+}
+
+template <typename Metavariables>
+struct AuxDeterministicComponent {
+  using metavariables = Metavariables;
+  using chare_type = ActionTesting::MockArrayChare;
+  using array_index = ElementId<3>;
+  using variables_tag = typename Metavariables::system::variables_tag;
+  using variables_tags = typename variables_tag::tags_list;
+  using dt_variables_tag = db::add_tag_prefix<::Tags::dt, variables_tag>;
+  using simple_tags = tmpl::list<
+      ::domain::Tags::InitialExtents<3>,
+      ::domain::Tags::InitialRefinementLevels<3>,
+      ::evolution::dg::Tags::Quadrature, Tags::ConcreteTimeStepper<TimeStepper>,
+      ::Tags::Time, ::Tags::TimeStep, ::Tags::TimeStepId,
+      ::Tags::Next<::Tags::TimeStepId>, VolumeTag, dt_variables_tag,
+      variables_tag, Filters::Tags::SpectralFilter<3, variables_tags>,
+      ::Tags::StepNumberWithinSlab>;
+  using compute_tags = tmpl::push_back<time_stepper_ref_tags<TimeStepper>>;
+
+  using phase_dependent_action_list = tmpl::list<
+      Parallel::PhaseActions<
+          Parallel::Phase::Initialization,
+          tmpl::list<
+              ActionTesting::InitializeDataBox<simple_tags, compute_tags>,
+              Initialization::Actions::InitializeItems<
+                  ::evolution::dg::Initialization::Domain<Metavariables>>,
+              ::evolution::dg::Initialization::Mortars<3>>>,
+      Parallel::PhaseActions<
+          Parallel::Phase::Testing,
+          tmpl::list<
+              ::evolution::dg::Actions::
+                  ApplyAuxiliaryBoundaryCorrectionsToVariables<3, false>>>>;
+};
+
+struct AuxDeterministicMetavariables {
+  static constexpr size_t volume_dim = 3;
+  static constexpr bool local_time_stepping = false;
+  using system = System<3, TestHelpers::SystemType::Conservative>;
+  using const_global_cache_tags = tmpl::list<>;
+  struct factory_creation
+      : tt::ConformsTo<Options::protocols::FactoryCreation> {
+    using factory_classes = tmpl::map<tmpl::pair<evolution::BoundaryCorrection,
+                                                 tmpl::list<BoundaryTerms<3>>>>;
+  };
+
+  using component_list =
+      tmpl::list<AuxDeterministicComponent<AuxDeterministicMetavariables>>;
+};
+
+// Nonconforming GTS auxiliary test. Mirrors
+// `test_deterministic_mortar_interpolation` but drives the auxiliary action
+// through the multi-contributor nonconforming path. The auxiliary package is
+// smaller than the physical one, and we assert the contributor-averaged
+// auxiliary result on the mortar.
+void test_auxiliary_deterministic_mortar_interpolation() {
+  using metavars = AuxDeterministicMetavariables;
+  using component = AuxDeterministicComponent<metavars>;
+  using MockRuntimeSystem = ActionTesting::MockRuntimeSystem<metavars>;
+  register_factory_classes_with_charm<metavars>();
+  domain::creators::register_derived_with_charm();
+
+  const size_t spherical_harmonic_l = 4;
+  const size_t cube_angular_extents = 2;
+  const domain::creators::NonconformingSphericalShells creator{
+      1.9, 2.4, 2.9, 0, 1, 2, spherical_harmonic_l, cube_angular_extents};
+  const Domain<3> domain = creator.create_domain();
+  const auto initial_extents = creator.initial_extents();
+  const auto initial_refinement = creator.initial_refinement_levels();
+
+  MockRuntimeSystem runner{{creator.create_domain(),
+                            std::make_unique<BoundaryTerms<3>>(),
+                            dg::Formulation::StrongInertial}};
+
+  const Slab slab(0.0, 1.0);
+  const TimeStepId time_step_id(true, 0, slab.start());
+  const TimeStepId& next_time_step_id = time_step_id;
+  const auto time_step = slab.duration();
+  using variables_tag = metavars::system::variables_tag;
+  using variables_tags = typename variables_tag::tags_list;
+  using dt_variables_tag = db::add_tag_prefix<::Tags::dt, variables_tag>;
+  const size_t volume_points =
+      2 * (spherical_harmonic_l + 1) * (2 * spherical_harmonic_l + 1);
+  dt_variables_tag::type dt_evolved_vars(volume_points, 0.0);
+  variables_tag::type evolved_vars(volume_points, 0.0);
+
+  register_classes_with_charm<Filters::None<3, variables_tags>>();
+
+  const ElementId<3> sphere_id{6};
+  ActionTesting::emplace_component_and_initialize<component>(
+      &runner, sphere_id,
+      {initial_extents, initial_refinement, Spectral::Quadrature::GaussLobatto,
+       std::make_unique<TimeSteppers::AdamsBashforth>(1), 1.2, time_step,
+       time_step_id, next_time_step_id, 10, dt_evolved_vars, evolved_vars,
+       // No filtering so the exact interpolated-value assertion remains valid.
+       std::unique_ptr<Filters::Filter<3, variables_tags>>{
+           std::make_unique<Filters::None<3, variables_tags>>(std::nullopt)},
+       static_cast<uint64_t>(0)});
+
+  // Initialize the domain and mortars
+  ActionTesting::next_action<component>(make_not_null(&runner), sphere_id);
+  ActionTesting::next_action<component>(make_not_null(&runner), sphere_id);
+  ActionTesting::set_phase(make_not_null(&runner), Parallel::Phase::Testing);
+
+  const Direction<3> direction_to_sphere = Direction<3>::upper_zeta();
+  const DirectionalId<3> sphere_mortar_id{direction_to_sphere, sphere_id};
+  const Mesh<2> spherical_face_mesh{
+      {{spherical_harmonic_l + 1, 2 * spherical_harmonic_l + 1}},
+      {{Spectral::Basis::SphericalHarmonic,
+        Spectral::Basis::SphericalHarmonic}},
+      {{Spectral::Quadrature::Gauss, Spectral::Quadrature::Equiangular}}};
+  const Mesh<3> cube_volume_mesh{
+      {{2, cube_angular_extents, cube_angular_extents}},
+      {{Spectral::Basis::Legendre, Spectral::Basis::SphericalHarmonic,
+        Spectral::Basis::SphericalHarmonic}},
+      {{Spectral::Quadrature::GaussLobatto, Spectral::Quadrature::Gauss,
+        Spectral::Quadrature::Equiangular}}};
+  const Mesh<2> cube_face_mesh{cube_angular_extents, Spectral::Basis::Legendre,
+                               Spectral::Quadrature::GaussLobatto};
+
+  const size_t n_pts = spherical_face_mesh.number_of_grid_points();
+  // The auxiliary package is just the variables themselves.
+  using aux_mortar_tags_list =
+      BoundaryTerms<3>::dg_auxiliary_package_field_tags;
+  constexpr size_t n_components =
+      Variables<aux_mortar_tags_list>::number_of_independent_components;
+  CHECK(n_components == 4);
+  const size_t mortar_data_size = n_pts * n_components;
+  auto& sphere_box = get_databox<component>(make_not_null(&runner), sphere_id);
+  db::mutate<evolution::dg::Tags::MortarData<3>>(
+      [&sphere_id, &mortar_data_size,
+       &spherical_face_mesh](const auto mortar_data_ptr) {
+        auto& mortar_data =
+            mortar_data_ptr
+                ->at(DirectionalId<3>{Direction<3>::lower_xi(), sphere_id})
+                .local();
+        mortar_data.mortar_data = DataVector{mortar_data_size, 0.0};
+        mortar_data.mortar_mesh = spherical_face_mesh;
+        mortar_data.face_mesh = spherical_face_mesh;
+      },
+      make_not_null(&sphere_box));
+
+  MAKE_GENERATOR(generator);
+  std::uniform_real_distribution<> dist_positive(0.5, 1.);
+  using CovectorAndMag =
+      Variables<tmpl::list<evolution::dg::Tags::MagnitudeOfNormal,
+                           evolution::dg::Tags::NormalCovector<3>>>;
+  CovectorAndMag covector_and_mag{spherical_face_mesh.number_of_grid_points()};
+  get<evolution::dg::Tags::MagnitudeOfNormal>(covector_and_mag) =
+      make_with_random_values<Scalar<DataVector>>(
+          make_not_null(&generator), make_not_null(&dist_positive),
+          spherical_face_mesh.number_of_grid_points());
+  db::mutate<evolution::dg::Tags::NormalCovectorAndMagnitude<3>>(
+      [&covector_and_mag](const auto covector_and_mag_ptr,
+                          const auto& local_direction) {
+        (*covector_and_mag_ptr)[local_direction] = covector_and_mag;
+      },
+      make_not_null(&sphere_box), Direction<3>::lower_xi());
+
+  std::vector<size_t> contributors(n_pts, 0);
+  DataVector expected_interpolated_data{mortar_data_size, 0.0};
+  std::optional<evolution::dg::InterpolatedBoundaryData<3>>
+      interpolated_boundary_data{std::nullopt};
+  double value = 0.0;
+  for (size_t b = 0; b < 6; ++b) {
+    const auto element_ids =
+        initial_element_ids(b, creator.initial_refinement_levels()[b]);
+    for (const auto& element_id : element_ids) {
+      REQUIRE_FALSE(ActionTesting::next_action_if_ready<component>(
+          make_not_null(&runner), sphere_id));
+      value += 1.0;
+      const ::dg::MortarInterpolator<3> mortar_interpolator{
+          element_id, sphere_mortar_id, domain, cube_face_mesh,
+          spherical_face_mesh};
+      const DataVector face_data{
+          n_components * cube_face_mesh.number_of_grid_points(), value};
+      interpolated_boundary_data = evolution::dg::InterpolatedBoundaryData<3>{
+          {.data = mortar_interpolator.interpolate_to_neighbor(face_data),
+           .target_mesh = mortar_interpolator.neighbor_mortar_mesh(),
+           .offsets =
+               mortar_interpolator.interpolated_neighbor_data_offsets()}};
+      for (const auto offset : interpolated_boundary_data.value().offsets()) {
+        ++contributors[offset];
+        for (size_t c = 0; c < n_components; ++c) {
+          expected_interpolated_data[offset + c * n_pts] += value;
+        }
+      }
+      const evolution::dg::BoundaryData<3> data{
+          cube_volume_mesh,
+          std::nullopt,
+          cube_face_mesh,
+          std::nullopt,
+          {face_data},
+          TimeStepId(true, 0, Time(slab, {1, 2})),
+          1,
+          1,
+          interpolated_boundary_data};
+      using inbox = evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
+          3, false, /*IsAuxiliary=*/true>;
+
+      Parallel::receive_data<inbox>(
+          runner.mock_distributed_objects<component>().at(sphere_id),
+          TimeStepId(true, 0, slab.start()),
+          std::pair{DirectionalId<3>{Direction<3>::lower_xi(), element_id},
+                    data});
+    }
+  }
+  REQUIRE(ActionTesting::next_action_if_ready<component>(make_not_null(&runner),
+                                                         sphere_id));
+  for (size_t i = 0; i < n_pts; ++i) {
+    for (size_t c = 0; c < n_components; ++c) {
+      expected_interpolated_data[i + c * n_pts] /=
+          static_cast<double>(contributors[i]);
+    }
+  }
+  const auto& interpolated_data =
+      db::get<evolution::dg::Tags::MortarData<3>>(sphere_box)
+          .at(DirectionalId<3>{Direction<3>::lower_xi(), sphere_id})
+          .neighbor()
+          .mortar_data.value();
+  CHECK_ITERABLE_APPROX(expected_interpolated_data, interpolated_data);
+}
+
 SPECTRE_TEST_CASE("Unit.Evolution.DG.ApplyBoundaryCorrections",
                   "[Unit][Evolution][Actions]") {
   PUPable_reg(TimeSteppers::AdamsBashforth);
@@ -1750,11 +2527,19 @@ SPECTRE_TEST_CASE("Unit.Evolution.DG.ApplyBoundaryCorrections",
   test_receive_order();
 
   test_deterministic_mortar_interpolation();
+
   register_classes_with_charm<MockBoundaryFilter>();
   test_boundary_filter_no_cadence_skips();
   test_boundary_filter_substep_applies();
   test_boundary_filter_step_applies();
   test_boundary_filter_jacobians_passed_when_needed();
   test_boundary_filter_jacobians_not_passed_when_not_needed();
+
+  test_auxiliary_conforming();
+
+  test_auxiliary_deterministic_mortar_interpolation();
+
+  test_auxiliary_boundary_filter_jacobians_passed_when_needed();
+  test_auxiliary_boundary_filter_jacobians_not_passed_when_not_needed();
 }
 }  // namespace

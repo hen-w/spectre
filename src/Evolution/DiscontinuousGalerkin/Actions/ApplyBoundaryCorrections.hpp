@@ -29,6 +29,7 @@
 #include "Domain/Tags/NeighborMesh.hpp"
 #include "Evolution/BoundaryCorrection.hpp"
 #include "Evolution/BoundaryCorrectionTags.hpp"
+#include "Evolution/DiscontinuousGalerkin/Actions/ComputeTimeDerivativeHelpers.hpp"
 #include "Evolution/DiscontinuousGalerkin/BoundaryData.hpp"
 #include "Evolution/DiscontinuousGalerkin/InboxTags.hpp"
 #include "Evolution/DiscontinuousGalerkin/InterfaceDataPolicy.hpp"
@@ -104,6 +105,21 @@ struct get_dg_boundary_terms {
   using type = typename BoundaryCorrectionClass::dg_boundary_terms_volume_tags;
 };
 
+// Auxiliary analog of `get_dg_boundary_terms` above, for use in
+// `tmpl::transform`.  Unlike the physical `dg_boundary_terms_volume_tags` (a
+// required alias), the auxiliary boundary-terms volume tags are optional, so
+// this delegates to the detect-or-default helper in
+// `ComputeTimeDerivativeHelpers.hpp`, which yields an empty `tmpl::list<>` for
+// corrections that do not define the alias.  This keeps the
+// `volume_tags_for_dg_boundary_terms` expression well-formed for any
+// correction, even those without an auxiliary interface.
+template <typename BoundaryCorrectionClass>
+struct get_dg_auxiliary_boundary_terms {
+  using type = evolution::dg::Actions::detail::
+      get_dg_auxiliary_boundary_terms_volume_tags_or_empty_t<
+          BoundaryCorrectionClass>;
+};
+
 template <typename Tag, typename Type = db::const_item_type<Tag, tmpl::list<>>>
 struct TemporaryReference {
   using tag = Tag;
@@ -122,7 +138,8 @@ struct TemporaryReference {
 /// necessary for GTS.  Some data for the other mode may also be
 /// processed to simplify the message handling.
 template <bool UseNodegroupDgElements, typename Metavariables,
-          bool LocalTimeStepping, bool DenseOutput, typename DbTagsList,
+          bool LocalTimeStepping, bool DenseOutput,
+          bool ComputeAuxiliary = false, typename DbTagsList,
           typename... InboxTags>
 bool receive_boundary_data(
     const gsl::not_null<db::DataBox<DbTagsList>*> box,
@@ -134,12 +151,308 @@ bool receive_boundary_data(
 
   auto& inbox =
       tuples::get<evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
-          volume_dim, UseNodegroupDgElements>>(*inboxes);
+          volume_dim, UseNodegroupDgElements, ComputeAuxiliary>>(*inboxes);
 
   const auto& volume_mesh = db::get<domain::Tags::Mesh<volume_dim>>(*box);
   const auto& mortar_infos = db::get<Tags::MortarInfo<volume_dim>>(*box);
   const auto& mortar_next_time_step_ids =
       db::get<evolution::dg::Tags::MortarNextTemporalId<volume_dim>>(*box);
+
+  // The LDG auxiliary pass is global-time-stepping only and is implemented for
+  // DG elements only: DG-subcell is NOT handled in this block.  A subcell +
+  // auxiliary configuration is disallowed at compile time by a static_assert
+  // in the auxiliary receive action
+  // (`ApplyAuxiliaryBoundaryCorrectionsToVariables`, via `ActionImpl`).
+  // Consequently, unlike the physical receive in the
+  // `for (;;)` loop below - which has `if constexpr (using_subcell_v<...>)`
+  // branches that store subcell ghost data and reconstruct the neighbor face
+  // solution - this auxiliary block intentionally contains no subcell handling.
+  //
+  // The auxiliary pass receives data at the current temporal id (rather than
+  // the next one).  We use a two-phase approach: first check that ALL mortar
+  // data is available, then process everything in a second pass.  This avoids
+  // partial consumption where std::move empties inbox entries for some mortars
+  // while others are still missing, which would cause permanent stalling on
+  // retry (the moved-from entry is found but empty).
+  if constexpr (ComputeAuxiliary) {
+    const auto& element = db::get<domain::Tags::Element<volume_dim>>(*box);
+    const auto& current_id = db::get<::Tags::TimeStepId>(*box);
+
+    // Count expected messages.  For NonconformingNeighborInterpolates a
+    // single mortar (keyed by host ElementId) receives one message per
+    // neighbor in that direction.
+    const auto expected_messages = static_cast<size_t>(alg::accumulate(
+        mortar_next_time_step_ids, size_t{0},
+        [&mortar_infos, &element, &current_id](const size_t total,
+                                               const auto& entry) {
+          // Auxiliary pass is GTS-only.
+          if (mortar_infos.at(entry.first).time_stepping_policy() !=
+              TimeSteppingPolicy::EqualRate) {
+            return total;
+          }
+          if (entry.second > current_id) {
+            return total;
+          }
+          if (mortar_infos.at(entry.first).interface_data_policy() !=
+              InterfaceDataPolicy::NonconformingNeighborInterpolates) {
+            return total + size_t{1};
+          } else {
+            return total +
+                   element.neighbors().at(entry.first.direction()).size();
+          }
+        }));
+
+    if (expected_messages == 0) {
+      return true;
+    }
+
+    auto& inbox_data = inbox.messages;
+    auto messages_to_process = inbox_data.end();
+
+    {
+      size_t missing_messages{};
+      do {
+        inbox.collect_messages();
+        if (messages_to_process == inbox_data.end()) {
+          messages_to_process = inbox_data.find(current_id);
+        }
+        const size_t available_messages =
+            messages_to_process == inbox_data.end()
+                ? 0
+                : messages_to_process->second.size();
+        ASSERT(available_messages <= expected_messages,
+               "Too many auxiliary boundary messages at "
+                   << current_id << ": " << available_messages << "/"
+                   << expected_messages);
+        missing_messages = expected_messages - available_messages;
+      } while (missing_messages != 0 and
+               inbox.set_missing_messages(missing_messages));
+      if (missing_messages != 0) {
+        return false;
+      }
+    }
+
+    std::unordered_map<Direction<volume_dim>, std::vector<size_t>>
+        contributors_multiple_non_conforming_neighbors{};
+
+    for (auto& mortar_id_and_data : messages_to_process->second) {
+      const auto& received_mortar_id = mortar_id_and_data.first;
+      auto& received_mortar_data = mortar_id_and_data.second;
+      const auto& direction = received_mortar_id.direction();
+      const auto& neighbor_mesh = received_mortar_data.volume_mesh;
+      const size_t sliced_away_dim = direction.dimension();
+      const Mesh<face_dim> face_mesh = volume_mesh.slice_away(sliced_away_dim);
+      // If there are multiple non-conforming neighbors, there is only a
+      // single mortar labeled by the host ElementId.  This is done
+      // because the data from all neighbors will be combined onto a
+      // single mortar as it makes no sense to have multiple mortars
+      // between non-conforming Elements.
+      const DirectionalId<volume_dim> mortar_id =
+          mortar_infos.contains(received_mortar_id)
+              ? received_mortar_id
+              : DirectionalId<volume_dim>{direction, element.id()};
+
+      ASSERT(mortar_next_time_step_ids.at(mortar_id) <= current_id or
+                 contributors_multiple_non_conforming_neighbors.contains(
+                     direction),
+             "Processing wrong time for auxiliary mortar "
+                 << mortar_id << "\nExpected <= " << current_id
+                 << " but mortar_next_time_step_id is "
+                 << mortar_next_time_step_ids.at(mortar_id));
+
+      db::mutate<evolution::dg::Tags::MortarMesh<volume_dim>,
+                 evolution::dg::Tags::MortarData<volume_dim>,
+                 evolution::dg::Tags::MortarDataHistory<volume_dim>,
+                 evolution::dg::Tags::MortarNextTemporalId<volume_dim>,
+                 domain::Tags::NeighborMesh<volume_dim>>(
+          [&](const gsl::not_null<DirectionalIdMap<volume_dim, Mesh<face_dim>>*>
+                  mortar_meshes,
+              const gsl::not_null<DirectionalIdMap<
+                  volume_dim, evolution::dg::MortarDataHolder<volume_dim>>*>
+                  gts_mortar_data,
+              const gsl::not_null<DirectionalIdMap<
+                  volume_dim,
+                  TimeSteppers::BoundaryHistory<
+                      evolution::dg::MortarData<volume_dim>,
+                      evolution::dg::MortarData<volume_dim>, DataVector>>*>
+              /*boundary_data_history*/,
+              const gsl::not_null<DirectionalIdMap<volume_dim, TimeStepId>*>
+              /*mortar_next_time_step_ids_mutable*/,
+              const gsl::not_null<
+                  DirectionalIdMap<volume_dim, Mesh<volume_dim>>*>
+                  neighbor_meshes) {
+            // Do not advance MortarNextTemporalId for the auxiliary pass.
+            // The physical receive_boundary_data still needs to look up
+            // data at the current temporal id.
+            switch (mortar_infos.at(mortar_id).interface_data_policy()) {
+              case InterfaceDataPolicy::CopyProject:
+                [[fallthrough]];
+              case InterfaceDataPolicy::OrientCopyProject: {
+                neighbor_meshes->insert_or_assign(received_mortar_id,
+                                                  neighbor_mesh);
+                const Mesh<face_dim> neighbor_face_mesh =
+                    received_mortar_data.volume_mesh.slice_away(
+                        sliced_away_dim);
+                const Mesh<face_dim> mortar_mesh =
+                    ::dg::mortar_mesh(face_mesh, neighbor_face_mesh);
+
+                mortar_meshes->at(mortar_id) = mortar_mesh;
+                p_project_mortar_data(
+                    make_not_null(&gts_mortar_data->at(mortar_id).local()),
+                    mortar_mesh);
+
+                // Kept identical to the physical receive's check.  Since
+                // subcell + auxiliary is disallowed (the action's
+                // static_assert), the `using_subcell_v` disjunct is never
+                // taken, so this requires the neighbor's boundary-correction
+                // data to be present.
+                ASSERT(using_subcell_v<Metavariables> or
+                           received_mortar_data.boundary_correction_data
+                               .has_value(),
+                       "Must receive neighbor boundary correction data when "
+                       "not using DG-subcell. Mortar ID is: ("
+                           << mortar_id.direction() << "," << mortar_id.id()
+                           << ") and TimeStepId is "
+                           << messages_to_process->first);
+                MortarData<volume_dim> neighbor_mortar_data{};
+                neighbor_mortar_data.face_mesh = neighbor_face_mesh;
+                neighbor_mortar_data.mortar_mesh =
+                    received_mortar_data.boundary_correction_mesh;
+                neighbor_mortar_data.mortar_data =
+                    std::move(received_mortar_data.boundary_correction_data);
+                if (neighbor_mortar_data.mortar_data.has_value()) {
+                  p_project_mortar_data(make_not_null(&neighbor_mortar_data),
+                                        mortar_mesh);
+                }
+                gts_mortar_data->at(mortar_id).neighbor() =
+                    std::move(neighbor_mortar_data);
+                break;
+              }
+              case InterfaceDataPolicy::NonconformingSelfInterpolates: {
+                if constexpr (volume_dim > 1) {
+                  neighbor_meshes->insert_or_assign(received_mortar_id,
+                                                    neighbor_mesh);
+                  mortar_meshes->at(mortar_id) = face_mesh;
+                  gts_mortar_data->at(mortar_id).neighbor().face_mesh =
+                      face_mesh;
+                  gts_mortar_data->at(mortar_id).neighbor().mortar_mesh =
+                      face_mesh;
+                  const auto& interpolator =
+                      mortar_infos.at(mortar_id).interpolator().value();
+                  const auto& received_data =
+                      received_mortar_data.boundary_correction_data.value();
+                  DataVector interpolated_data =
+                      interpolator.interpolate_to_host(received_data);
+                  gts_mortar_data->at(mortar_id).neighbor().mortar_data =
+                      std::move(interpolated_data);
+                } else {
+                  ERROR("Cannot have non-conforming neighbors in 1D");
+                }
+                break;
+              }
+              case InterfaceDataPolicy::NonconformingNeighborInterpolates: {
+                if constexpr (volume_dim > 1) {
+                  // We do not insert the neighbor mesh into neighbor_meshes
+                  // as this could overflow the FixedHashMap size
+                  const size_t npts_mortar = face_mesh.number_of_grid_points();
+                  const size_t mortar_data_size = gts_mortar_data->at(mortar_id)
+                                                      .local()
+                                                      .mortar_data.value()
+                                                      .size();
+                  const size_t number_of_components =
+                      mortar_data_size / npts_mortar;
+                  // The data received from each neighbor has been interpolated
+                  // to a subset of points of the single mortar mesh of the host
+                  // If this is the first neighbor processed, initialize the
+                  // buffer to zero so that contributions can be accumulated.
+                  if (not contributors_multiple_non_conforming_neighbors
+                              .contains(direction)) {
+                    contributors_multiple_non_conforming_neighbors.emplace(
+                        direction, std::vector<size_t>(
+                                       face_mesh.number_of_grid_points(), 0));
+                    mortar_meshes->at(mortar_id) = face_mesh;
+                    gts_mortar_data->at(mortar_id).neighbor().face_mesh =
+                        face_mesh;
+                    gts_mortar_data->at(mortar_id).neighbor().mortar_mesh =
+                        face_mesh;
+                    gts_mortar_data->at(mortar_id).neighbor().mortar_data =
+                        DataVector{mortar_data_size, 0.0};
+                  }
+                  const auto& interpolated_boundary_data =
+                      received_mortar_data.interpolated_boundary_data.value();
+                  const auto& interpolated_data =
+                      interpolated_boundary_data.boundary_data();
+                  const size_t interpolated_data_size =
+                      interpolated_data.size();
+                  const auto& offsets = interpolated_boundary_data.offsets();
+                  const size_t npts_interpolated = offsets.size();
+                  ASSERT(npts_interpolated * number_of_components ==
+                             interpolated_data_size,
+                         "Size mismatch!  Number of interpolated points "
+                             << npts_interpolated
+                             << " times number of components "
+                             << number_of_components
+                             << " is not interpolated data size "
+                             << interpolated_data_size);
+                  auto& target_mortar_data = gts_mortar_data->at(mortar_id)
+                                                 .neighbor()
+                                                 .mortar_data.value();
+                  auto& contributors =
+                      contributors_multiple_non_conforming_neighbors.at(
+                          direction);
+                  for (size_t i = 0; i < npts_interpolated; ++i) {
+                    ++contributors[offsets[i]];
+                    for (size_t c = 0; c < number_of_components; ++c) {
+                      target_mortar_data[offsets[i] + c * npts_mortar] +=
+                          interpolated_data[i + c * npts_interpolated];
+                    }
+                  }
+                } else {
+                  ERROR("Cannot have non-conforming neighbors in 1D");
+                }
+                break;
+              }
+              default:
+                ERROR("InterfaceDataPolicy "
+                      << mortar_infos.at(mortar_id).interface_data_policy()
+                      << " is not handled yet, id = " << mortar_id);
+            }
+          },
+          box);
+    }
+
+    db::mutate<evolution::dg::Tags::MortarData<volume_dim>>(
+        [&contributors_multiple_non_conforming_neighbors, &element](
+            const gsl::not_null<DirectionalIdMap<
+                volume_dim, evolution::dg::MortarDataHolder<volume_dim>>*>
+                gts_mortar_data) {
+          for (const auto& [direction, contributors] :
+               contributors_multiple_non_conforming_neighbors) {
+            const DirectionalId<volume_dim> mortar_id =
+                DirectionalId<volume_dim>{direction, element.id()};
+            auto& target_mortar_data =
+                gts_mortar_data->at(mortar_id).neighbor().mortar_data.value();
+            const size_t npts_mortar = contributors.size();
+            const size_t number_of_components =
+                target_mortar_data.size() / npts_mortar;
+            ASSERT(alg::none_of(contributors,
+                                [](const size_t n) { return n == 0; }),
+                   "Not all points were interpolated.  Direction = "
+                       << direction << " ElementId = " << element.id() << "\n"
+                       << "target_mortar_data = " << target_mortar_data);
+            for (size_t i = 0; i < npts_mortar; ++i) {
+              for (size_t c = 0; c < number_of_components; ++c) {
+                target_mortar_data[i + c * npts_mortar] /=
+                    static_cast<double>(contributors[i]);
+              }
+            }
+          }
+        },
+        box);
+
+    inbox_data.erase(messages_to_process);
+    return true;
+  }
 
   for (;;) {
     std::optional<TimeStepId> time_to_process{};
@@ -537,11 +850,14 @@ bool receive_boundary_data(
 /// Setting \p DenseOutput to true receives data required for output
 /// at ::Tags::Time instead of performing a full step.  This is only
 /// used for local time-stepping.
-template <bool LocalTimeStepping, typename Metavariables, bool DenseOutput>
+template <bool LocalTimeStepping, typename Metavariables, bool DenseOutput,
+          bool ComputeAuxiliary = false>
 struct ApplyBoundaryCorrections {
   static constexpr bool local_time_stepping = LocalTimeStepping;
   static_assert(local_time_stepping or not DenseOutput,
                 "GTS does not use ApplyBoundaryCorrections for dense output.");
+  static_assert(not(ComputeAuxiliary and local_time_stepping),
+                "Auxiliary boundary corrections are not supported with LTS.");
 
   using system = typename Metavariables::system;
   static constexpr size_t volume_dim = system::volume_dim;
@@ -552,15 +868,31 @@ struct ApplyBoundaryCorrections {
   using derived_boundary_corrections =
       tmpl::at<typename Metavariables::factory_creation::factory_classes,
                evolution::BoundaryCorrection>;
-  using volume_tags_for_dg_boundary_terms = tmpl::remove_duplicates<
-      tmpl::flatten<tmpl::transform<derived_boundary_corrections,
-                                    detail::get_dg_boundary_terms<tmpl::_1>>>>;
+  // The auxiliary pass unions the physical and auxiliary boundary-terms volume
+  // tags so that `argument_tags` always provides the tags needed by either
+  // code path; the `if constexpr` at the `call_boundary_correction` call site
+  // selects the correct list at compile time.  When `ComputeAuxiliary` is
+  // `false` this collapses to the physical expression only.
+  using volume_tags_for_dg_boundary_terms = tmpl::conditional_t<
+      ComputeAuxiliary,
+      tmpl::remove_duplicates<tmpl::flatten<tmpl::append<
+          tmpl::transform<derived_boundary_corrections,
+                          detail::get_dg_boundary_terms<tmpl::_1>>,
+          tmpl::transform<derived_boundary_corrections,
+                          detail::get_dg_auxiliary_boundary_terms<tmpl::_1>>>>>,
+      tmpl::remove_duplicates<tmpl::flatten<
+          tmpl::transform<derived_boundary_corrections,
+                          detail::get_dg_boundary_terms<tmpl::_1>>>>>;
 
   using TimeStepperType =
       tmpl::conditional_t<local_time_stepping, LtsTimeStepper, TimeStepper>;
 
+  // For the auxiliary pass we write the corrected auxiliary variable into
+  // `variables_tag` (the auxiliary variable lives there today), so the GTS
+  // auxiliary pass updates `variables_tag` rather than `dt_variables_tag`.
   using tag_to_update =
-      tmpl::conditional_t<local_time_stepping, variables_tag, dt_variables_tag>;
+      tmpl::conditional_t<ComputeAuxiliary or local_time_stepping,
+                          variables_tag, dt_variables_tag>;
   using mortar_data_tag =
       tmpl::conditional_t<local_time_stepping,
                           evolution::dg::Tags::MortarDataHistory<volume_dim>,
@@ -693,7 +1025,7 @@ struct ApplyBoundaryCorrections {
       const ParallelComponent* const /*component*/) {
     return receive_boundary_data<
         Parallel::is_dg_element_collection_v<ParallelComponent>, Metavariables,
-        local_time_stepping, DenseOutput>(box, inboxes);
+        local_time_stepping, DenseOutput, ComputeAuxiliary>(box, inboxes);
   }
 
  private:
@@ -853,8 +1185,14 @@ struct ApplyBoundaryCorrections {
           using BcType = std::decay_t<decltype(*typed_boundary_correction)>;
           // Compute internal boundary quantities on the mortar for sides of
           // the element that have neighbors, i.e. they are not an external
-          // side.
-          using mortar_tags_list = typename BcType::dg_package_field_tags;
+          // side.  The auxiliary arm uses the detect-or-default helper so it
+          // remains well-formed for any correction, even those lacking the
+          // alias; this keeps the change additive.
+          using mortar_tags_list = tmpl::conditional_t<
+              ComputeAuxiliary,
+              evolution::dg::Actions::detail::
+                  get_dg_auxiliary_package_field_tags_or_empty_t<BcType>,
+              typename BcType::dg_package_field_tags>;
 
           // Variables for reusing allocations.  The actual values are
           // not reused.
@@ -1005,11 +1343,31 @@ struct ApplyBoundaryCorrections {
               dt_boundary_correction_on_mortar.initialize(
                   mortar_mesh.number_of_grid_points());
 
-              call_boundary_correction(
-                  make_not_null(&dt_boundary_correction_on_mortar),
-                  local_data_on_mortar, neighbor_data_on_mortar,
-                  *typed_boundary_correction, dg_formulation, volume_args_tuple,
-                  typename BcType::dg_boundary_terms_volume_tags{});
+              if constexpr (ComputeAuxiliary) {
+                // `dt_boundary_correction_on_mortar` is used purely as a
+                // scratch container for the packaged auxiliary correction on
+                // the mortar.  The correction is ultimately applied to the
+                // evolved variables themselves, not to their time derivative:
+                // `tag_to_update` is `variables_tag` for the auxiliary pass,
+                // and this `dt`-prefixed buffer reconciles with it via the
+                // prefix-agnostic `Variables::operator+=` / `add_slice_to_data`
+                // used when the lifted result is added to `vars_to_update`.
+                call_auxiliary_boundary_correction(
+                    make_not_null(&dt_boundary_correction_on_mortar),
+                    local_data_on_mortar, neighbor_data_on_mortar,
+                    *typed_boundary_correction, dg_formulation,
+                    volume_args_tuple,
+                    evolution::dg::Actions::detail::
+                        get_dg_auxiliary_boundary_terms_volume_tags_or_empty_t<
+                            BcType>{});
+              } else {
+                call_boundary_correction(
+                    make_not_null(&dt_boundary_correction_on_mortar),
+                    local_data_on_mortar, neighbor_data_on_mortar,
+                    *typed_boundary_correction, dg_formulation,
+                    volume_args_tuple,
+                    typename BcType::dg_boundary_terms_volume_tags{});
+              }
 
               const std::array<Spectral::SegmentSize, volume_dim - 1>&
                   mortar_size = mortar_infos.at(mortar_id).mortar_size();
@@ -1034,6 +1392,13 @@ struct ApplyBoundaryCorrections {
                 return dt_boundary_correction_on_mortar;
               }();
               if constexpr (not DenseOutput) {
+                // Filter the boundary correction on the mortar before it is
+                // lifted into the volume.  For the LDG auxiliary pass
+                // (ComputeAuxiliary == true) the auxiliary boundary correction
+                // is filtered here by the same boundary filter as the physical
+                // boundary corrections.  Whether the auxiliary correction
+                // should be filtered identically to the physical one is not
+                // yet decided and may change.
                 if (boundary_filter_active) {
                   using BoundaryFilterVars = Variables<FilterTagList>;
                   auto boundary_filter_view =
@@ -1216,6 +1581,28 @@ struct ApplyBoundaryCorrections {
         tuples::get<detail::TemporaryReference<VolumeTagsForCorrection>>(
             volume_args_tuple)...);
   }
+
+  template <typename... BoundaryCorrectionTags, typename... Tags,
+            typename BoundaryCorrection, typename... AllVolumeArgs,
+            typename... VolumeTagsForCorrection>
+  static void call_auxiliary_boundary_correction(
+      const gsl::not_null<Variables<tmpl::list<BoundaryCorrectionTags...>>*>
+          boundary_corrections_on_mortar,
+      const Variables<tmpl::list<Tags...>>& local_boundary_data,
+      const Variables<tmpl::list<Tags...>>& neighbor_boundary_data,
+      const BoundaryCorrection& boundary_correction,
+      const ::dg::Formulation dg_formulation,
+      const tuples::TaggedTuple<detail::TemporaryReference<AllVolumeArgs>...>&
+          volume_args_tuple,
+      tmpl::list<VolumeTagsForCorrection...> /*meta*/) {
+    boundary_correction.dg_auxiliary_boundary_terms(
+        make_not_null(
+            &get<BoundaryCorrectionTags>(*boundary_corrections_on_mortar))...,
+        get<Tags>(local_boundary_data)..., get<Tags>(neighbor_boundary_data)...,
+        dg_formulation,
+        tuples::get<detail::TemporaryReference<VolumeTagsForCorrection>>(
+            volume_args_tuple)...);
+  }
 };
 
 /// Apply corrections from boundary communication for LTS dense output.
@@ -1226,11 +1613,11 @@ struct ApplyLtsDenseBoundaryCorrections
 namespace Actions {
 namespace ApplyBoundaryCorrections_detail {
 template <bool LocalTimeStepping, size_t VolumeDim, bool DenseOutput,
-          bool UseNodegroupDgElements>
+          bool UseNodegroupDgElements, bool ComputeAuxiliary = false>
 struct ActionImpl {
   using inbox_tags =
       tmpl::list<evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
-          VolumeDim, UseNodegroupDgElements>>;
+          VolumeDim, UseNodegroupDgElements, ComputeAuxiliary>>;
   using const_global_cache_tags =
       tmpl::list<evolution::Tags::BoundaryCorrection, ::dg::Tags::Formulation>;
 
@@ -1243,6 +1630,14 @@ struct ActionImpl {
       const ArrayIndex& /*array_index*/, ActionList /*meta*/,
       const ParallelComponent* const /*meta*/) {
     static_assert(Metavariables::system::volume_dim == VolumeDim);
+    // The LDG auxiliary pass is implemented for DG elements only for now;
+    // DG-subcell support is deferred.  This guard makes an unsupported
+    // subcell + auxiliary configuration fail loudly at compile time rather than
+    // silently skipping the subcell ghost-data handling that the auxiliary
+    // receive omits.
+    static_assert(
+        not(ComputeAuxiliary and evolution::dg::using_subcell_v<Metavariables>),
+        "LDG auxiliary boundary corrections do not support DG-subcell yet.");
     static_assert(
         UseNodegroupDgElements ==
             Parallel::is_dg_element_collection_v<ParallelComponent>,
@@ -1261,8 +1656,8 @@ struct ActionImpl {
 
     if (not receive_boundary_data<
             Parallel::is_dg_element_collection_v<ParallelComponent>,
-            Metavariables, LocalTimeStepping, false>(make_not_null(&box),
-                                                     make_not_null(&inboxes))) {
+            Metavariables, LocalTimeStepping, false, ComputeAuxiliary>(
+            make_not_null(&box), make_not_null(&inboxes))) {
       return {Parallel::AlgorithmExecution::Retry, std::nullopt};
     }
 
@@ -1277,7 +1672,7 @@ struct ActionImpl {
     }
 
     db::mutate_apply<ApplyBoundaryCorrections<LocalTimeStepping, Metavariables,
-                                              DenseOutput>>(
+                                              DenseOutput, ComputeAuxiliary>>(
         make_not_null(&box));
     return {Parallel::AlgorithmExecution::Continue, std::nullopt};
   }
@@ -1292,6 +1687,24 @@ template <size_t VolumeDim, bool UseNodegroupDgElements>
 struct ApplyBoundaryCorrectionsToTimeDerivative
     : ApplyBoundaryCorrections_detail::ActionImpl<false, VolumeDim, false,
                                                   UseNodegroupDgElements> {};
+
+/*!
+ * \brief Receives and lifts the LDG auxiliary boundary corrections, correcting
+ * the auxiliary variables in the evolved state.
+ *
+ * This is the "receive" counterpart of the LDG auxiliary send action. It is the
+ * first communication step of the LDG two-communication scheme: after this
+ * action runs, the auxiliary variables stored in the evolved variables have
+ * been corrected with the numerical flux. The second step (the physical
+ * boundary correction) is done by
+ * `ApplyBoundaryCorrectionsToTimeDerivative`. Auxiliary boundary corrections
+ * are global time-stepping only.
+ */
+template <size_t VolumeDim, bool UseNodegroupDgElements>
+struct ApplyAuxiliaryBoundaryCorrectionsToVariables
+    : ApplyBoundaryCorrections_detail::ActionImpl<false, VolumeDim, false,
+                                                  UseNodegroupDgElements,
+                                                  /*ComputeAuxiliary=*/true> {};
 
 /*!
  * \brief Computes the boundary corrections for local time-stepping
