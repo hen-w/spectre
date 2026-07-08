@@ -114,6 +114,12 @@ class SoStandingWave : public evolution::initial_data::InitialData,
             tmpl::list<Tags::Psi, Tags::Pi, Tags::Phi<Dim>, Tags::BoundaryPsi>
             /*meta*/) const;
 
+  /// Retrieve the LDG evolved variables (Psi, Pi, BoundaryPsi); Phi is an
+  /// auxiliary variable and is not part of `variables_tag`.
+  tuples::TaggedTuple<Tags::Psi, Tags::Pi, Tags::BoundaryPsi> variables(
+      const tnsr::I<DataVector, Dim>& x, double t,
+      tmpl::list<Tags::Psi, Tags::Pi, Tags::BoundaryPsi> /*meta*/) const;
+
   /// Retrieve the time derivatives of the evolution variables
   tuples::TaggedTuple<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
                       ::Tags::dt<Tags::Phi<Dim>>>

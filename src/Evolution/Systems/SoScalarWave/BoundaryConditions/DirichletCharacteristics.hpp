@@ -129,11 +129,14 @@ class DirichletCharacteristics final : public BoundaryCondition<Dim> {
   using dg_interior_dt_vars_tags = tmpl::list<>;
   using dg_gridless_tags = tmpl::list<::Tags::Time>;
 
+  // The exterior fields are filled positionally in the framework's ghost-fill
+  // order: the evolved variables (Psi, Pi, BoundaryPsi) followed by the
+  // auxiliary variables (Phi).
   std::optional<std::string> dg_ghost(
       gsl::not_null<Scalar<DataVector>*> psi,
       gsl::not_null<Scalar<DataVector>*> pi,
-      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> phi,
       gsl::not_null<Scalar<DataVector>*> boundary_psi,
+      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> phi,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           face_mesh_velocity,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
@@ -144,11 +147,12 @@ class DirichletCharacteristics final : public BoundaryCondition<Dim> {
       const tnsr::I<DataVector, Dim, Frame::Inertial>& coords,
       double time) const;
 
+  // The time-derivative corrections are for the evolved variables
+  // (`variables_tag`: Psi, Pi, BoundaryPsi); Phi is auxiliary and has no time
+  // derivative to correct.
   std::optional<std::string> dg_time_derivative(
       gsl::not_null<Scalar<DataVector>*> dt_psi_correction,
       gsl::not_null<Scalar<DataVector>*> dt_pi_correction,
-      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
-          dt_phi_correction,
       gsl::not_null<Scalar<DataVector>*> dt_boundary_psi_correction,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
           face_mesh_velocity,

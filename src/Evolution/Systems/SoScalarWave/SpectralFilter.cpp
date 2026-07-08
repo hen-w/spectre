@@ -4,6 +4,7 @@
 #include <cstddef>
 
 #include "Evolution/DiscontinuousGalerkin/Initialization/SpectralFilters.tpp"
+#include "Evolution/Systems/SoScalarWave/System.hpp"
 #include "Evolution/Systems/SoScalarWave/Tags.hpp"
 #include "NumericalAlgorithms/LinearOperators/Filters/FilledCylinder.tpp"
 #include "NumericalAlgorithms/LinearOperators/Filters/HollowCylinder.tpp"
@@ -13,10 +14,13 @@
 #include "Utilities/TMPL.hpp"
 
 namespace {
+// The spectral filter acts on the evolved variables, matching the filter
+// registered by the executable (`Filters::Filter<Dim,
+// variables_tag::tags_list>`). Phi is an auxiliary variable and is not
+// filtered.
 template <size_t Dim>
 using tags_for_filter =
-    tmpl::list<SoScalarWave::Tags::Psi, SoScalarWave::Tags::Pi,
-               SoScalarWave::Tags::Phi<Dim>, SoScalarWave::Tags::BoundaryPsi>;
+    typename SoScalarWave::System<Dim>::variables_tag::tags_list;
 }  // namespace
 
 #define DIM(data) BOOST_PP_TUPLE_ELEM(0, data)

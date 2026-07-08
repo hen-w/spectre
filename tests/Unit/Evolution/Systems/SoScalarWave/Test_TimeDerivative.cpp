@@ -90,14 +90,13 @@ void check_du_dt(const size_t npts, const double time) {
 
   Scalar<DataVector> dt_psi{num_pts};
   Scalar<DataVector> dt_pi{num_pts};
-  tnsr::i<DataVector, Dim, Frame::Inertial> dt_phi{num_pts};
   Scalar<DataVector> dt_boundary_psi{num_pts};
 
   // d_boundary_psi_i (unused by apply)
   tnsr::i<DataVector, Dim, Frame::Inertial> d_boundary_psi{num_pts, 0.0};
 
   SoScalarWave::TimeDerivative<Dim>::apply(
-      make_not_null(&dt_psi), make_not_null(&dt_pi), make_not_null(&dt_phi),
+      make_not_null(&dt_psi), make_not_null(&dt_pi),
       make_not_null(&dt_boundary_psi), d_psi, d_pi, d_phi, d_boundary_psi, pi,
       phi, mesh, inv_jac, x, time);
 
@@ -107,11 +106,6 @@ void check_du_dt(const size_t npts, const double time) {
   // dt_pi = -trace(d_phi) = -d2psi/dt2
   CHECK_ITERABLE_APPROX(
       dt_pi, Scalar<DataVector>(-1.0 * solution.d2psi_dt2(x, time).get()));
-
-  // dt_phi = 0 (not evolved in LDG)
-  for (size_t d = 0; d < Dim; ++d) {
-    CHECK_ITERABLE_APPROX(dt_phi.get(d), DataVector(num_pts, 0.0));
-  }
 
   // dt_boundary_psi = 0 (no volume evolution)
   CHECK_ITERABLE_APPROX(dt_boundary_psi, Scalar<DataVector>(num_pts, 0.0));

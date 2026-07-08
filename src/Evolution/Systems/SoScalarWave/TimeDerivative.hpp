@@ -41,7 +41,6 @@ struct TimeDerivative {
       // variables_tag in the system struct.
       gsl::not_null<Scalar<DataVector>*> dt_psi,
       gsl::not_null<Scalar<DataVector>*> dt_pi,
-      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> dt_phi,
       gsl::not_null<Scalar<DataVector>*> dt_boundary_psi,
 
       // Partial derivative arguments. Listed in the system struct as

@@ -84,11 +84,15 @@ class DirichletAnalytic final : public BoundaryCondition<Dim> {
       tmpl::list<domain::Tags::Coordinates<Dim, Frame::Inertial>>;
   using dg_gridless_tags = tmpl::list<::Tags::Time>;
 
+  // The exterior fields are filled positionally in the order the framework
+  // provides them: the evolved variables (Psi, Pi, BoundaryPsi) followed by the
+  // auxiliary variables (Phi). This matches the framework's ghost-fill order
+  // `append<variables_tag::tags_list, auxiliary_variables>`.
   std::optional<std::string> dg_ghost(
       gsl::not_null<Scalar<DataVector>*> psi,
       gsl::not_null<Scalar<DataVector>*> pi,
-      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> phi,
       gsl::not_null<Scalar<DataVector>*> boundary_psi,
+      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> phi,
       const std::optional<
           tnsr::I<DataVector, Dim, Frame::Inertial>>& /*face_mesh_velocity*/,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& /*normal_covector*/,

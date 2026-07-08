@@ -7,6 +7,7 @@
 #include <optional>
 #include <pup.h>
 #include <random>
+#include <type_traits>
 
 #include "DataStructures/DataBox/DataBox.hpp"
 #include "DataStructures/DataBox/DataBoxTag.hpp"
@@ -14,6 +15,7 @@
 #include "DataStructures/Tensor/EagerMath/DotProduct.hpp"
 #include "DataStructures/Tensor/EagerMath/Magnitude.hpp"
 #include "DataStructures/Variables.hpp"
+#include "DataStructures/VariablesTag.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.tpp"
 #include "Domain/CoordinateMaps/Identity.hpp"
@@ -36,11 +38,46 @@ struct Var1 : db::SimpleTag {
   using type = Scalar<DataVector>;
 };
 
+// Auxiliary (LDG) variable, dedicated tag (not one of the evolved variables),
+// used to exercise the auxiliary-variable tag-list helpers below.
+template <size_t Dim>
+struct AuxVar : db::SimpleTag {
+  using type = tnsr::I<DataVector, Dim, Frame::Inertial>;
+};
+
 template <size_t Dim>
 struct System {
+  using variables_tag = ::Tags::Variables<tmpl::list<Var1>>;
+  using gradient_variables = tmpl::list<Var1>;
+  using auxiliary_variables = tmpl::list<AuxVar<Dim>>;
   using flux_variables = tmpl::list<Var1>;
   using inverse_spatial_metric_tag = InverseSpatialMetric<Dim>;
 };
+
+// Compile-time coverage for the tag-list helpers that decide what the framework
+// differentiates and projects to faces once a system declares auxiliary (LDG)
+// variables. They pin the ordering the boundary corrections rely on: the
+// physical pass projects the evolved variables followed by the auxiliary
+// variables, while the auxiliary pass projects the evolved variables only.
+static_assert(
+    std::is_same_v<
+        ::evolution::dg::Actions::detail::
+            dg_boundary_correction_projected_evolved_tags<System<1>, false>,
+        tmpl::list<Var1, AuxVar<1>>>,
+    "Physical-pass projected tags must be the evolved variables followed by "
+    "the auxiliary variables.");
+static_assert(
+    std::is_same_v<
+        ::evolution::dg::Actions::detail::
+            dg_boundary_correction_projected_evolved_tags<System<1>, true>,
+        tmpl::list<Var1>>,
+    "Auxiliary-pass projected tags must be the evolved variables only.");
+static_assert(
+    std::is_same_v<
+        ::evolution::dg::Actions::detail::vars_to_differentiate_tags<System<1>>,
+        tmpl::list<Var1, AuxVar<1>>>,
+    "Differentiation source must be the gradient variables, then the remaining "
+    "evolved and auxiliary variables, with duplicates removed.");
 
 template <size_t Dim>
 struct BoundaryTerms {

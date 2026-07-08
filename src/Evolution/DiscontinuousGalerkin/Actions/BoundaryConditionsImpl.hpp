@@ -19,6 +19,7 @@
 #include "DataStructures/Tensor/EagerMath/Magnitude.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
+#include "DataStructures/VariablesTag.hpp"
 #include "Domain/Block.hpp"
 #include "Domain/BoundaryConditions/Cartoon.hpp"
 #include "Domain/BoundaryConditions/None.hpp"
@@ -71,6 +72,32 @@ std::optional<std::string> apply_boundary_condition_impl(
       get<TagsFromFace>(fields_on_interior_face)..., volume_args...);
 }
 
+// Calls `dg_auxiliary_boundary_terms`, writing one correction per tag held by
+// the `boundary_corrections_on_face` buffer (the `dt`-prefixed auxiliary
+// variables). Expanding the buffer's own tags lets the auxiliary pass produce a
+// correction shaped by `auxiliary_variables` rather than by the evolved
+// variables, unlike the physical `dg_boundary_terms` call which is shaped by
+// the evolved variables.
+template <typename BoundaryCorrection, typename... CorrectionTags,
+          typename PackagedDataVariables, typename... PackageFieldTags,
+          typename... BoundaryTermsVolumeTags, typename DbTagsList>
+void call_dg_auxiliary_boundary_terms(
+    const gsl::not_null<Variables<tmpl::list<CorrectionTags...>>*>
+        boundary_corrections_on_face,
+    const BoundaryCorrection& boundary_correction,
+    const PackagedDataVariables& internal_packaged_data,
+    const PackagedDataVariables& external_packaged_data,
+    tmpl::list<PackageFieldTags...> /*meta*/,
+    const ::dg::Formulation dg_formulation,
+    tmpl::list<BoundaryTermsVolumeTags...> /*meta*/,
+    const db::DataBox<DbTagsList>& box) {
+  boundary_correction.dg_auxiliary_boundary_terms(
+      make_not_null(&get<CorrectionTags>(*boundary_corrections_on_face))...,
+      get<PackageFieldTags>(internal_packaged_data)...,
+      get<PackageFieldTags>(external_packaged_data)..., dg_formulation,
+      get<BoundaryTermsVolumeTags>(box)...);
+}
+
 template <typename System, size_t Dim, bool ComputeAuxiliary = false,
           typename DbTagsList, typename BoundaryCorrection,
           typename BoundaryCondition, typename... EvolvedVariablesTags,
@@ -85,6 +112,13 @@ void apply_boundary_condition_on_face(
     const Direction<Dim>& direction,
     [[maybe_unused]] const Variables<tmpl::list<EvolvedVariablesTags...>>&
         volume_evolved_vars,
+    // The physical boundary correction may read the auxiliary variables (e.g.
+    // an LDG flux reads Phi), so they are projected to the face for the
+    // physical pass. Null during the auxiliary pass (which computes them) or
+    // for systems without auxiliary variables.
+    [[maybe_unused]] const Variables<
+        get_auxiliary_variables_or_empty_t<System>>* const
+        volume_auxiliary_variables,
     [[maybe_unused]] const Variables<
         db::wrap_tags_in<::Tags::Flux, typename System::flux_variables,
                          tmpl::size_t<Dim>, Frame::Inertial>>& volume_fluxes,
@@ -120,10 +154,17 @@ void apply_boundary_condition_on_face(
   using flux_variables = typename System::flux_variables;
   using dt_variables_tags = db::wrap_tags_in<::Tags::dt, variables_tags>;
   using dt_variables_tag = db::add_tag_prefix<::Tags::dt, variables_tag>;
-  // When computing auxiliary corrections we add the lifted boundary correction
-  // to the evolved variables, not to their time derivatives.
+  // The auxiliary (LDG) pass corrects the auxiliary variables, which live in
+  // their own storage `::Tags::Variables<auxiliary_variables>`, not in
+  // `variables_tag` (detect-or-default: empty for non-LDG systems, which never
+  // instantiate the auxiliary pass).
+  using auxiliary_variables = get_auxiliary_variables_or_empty_t<System>;
+  using auxiliary_variables_tag = ::Tags::Variables<auxiliary_variables>;
+  // The auxiliary pass writes its lifted correction into the auxiliary-variable
+  // storage; every other path adds it to the evolved-variable time derivatives.
   using tag_to_update =
-      tmpl::conditional_t<ComputeAuxiliary, variables_tag, dt_variables_tag>;
+      tmpl::conditional_t<ComputeAuxiliary, auxiliary_variables_tag,
+                          dt_variables_tag>;
 
   const Mesh<Dim - 1> face_mesh = volume_mesh.slice_away(direction.dimension());
   const size_t number_of_points_on_face = face_mesh.number_of_grid_points();
@@ -188,10 +229,13 @@ void apply_boundary_condition_on_face(
       detail::boundary_correction_primitive_tags<
           System::has_primitive_and_conservative_vars, BoundaryCorrection>,
       tmpl::list<>>;
-  using correction_evolved_vars_tags =
-      tmpl::conditional_t<uses_ghost_condition,
-                          typename System::variables_tag::tags_list,
-                          tmpl::list<>>;
+  // For a ghost boundary correction the projected evolved-like fields are the
+  // evolved variables and, for the physical pass, the auxiliary variables (the
+  // boundary correction reads them, e.g. an LDG flux reads Phi).
+  using correction_evolved_vars_tags = tmpl::conditional_t<
+      uses_ghost_condition,
+      dg_boundary_correction_projected_evolved_tags<System, ComputeAuxiliary>,
+      tmpl::list<>>;
 
   // Now combine the tags lists for each type of tag. These are all the tags
   // we need to project from the interior, excluding the inverse spatial
@@ -237,6 +281,17 @@ void apply_boundary_condition_on_face(
     ::dg::project_contiguous_data_to_boundary(
         make_not_null(&interior_face_fields), volume_evolved_vars, volume_mesh,
         direction);
+    if constexpr (not ComputeAuxiliary and
+                  tmpl::size<auxiliary_variables>::value != 0) {
+      // The physical boundary correction reads the auxiliary variables (e.g.
+      // the LDG flux reads Phi); project them to the interior face by name.
+      ASSERT(volume_auxiliary_variables != nullptr,
+             "The auxiliary variables must be provided to the physical pass "
+             "when the system has auxiliary variables.");
+      ::dg::project_tensors_to_boundary<auxiliary_variables>(
+          make_not_null(&interior_face_fields), *volume_auxiliary_variables,
+          volume_mesh, direction);
+    }
   } else {
     ::dg::project_tensors_to_boundary<interior_evolved_vars_tags>(
         make_not_null(&interior_face_fields), volume_evolved_vars, volume_mesh,
@@ -421,12 +476,15 @@ void apply_boundary_condition_on_face(
 
   // Now we populate the fields on the exterior side of the face using the
   // boundary condition.
-  using tags_on_exterior_face = tmpl::remove_duplicates<
-      tmpl::append<variables_tags, fluxes_tags, correction_temp_tags,
-                   correction_prim_tags, inverse_spatial_metric_list,
-                   tmpl::list<detail::OneOverNormalVectorMagnitude,
-                              detail::NormalVector<Dim>,
-                              evolution::dg::Tags::NormalCovector<Dim>>>>;
+  // `auxiliary_variables` is included unconditionally: `dg_ghost` supplies the
+  // exterior values of every field it declares (for LDG that includes the
+  // auxiliary variable Phi), in both the physical and the auxiliary pass.
+  using tags_on_exterior_face = tmpl::remove_duplicates<tmpl::append<
+      variables_tags, auxiliary_variables, fluxes_tags, correction_temp_tags,
+      correction_prim_tags, inverse_spatial_metric_list,
+      tmpl::list<detail::OneOverNormalVectorMagnitude,
+                 detail::NormalVector<Dim>,
+                 evolution::dg::Tags::NormalCovector<Dim>>>>;
   Variables<tags_on_exterior_face> exterior_face_fields{
       number_of_points_on_face};
 
@@ -439,9 +497,12 @@ void apply_boundary_condition_on_face(
 
   if constexpr (uses_ghost_condition) {
     using mortar_tags_list = tmpl::list<PackageFieldTags...>;
-    using dg_package_data_projected_tags =
-        tmpl::append<variables_tags, fluxes_tags, correction_temp_tags,
-                     correction_prim_tags>;
+    // Fields handed to `dg_package_data`: evolved variables, then (physical
+    // pass only) auxiliary variables, matching the order the boundary
+    // correction reads its inputs.
+    using dg_package_data_projected_tags = tmpl::append<
+        dg_boundary_correction_projected_evolved_tags<System, ComputeAuxiliary>,
+        fluxes_tags, correction_temp_tags, correction_prim_tags>;
 
     Variables<mortar_tags_list> internal_packaged_data{
         number_of_points_on_face};
@@ -599,17 +660,24 @@ void apply_boundary_condition_on_face(
           db::get<PackageDataVolumeTags>(*box)...);
     }
 
-    Variables<dt_variables_tags> boundary_corrections_on_face{
+    // The correction buffer is shaped by what `tag_to_update` receives: the
+    // (non-time-evolved) auxiliary variables for the auxiliary pass, the
+    // evolved-variable time derivatives otherwise.
+    using correction_tags =
+        tmpl::conditional_t<ComputeAuxiliary, auxiliary_variables,
+                            dt_variables_tags>;
+    Variables<correction_tags> boundary_corrections_on_face{
         number_of_points_on_face};
 
     // Compute boundary correction
     if constexpr (ComputeAuxiliary) {
-      boundary_correction.dg_auxiliary_boundary_terms(
-          make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
-              boundary_corrections_on_face))...,
-          get<PackageFieldTags>(internal_packaged_data)...,
-          get<PackageFieldTags>(external_packaged_data)..., dg_formulation,
-          get<BoundaryTermsVolumeTags>(*box)...);
+      // The auxiliary boundary terms write one correction per auxiliary
+      // variable (the buffer's own tags), not per evolved variable.
+      call_dg_auxiliary_boundary_terms(
+          make_not_null(&boundary_corrections_on_face), boundary_correction,
+          internal_packaged_data, external_packaged_data,
+          tmpl::list<PackageFieldTags...>{}, dg_formulation,
+          tmpl::list<BoundaryTermsVolumeTags...>{}, *box);
     } else {
       boundary_correction.dg_boundary_terms(
           make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
@@ -742,12 +810,23 @@ void apply_boundary_conditions_on_all_external_faces(
   using flux_variables = typename System::flux_variables;
   using fluxes_tags = db::wrap_tags_in<::Tags::Flux, flux_variables,
                                        tmpl::size_t<Dim>, Frame::Inertial>;
+  using auxiliary_variables = get_auxiliary_variables_or_empty_t<System>;
 
   const Element<Dim>& element = db::get<domain::Tags::Element<Dim>>(*box);
   size_t number_of_boundaries_left = element.external_boundaries().size();
 
   if (number_of_boundaries_left == 0) {
     return;
+  }
+
+  // The physical boundary correction reads the auxiliary variables projected to
+  // the face; the auxiliary pass computes them and does not. Provide their
+  // storage only in the physical pass and only when the system has them.
+  const Variables<auxiliary_variables>* volume_auxiliary_variables = nullptr;
+  if constexpr (not ComputeAuxiliary and
+                tmpl::size<auxiliary_variables>::value != 0) {
+    volume_auxiliary_variables =
+        &db::get<::Tags::Variables<auxiliary_variables>>(*box);
   }
 
   const auto& external_boundary_conditions =
@@ -780,7 +859,7 @@ void apply_boundary_conditions_on_all_external_faces(
                                     &external_boundary_conditions,
                                     &number_of_boundaries_left, &partial_derivs,
                                     &primitive_vars, &temporaries,
-                                    &volume_fluxes](
+                                    &volume_fluxes, volume_auxiliary_variables](
                                        auto derived_boundary_condition_v) {
     using DerivedBoundaryCondition =
         tmpl::type_from<decltype(derived_boundary_condition_v)>;
@@ -816,8 +895,8 @@ void apply_boundary_conditions_on_all_external_faces(
         detail::apply_boundary_condition_on_face<System, Dim, ComputeAuxiliary>(
             box, boundary_correction,
             dynamic_cast<const DerivedBoundaryCondition&>(boundary_condition),
-            direction, db::get<variables_tag>(*box), volume_fluxes,
-            partial_derivs, temporaries, primitive_vars,
+            direction, db::get<variables_tag>(*box), volume_auxiliary_variables,
+            volume_fluxes, partial_derivs, temporaries, primitive_vars,
             db::get<::dg::Tags::Formulation>(*box),
             db::get<::domain::Tags::Mesh<Dim>>(*box),
             db::get<::domain::Tags::Element<Dim>>(*box),
@@ -833,12 +912,15 @@ void apply_boundary_conditions_on_all_external_faces(
                                                    Frame::Inertial>>(*box),
             package_data_volume_tags{}, package_field_tags{},
             boundary_terms_volume_tags{},
-            tmpl::remove_duplicates<
-                tmpl::append<typename variables_tag::tags_list, fluxes_tags,
-                             package_data_temp_tags,
-                             typename detail::get_primitive_vars<
-                                 System::has_primitive_and_conservative_vars>::
-                                 template f<BoundaryCorrection>>>{},
+            // Tags `dg_ghost` fills on the exterior face. `auxiliary_variables`
+            // is included unconditionally: `dg_ghost` supplies every field it
+            // declares (for LDG that includes Phi) in both passes.
+            tmpl::remove_duplicates<tmpl::append<
+                typename variables_tag::tags_list, auxiliary_variables,
+                fluxes_tags, package_data_temp_tags,
+                typename detail::get_primitive_vars<
+                    System::has_primitive_and_conservative_vars>::
+                    template f<BoundaryCorrection>>>{},
             typename DerivedBoundaryCondition::dg_gridless_tags{});
         --number_of_boundaries_left;
       }

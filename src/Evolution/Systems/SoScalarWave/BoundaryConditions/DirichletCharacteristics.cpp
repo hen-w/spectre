@@ -184,8 +184,8 @@ template <size_t Dim>
 std::optional<std::string> DirichletCharacteristics<Dim>::dg_ghost(
     const gsl::not_null<Scalar<DataVector>*> psi,
     const gsl::not_null<Scalar<DataVector>*> pi,
-    const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> phi,
     const gsl::not_null<Scalar<DataVector>*> boundary_psi,
+    const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> phi,
     const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
         face_mesh_velocity,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
@@ -233,8 +233,6 @@ template <size_t Dim>
 std::optional<std::string> DirichletCharacteristics<Dim>::dg_time_derivative(
     const gsl::not_null<Scalar<DataVector>*> dt_psi_correction,
     const gsl::not_null<Scalar<DataVector>*> dt_pi_correction,
-    const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
-        dt_phi_correction,
     const gsl::not_null<Scalar<DataVector>*> dt_boundary_psi_correction,
     const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
         face_mesh_velocity,
@@ -245,12 +243,9 @@ std::optional<std::string> DirichletCharacteristics<Dim>::dg_time_derivative(
     const Scalar<DataVector>& /*interior_boundary_psi*/,
     const tnsr::I<DataVector, Dim, Frame::Inertial>& coords,
     [[maybe_unused]] const double time) const {
-  // No corrections to Psi, Pi, or Phi from the time derivative path
+  // No corrections to Psi or Pi from the time derivative path
   get(*dt_psi_correction) = 0.0;
   get(*dt_pi_correction) = 0.0;
-  for (size_t d = 0; d < Dim; ++d) {
-    dt_phi_correction->get(d) = 0.0;
-  }
 
   if (copy_psi_from_interior_) {
     // BoundaryPsi is not used; no time derivative correction needed

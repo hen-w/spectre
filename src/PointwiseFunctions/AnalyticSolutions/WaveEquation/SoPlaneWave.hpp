@@ -139,6 +139,12 @@ class SoPlaneWave : public evolution::initial_data::InitialData,
             tmpl::list<Tags::Psi, Tags::Pi, Tags::Phi<Dim>, Tags::BoundaryPsi>
             /*meta*/) const;
 
+  /// Retrieve the LDG evolved variables (Psi, Pi, BoundaryPsi); Phi is an
+  /// auxiliary variable and is not part of `variables_tag`.
+  tuples::TaggedTuple<Tags::Psi, Tags::Pi, Tags::BoundaryPsi> variables(
+      const tnsr::I<DataVector, Dim>& x, double t,
+      tmpl::list<Tags::Psi, Tags::Pi, Tags::BoundaryPsi> /*meta*/) const;
+
   /// Retrieve the time derivative of the evolution variables at time `t` and
   /// spatial coordinates `x`
   ///

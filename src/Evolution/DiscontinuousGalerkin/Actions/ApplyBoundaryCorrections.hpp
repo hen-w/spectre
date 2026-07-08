@@ -20,6 +20,7 @@
 #include "DataStructures/DataBox/Prefixes.hpp"
 #include "DataStructures/TaggedTuple.hpp"
 #include "DataStructures/Tensor/EagerMath/Magnitude.hpp"
+#include "DataStructures/VariablesTag.hpp"
 #include "Domain/FaceNormal.hpp"
 #include "Domain/Structure/DirectionalIdMap.hpp"
 #include "Domain/Structure/Element.hpp"
@@ -864,7 +865,24 @@ struct ApplyBoundaryCorrections {
   using variables_tag = typename system::variables_tag;
   using FilterTagList = typename variables_tag::tags_list;
   using dt_variables_tag = db::add_tag_prefix<::Tags::dt, variables_tag>;
-  using DtVariables = typename dt_variables_tag::type;
+  // The auxiliary (LDG) pass corrects the auxiliary variables, which live in
+  // their own storage `::Tags::Variables<auxiliary_variables>`, not in
+  // `variables_tag`. `auxiliary_variables` is a detect-or-default System alias
+  // (empty for non-LDG systems, which never instantiate the auxiliary pass).
+  using auxiliary_variables_tag =
+      ::Tags::Variables<evolution::dg::Actions::detail::
+                            get_auxiliary_variables_or_empty_t<system>>;
+  // The correction-buffer type. The physical/LTS paths hold time derivatives
+  // (`dt_variables_tag`), lifted into `dt_variables_tag` (GTS) or
+  // `variables_tag` (LTS, via the prefix-agnostic `Variables` arithmetic). The
+  // auxiliary variables are not time-evolved, so the auxiliary pass's buffer is
+  // shaped by `auxiliary_variables` directly (no `dt` prefix); it holds the
+  // correction added to the auxiliary variables and matches `tag_to_update`
+  // exactly.
+  using DtVariables =
+      tmpl::conditional_t<ComputeAuxiliary,
+                          typename auxiliary_variables_tag::type,
+                          typename dt_variables_tag::type>;
   using derived_boundary_corrections =
       tmpl::at<typename Metavariables::factory_creation::factory_classes,
                evolution::BoundaryCorrection>;
@@ -887,12 +905,13 @@ struct ApplyBoundaryCorrections {
   using TimeStepperType =
       tmpl::conditional_t<local_time_stepping, LtsTimeStepper, TimeStepper>;
 
-  // For the auxiliary pass we write the corrected auxiliary variable into
-  // `variables_tag` (the auxiliary variable lives there today), so the GTS
-  // auxiliary pass updates `variables_tag` rather than `dt_variables_tag`.
+  // The auxiliary pass writes the corrected auxiliary variables into their own
+  // storage (`auxiliary_variables_tag`); LTS updates `variables_tag`; the GTS
+  // physical pass updates `dt_variables_tag`.
   using tag_to_update =
-      tmpl::conditional_t<ComputeAuxiliary or local_time_stepping,
-                          variables_tag, dt_variables_tag>;
+      tmpl::conditional_t<ComputeAuxiliary, auxiliary_variables_tag,
+                          tmpl::conditional_t<local_time_stepping,
+                                              variables_tag, dt_variables_tag>>;
   using mortar_data_tag =
       tmpl::conditional_t<local_time_stepping,
                           evolution::dg::Tags::MortarDataHistory<volume_dim>,
@@ -1347,11 +1366,12 @@ struct ApplyBoundaryCorrections {
                 // `dt_boundary_correction_on_mortar` is used purely as a
                 // scratch container for the packaged auxiliary correction on
                 // the mortar.  The correction is ultimately applied to the
-                // evolved variables themselves, not to their time derivative:
-                // `tag_to_update` is `variables_tag` for the auxiliary pass,
-                // and this `dt`-prefixed buffer reconciles with it via the
-                // prefix-agnostic `Variables::operator+=` / `add_slice_to_data`
-                // used when the lifted result is added to `vars_to_update`.
+                // auxiliary-variable storage, not to a time derivative:
+                // `tag_to_update` is `auxiliary_variables_tag` for the
+                // auxiliary pass, and this `dt`-prefixed buffer reconciles with
+                // it via the prefix-agnostic `Variables::operator+=` /
+                // `add_slice_to_data` used when the lifted result is added to
+                // `vars_to_update`.
                 call_auxiliary_boundary_correction(
                     make_not_null(&dt_boundary_correction_on_mortar),
                     local_data_on_mortar, neighbor_data_on_mortar,
@@ -1391,14 +1411,19 @@ struct ApplyBoundaryCorrections {
                 }
                 return dt_boundary_correction_on_mortar;
               }();
-              if constexpr (not DenseOutput) {
+              // The auxiliary (LDG) boundary correction is not filtered. The
+              // boundary filter is configured over `FilterTagList`
+              // (= `variables_tag`) by design, which excludes the auxiliary
+              // variables; filtering the auxiliary correction would require
+              // adding the auxiliary variables to that filtered set (i.e.
+              // filtering the auxiliary variables themselves), which we
+              // deliberately do not do. (The `auxiliary_variables`-shaped
+              // auxiliary buffer also cannot be run through a
+              // `variables_tag`-shaped filter.) Only the physical boundary
+              // corrections are filtered.
+              if constexpr (not DenseOutput and not ComputeAuxiliary) {
                 // Filter the boundary correction on the mortar before it is
-                // lifted into the volume.  For the LDG auxiliary pass
-                // (ComputeAuxiliary == true) the auxiliary boundary correction
-                // is filtered here by the same boundary filter as the physical
-                // boundary corrections.  Whether the auxiliary correction
-                // should be filtered identically to the physical one is not
-                // yet decided and may change.
+                // lifted into the volume.
                 if (boundary_filter_active) {
                   using BoundaryFilterVars = Variables<FilterTagList>;
                   auto boundary_filter_view =

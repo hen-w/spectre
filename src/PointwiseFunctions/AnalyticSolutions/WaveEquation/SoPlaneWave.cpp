@@ -137,6 +137,18 @@ SoPlaneWave<Dim>::variables(
 }
 
 template <size_t Dim>
+tuples::TaggedTuple<Tags::Psi, Tags::Pi, Tags::BoundaryPsi>
+SoPlaneWave<Dim>::variables(
+    const tnsr::I<DataVector, Dim>& x, const double t,
+    const tmpl::list<Tags::Psi, Tags::Pi, Tags::BoundaryPsi> /*meta*/) const {
+  auto base_vars =
+      variables(x, t, tmpl::list<Tags::Psi, Tags::Pi, Tags::Phi<Dim>>{});
+  // BoundaryPsi initialized to Psi
+  return {std::move(get<Tags::Psi>(base_vars)),
+          std::move(get<Tags::Pi>(base_vars)), psi(x, t)};
+}
+
+template <size_t Dim>
 tuples::TaggedTuple<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
                     ::Tags::dt<Tags::Phi<Dim>>>
 SoPlaneWave<Dim>::variables(

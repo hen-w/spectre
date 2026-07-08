@@ -761,9 +761,13 @@ ComputeTimeDerivative<Dim, EvolutionSystem, DgStepChoosers, LocalTimeStepping,
                           tmpl::pin<EvolutionSystem>, tmpl::_1>>;
   using fluxes_tags = db::wrap_tags_in<::Tags::Flux, flux_variables,
                                        tmpl::size_t<Dim>, Frame::Inertial>;
-  using dg_package_data_projected_tags =
-      tmpl::list<typename variables_tag::tags_list, fluxes_tags,
-                 all_dg_package_temporary_tags, all_primitive_tags_for_face>;
+  // The physical boundary correction reads the evolved variables and, for LDG
+  // systems, the auxiliary variables (projected to the face); size the face
+  // buffer accordingly.
+  using dg_package_data_projected_tags = tmpl::list<
+      detail::dg_boundary_correction_projected_evolved_tags<EvolutionSystem,
+                                                            false>,
+      fluxes_tags, all_dg_package_temporary_tags, all_primitive_tags_for_face>;
   using all_face_temporary_tags =
       tmpl::remove_duplicates<tmpl::flatten<tmpl::push_back<
           tmpl::list<dg_package_data_projected_tags,
@@ -893,17 +897,13 @@ ComputeTimeDerivative<Dim, EvolutionSystem, DgStepChoosers, LocalTimeStepping,
     // only over `variables_tag` (auxiliary variables are not time-evolved
     // here).
     //
-    // `partial_derivatives` (see PartialDerivatives.hpp) requires the
-    // differentiated tags - `gradient_variables`/`partial_derivative_tags` - to
-    // be the *head* of the source `Variables`, so we list them first; the rest
-    // of `variables_tag` (read by the moving-mesh terms) and
-    // `auxiliary_variables` follow, with duplicates removed. Because
-    // `gradient_variables` is a subset of `variables_tag` and
-    // `auxiliary_variables`, the two `assign_subset` calls below fully populate
-    // the combined Variables, including the gradient head.
-    using vars_to_differentiate_tags = tmpl::remove_duplicates<
-        tmpl::append<partial_derivative_tags, typename variables_tag::tags_list,
-                     auxiliary_variables>>;
+    // The differentiation source combines the evolved and auxiliary variables
+    // with `gradient_variables` at the head; see `vars_to_differentiate_tags`
+    // for the ordering rationale. Because `gradient_variables` is a subset of
+    // `variables_tag union auxiliary_variables`, the two `assign_subset` calls
+    // below fully populate it, including the gradient head.
+    using vars_to_differentiate_tags =
+        detail::vars_to_differentiate_tags<EvolutionSystem>;
     Variables<vars_to_differentiate_tags> vars_to_differentiate{
         mesh.number_of_grid_points()};
     vars_to_differentiate.assign_subset(db::get<variables_tag>(box));

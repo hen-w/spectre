@@ -1,17 +1,35 @@
 // Distributed under the MIT License.
 // See LICENSE.txt for details.
 
+#include <cstddef>
+
 #include "DataStructures/DataBox/PrefixHelpers.hpp"
 #include "DataStructures/DataBox/Prefixes.hpp"
+#include "Evolution/DiscontinuousGalerkin/Actions/ComputeTimeDerivativeHelpers.hpp"
 #include "Evolution/DiscontinuousGalerkin/Actions/VolumeTermsImpl.tpp"
 #include "Evolution/Systems/SoScalarWave/System.hpp"
 #include "Evolution/Systems/SoScalarWave/Tags.hpp"
 #include "Evolution/Systems/SoScalarWave/TimeDerivative.hpp"
 #include "NumericalAlgorithms/LinearOperators/PartialDerivatives.tpp"
 #include "Utilities/GenerateInstantiations.hpp"
+#include "Utilities/TMPL.hpp"
 
 // Instantiate volume_terms and the partial_derivatives call used by the
-// infrastructure for gradient_variables = {Pi, Phi<Dim>}.
+// infrastructure. These must be instantiated with exactly the differentiation
+// source `ComputeTimeDerivative` builds, so we reuse its shared definition
+// (`vars_to_differentiate_tags`) rather than re-deriving it here.
+
+namespace {
+// Local shorthand keyed on `Dim`. Named distinctly from the shared
+// `detail::vars_to_differentiate_tags` it forwards to: in an explicit
+// instantiation of `detail::volume_terms`, an unqualified name matching one in
+// `detail` would resolve to that (type-parameter) template and reject the
+// integer `Dim`.
+template <size_t Dim>
+using differentiation_source_tags =
+    evolution::dg::Actions::detail::vars_to_differentiate_tags<
+        ::SoScalarWave::System<Dim>>;
+}  // namespace
 
 #define DIM(data) BOOST_PP_TUPLE_ELEM(0, data)
 
@@ -42,8 +60,7 @@
               typename ::SoScalarWave::System<DIM(data)>::flux_variables,     \
               tmpl::size_t<DIM(data)>, Frame::Inertial>>>*>                   \
           div_fluxes,                                                         \
-      const Variables<typename ::SoScalarWave::System<DIM(                    \
-          data)>::variables_tag::tags_list>& evolved_vars,                    \
+      const Variables<differentiation_source_tags<DIM(data)>>& evolved_vars,  \
       const ::dg::Formulation dg_formulation, const Mesh<DIM(data)>& mesh,    \
       [[maybe_unused]] const tnsr::I<DataVector, DIM(data), Frame::Inertial>& \
           inertial_coordinates,                                               \
@@ -68,15 +85,13 @@
           ::Tags::deriv,                                                      \
           typename ::SoScalarWave::System<DIM(data)>::gradient_variables,     \
           tmpl::size_t<DIM(data)>, Frame::Inertial>,                          \
-      typename ::SoScalarWave::System<DIM(data)>::variables_tag::tags_list,   \
-      DIM(data), Frame::Inertial>(                                            \
+      differentiation_source_tags<DIM(data)>, DIM(data), Frame::Inertial>(    \
       gsl::not_null<Variables<db::wrap_tags_in<                               \
           ::Tags::deriv,                                                      \
           typename ::SoScalarWave::System<DIM(data)>::gradient_variables,     \
           tmpl::size_t<DIM(data)>, Frame::Inertial>>*>                        \
           du,                                                                 \
-      const Variables<typename ::SoScalarWave::System<DIM(                    \
-          data)>::variables_tag::tags_list>& u,                               \
+      const Variables<differentiation_source_tags<DIM(data)>>& u,             \
       const Mesh<DIM(data)>& mesh,                                            \
       const InverseJacobian<DataVector, DIM(data), Frame::ElementLogical,     \
                             Frame::Inertial>& inverse_jacobian,               \

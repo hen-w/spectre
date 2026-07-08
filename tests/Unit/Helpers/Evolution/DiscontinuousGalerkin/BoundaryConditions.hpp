@@ -221,6 +221,16 @@ void test_boundary_condition_with_python_impl(
 
   using variables_tag = typename System::variables_tag;
   using variables_tags = typename variables_tag::tags_list;
+  // The auxiliary (LDG) variables, if the system declares them; an empty list
+  // otherwise (so this is a no-op for non-LDG systems). `dg_ghost` supplies the
+  // exterior values of every field it declares - for an LDG system that
+  // includes the auxiliary variables - so they are threaded into the
+  // ghost-fill/exterior-face tag lists after the evolved variables, mirroring
+  // `evolution::dg::Actions::detail::apply_boundary_condition_on_face` in
+  // `BoundaryConditionsImpl.hpp`.
+  using auxiliary_variables =
+      ::evolution::dg::Actions::detail::get_auxiliary_variables_or_empty_t<
+          System>;
   using flux_variables = typename System::flux_variables;
   using dt_variables_tags = db::wrap_tags_in<::Tags::dt, variables_tags>;
 
@@ -429,9 +439,13 @@ void test_boundary_condition_with_python_impl(
         typename ::evolution::dg::Actions::detail::get_primitive_vars<
             System::has_primitive_and_conservative_vars>::
             template f<BoundaryCorrection>;
+    // `auxiliary_variables` is included unconditionally (empty for non-LDG
+    // systems): `dg_ghost` fills every field it declares on the exterior face,
+    // which for an LDG system includes the auxiliary variables. Matches the
+    // production `tags_on_exterior_face` in `BoundaryConditionsImpl.hpp`.
     using tags_on_exterior_face = tmpl::remove_duplicates<tmpl::append<
-        variables_tags, fluxes_tags, correction_temp_tags, correction_prim_tags,
-        inverse_spatial_metric_list,
+        variables_tags, auxiliary_variables, fluxes_tags, correction_temp_tags,
+        correction_prim_tags, inverse_spatial_metric_list,
         tmpl::list<
             ::evolution::dg::Actions::detail::OneOverNormalVectorMagnitude,
             ::evolution::dg::Actions::detail::NormalVector<FaceDim + 1>,
@@ -597,6 +611,10 @@ void test_boundary_condition_with_python(
                 "All boundary condition classes must be marked `final`.");
   static_assert(tt::is_a_v<tmpl::list, ExtraTagsForPythonFromDataBox>);
   using variables_tags = typename System::variables_tag::tags_list;
+  // Auxiliary (LDG) variables, or an empty list for non-LDG systems.
+  using auxiliary_variables =
+      ::evolution::dg::Actions::detail::get_auxiliary_variables_or_empty_t<
+          System>;
   using flux_variables = typename System::flux_variables;
   using fluxes_tags =
       db::wrap_tags_in<::Tags::Flux, flux_variables, tmpl::size_t<FaceDim + 1>,
@@ -623,12 +641,17 @@ void test_boundary_condition_with_python(
        &ranges](auto boundary_correction_v) {
         using BoundaryCorrection =
             tmpl::type_from<decltype(boundary_correction_v)>;
-        using package_data_input_tags = tmpl::append<
-            variables_tags, fluxes_tags,
+        // The fields `dg_ghost` fills / that `dg_package_data` reads on the
+        // face: the evolved variables, then (for an LDG system) the auxiliary
+        // variables, matching the production ghost-fill list in
+        // `BoundaryConditionsImpl.hpp`. `auxiliary_variables` is empty for
+        // non-LDG systems, so this is a no-op there.
+        using package_data_input_tags = tmpl::remove_duplicates<tmpl::append<
+            variables_tags, auxiliary_variables, fluxes_tags,
             typename BoundaryCorrection::dg_package_data_temporary_tags,
             typename ::evolution::dg::Actions::detail::get_primitive_vars<
                 System::has_primitive_and_conservative_vars>::
-                template f<BoundaryCorrection>>;
+                template f<BoundaryCorrection>>>;
         using boundary_condition_dg_gridless_tags =
             typename BoundaryCondition::dg_gridless_tags;
         for (const auto use_moving_mesh : {false, true}) {

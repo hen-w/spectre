@@ -24,7 +24,6 @@ evolution::dg::TimeDerivativeDecisions<Dim> TimeDerivative<Dim>::apply(
     // variables_tag in the system struct.
     gsl::not_null<Scalar<DataVector>*> dt_psi,
     gsl::not_null<Scalar<DataVector>*> dt_pi,
-    gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> dt_phi,
     gsl::not_null<Scalar<DataVector>*> dt_boundary_psi,
 
     // Partial derivative arguments. Listed in the system struct as
@@ -47,10 +46,8 @@ evolution::dg::TimeDerivativeDecisions<Dim> TimeDerivative<Dim>::apply(
   for (size_t d = 0; d < Dim; ++d) {
     get(*dt_pi) -= d_phi.get(d, d);
   }
-  // We do not evolve reduction variables in LDG
-  for (size_t d = 0; d < Dim; ++d) {
-    dt_phi->get(d) = 0.0;
-  }
+  // Phi is an auxiliary variable (recomputed each step, not evolved), so it has
+  // no volume time derivative.
   // BoundaryPsi has zero volume time derivative; driven by BC correction only
   get(*dt_boundary_psi) = 0.0;
 

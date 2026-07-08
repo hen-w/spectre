@@ -53,8 +53,8 @@ template <size_t Dim>
 std::optional<std::string> DirichletAnalytic<Dim>::dg_ghost(
     const gsl::not_null<Scalar<DataVector>*> psi,
     const gsl::not_null<Scalar<DataVector>*> pi,
-    const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> phi,
     const gsl::not_null<Scalar<DataVector>*> boundary_psi,
+    const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> phi,
     const std::optional<
         tnsr::I<DataVector, Dim, Frame::Inertial>>& /*face_mesh_velocity*/,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& /*normal_covector*/,

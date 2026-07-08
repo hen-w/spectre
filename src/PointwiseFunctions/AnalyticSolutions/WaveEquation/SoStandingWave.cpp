@@ -83,6 +83,19 @@ SoStandingWave<Dim>::variables(
 }
 
 template <size_t Dim>
+tuples::TaggedTuple<Tags::Psi, Tags::Pi, Tags::BoundaryPsi>
+SoStandingWave<Dim>::variables(
+    const tnsr::I<DataVector, Dim>& x, const double t,
+    const tmpl::list<Tags::Psi, Tags::Pi, Tags::BoundaryPsi> /*meta*/) const {
+  auto base_vars =
+      variables(x, t, tmpl::list<Tags::Psi, Tags::Pi, Tags::Phi<Dim>>{});
+  // BoundaryPsi = Psi
+  auto boundary_psi = get<Tags::Psi>(base_vars);
+  return {std::move(get<Tags::Psi>(base_vars)),
+          std::move(get<Tags::Pi>(base_vars)), std::move(boundary_psi)};
+}
+
+template <size_t Dim>
 tuples::TaggedTuple<::Tags::dt<Tags::Psi>, ::Tags::dt<Tags::Pi>,
                     ::Tags::dt<Tags::Phi<Dim>>>
 SoStandingWave<Dim>::variables(

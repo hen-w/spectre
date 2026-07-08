@@ -146,13 +146,15 @@ struct EvolutionMetavars {
       TimeStepperBase::local_time_stepping;
   static constexpr bool use_dg_element_collection = false;
 
-  using analytic_solution_fields = typename system::variables_tag::tags_list;
-  using deriv_compute = ::Tags::DerivCompute<
-      typename system::variables_tag, domain::Tags::Mesh<volume_dim>,
-      domain::Tags::InverseJacobian<volume_dim, Frame::ElementLogical,
-                                    Frame::Inertial>,
-      typename system::gradient_variables,
-      domain::Tags::Coordinates<volume_dim, Frame::Inertial>>;
+  // Fields compared against the analytic solution (so Error(...) is available
+  // and observable). Phi is an auxiliary variable but is still compared. Listed
+  // explicitly in the order the analytic solutions' `variables` overload
+  // provides them ({Psi, Pi, Phi, BoundaryPsi}); this is not `variables_tag`,
+  // which no longer contains Phi.
+  using analytic_solution_fields =
+      tmpl::list<SoScalarWave::Tags::Psi, SoScalarWave::Tags::Pi,
+                 SoScalarWave::Tags::Phi<volume_dim>,
+                 SoScalarWave::Tags::BoundaryPsi>;
   using analytic_compute =
       evolution::Tags::AnalyticSolutionsCompute<Dim, analytic_solution_fields,
                                                 false, initial_data_list>;
@@ -161,14 +163,14 @@ struct EvolutionMetavars {
 
   using observe_fields = tmpl::push_back<
       tmpl::append<typename system::variables_tag::tags_list,
-                   typename deriv_compute::type::tags_list, error_tags>,
+                   typename system::auxiliary_variables, error_tags>,
       domain::Tags::Coordinates<volume_dim, Frame::Grid>,
       domain::Tags::Coordinates<volume_dim, Frame::Inertial>>;
   using non_tensor_compute_tags =
       tmpl::list<::Events::Tags::ObserverMeshCompute<volume_dim>,
                  ::Events::Tags::ObserverDetInvJacobianCompute<
                      Frame::ElementLogical, Frame::Inertial>,
-                 deriv_compute, analytic_compute, error_compute>;
+                 analytic_compute, error_compute>;
 
   struct factory_creation
       : tt::ConformsTo<Options::protocols::FactoryCreation> {
@@ -319,6 +321,13 @@ struct EvolutionMetavars {
         Initialization::ProjectTimeStepperHistory<EvolutionMetavars>,
         ::amr::projectors::ProjectVariables<volume_dim,
                                             typename system::variables_tag>,
+        // Phi = d_i Psi is a mesh field, so it is projected to the new mesh on
+        // refinement like the evolved variables. Note that
+        // UpdateAuxiliaryVariables recomputes Phi from Psi at the start of
+        // every time step.
+        ::amr::projectors::ProjectVariables<
+            volume_dim,
+            ::Tags::Variables<typename system::auxiliary_variables>>,
         evolution::dg::Initialization::ProjectMortars<volume_dim,
                                                       local_time_stepping>,
         evolution::Actions::ProjectRunEventsAndDenseTriggers,

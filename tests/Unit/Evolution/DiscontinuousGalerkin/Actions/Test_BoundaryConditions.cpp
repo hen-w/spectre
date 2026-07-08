@@ -88,6 +88,16 @@ struct Var3Squared : db::SimpleTag {
   using type = Scalar<DataVector>;
 };
 
+// Auxiliary (LDG) variable used by the auxiliary-pass tests. It is a dedicated
+// tag (not one of the evolved variables Var1/Var2, and not the temporary
+// Var3Squared) so that it lives solely in
+// `::Tags::Variables<auxiliary_variables>`, mirroring how Phi is
+// auxiliary-only in SoScalarWave.
+template <size_t Dim>
+struct Var3 : db::SimpleTag {
+  using type = tnsr::I<DataVector, Dim, Frame::Inertial>;
+};
+
 struct PrimVar1 : db::SimpleTag {
   using type = Scalar<DataVector>;
 };
@@ -137,10 +147,18 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
     p | sign_of_normal_;
   }
 
+  // `Tags::Var3<Dim>` is appended as a passthrough packaged field so the
+  // physical pass can verify that the framework delivers the auxiliary variable
+  // to `dg_package_data` (interior: projected volume Var3; exterior: the Var3
+  // the ghost boundary condition supplies). It is copied verbatim in
+  // `dg_package_data` and only read back for assertions in `dg_boundary_terms`,
+  // so it does not affect any evolved-variable correction.
   using dg_package_field_tags = tmpl::push_back<
-      tmpl::append<db::wrap_tags_in<::Tags::NormalDotFlux, variables_tags>,
-                   variables_tags>,
-      MaxAbsCharSpeed>;
+      tmpl::push_back<
+          tmpl::append<db::wrap_tags_in<::Tags::NormalDotFlux, variables_tags>,
+                       variables_tags>,
+          MaxAbsCharSpeed>,
+      Tags::Var3<Dim>>;
   using dg_package_data_temporary_tags = tmpl::list<Tags::Var3Squared>;
   using dg_package_data_primitive_tags =
       tmpl::conditional_t<HasPrims, tmpl::list<Tags::PrimVar1>, tmpl::list<>>;
@@ -166,6 +184,12 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       HasPrims, tmpl::list<Tags::BoundaryCorrectionVolumeTag>, tmpl::list<>>;
 
   // Conservative system, flat background
+  //
+  // The physical boundary correction receives the auxiliary variable Var3 as a
+  // projected input (per `dg_boundary_correction_projected_evolved_tags`, the
+  // evolved variables Var1, Var2 followed by the auxiliary variable Var3). It
+  // is intentionally unused so that the existing physical results are
+  // unchanged.
   double dg_package_data(
       const gsl::not_null<Scalar<DataVector>*> out_normal_dot_flux_var1,
       const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
@@ -173,9 +197,11 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const gsl::not_null<Scalar<DataVector>*> out_var1,
       const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
       const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var3,
 
       const Scalar<DataVector>& var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var3,
 
       const tnsr::I<DataVector, Dim, Frame::Inertial>& flux_var1,
       const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
@@ -215,6 +241,9 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
     }
     *out_var1 = var1;
     *out_var2 = var2;
+    // Pass the auxiliary variable through verbatim so `dg_boundary_terms` can
+    // check the framework delivered it correctly.
+    *out_var3 = var3;
 
     get(*max_abs_char_speed) = 2.0 * max(get(var3_squared));
 
@@ -232,9 +261,11 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const gsl::not_null<Scalar<DataVector>*> out_var1,
       const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
       const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var3,
 
       const Scalar<DataVector>& var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var3,
 
       const tnsr::I<DataVector, Dim, Frame::Inertial>& flux_var1,
       const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
@@ -248,10 +279,10 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
     CHECK_ITERABLE_APPROX(get(dot_product(normal_covector, normal_vector)),
                           DataVector(get(var1).size(), 1.0));
-    return dg_package_data(out_normal_dot_flux_var1, out_normal_dot_flux_var2,
-                           out_var1, out_var2, max_abs_char_speed, var1, var2,
-                           flux_var1, flux_var2, var3_squared, normal_covector,
-                           mesh_velocity, normal_dot_mesh_velocity);
+    return dg_package_data(
+        out_normal_dot_flux_var1, out_normal_dot_flux_var2, out_var1, out_var2,
+        max_abs_char_speed, out_var3, var1, var2, var3, flux_var1, flux_var2,
+        var3_squared, normal_covector, mesh_velocity, normal_dot_mesh_velocity);
   }
 
   // Conservative system with prim vars, flat background
@@ -262,9 +293,11 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const gsl::not_null<Scalar<DataVector>*> out_var1,
       const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
       const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var3,
 
       const Scalar<DataVector>& var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var3,
 
       const tnsr::I<DataVector, Dim, Frame::Inertial>& flux_var1,
       const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
@@ -279,9 +312,9 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
 
       const double volume_number) const {
     dg_package_data(out_normal_dot_flux_var1, out_normal_dot_flux_var2,
-                    out_var1, out_var2, max_abs_char_speed, var1, var2,
-                    flux_var1, flux_var2, var3_squared, normal_covector,
-                    mesh_velocity, normal_dot_mesh_velocity);
+                    out_var1, out_var2, max_abs_char_speed, out_var3, var1,
+                    var2, var3, flux_var1, flux_var2, var3_squared,
+                    normal_covector, mesh_velocity, normal_dot_mesh_velocity);
     get(*out_var1) += get(prim_var1) + volume_number;
     if (mesh_velocity.has_value()) {
       get(*out_normal_dot_flux_var1) -=
@@ -299,9 +332,11 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const gsl::not_null<Scalar<DataVector>*> out_var1,
       const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
       const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var3,
 
       const Scalar<DataVector>& var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var3,
 
       const tnsr::I<DataVector, Dim, Frame::Inertial>& flux_var1,
       const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
@@ -319,9 +354,9 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
     CHECK_ITERABLE_APPROX(get(dot_product(normal_covector, normal_vector)),
                           DataVector(get(var1).size(), 1.0));
     return dg_package_data(out_normal_dot_flux_var1, out_normal_dot_flux_var2,
-                           out_var1, out_var2, max_abs_char_speed, var1, var2,
-                           flux_var1, flux_var2, var3_squared, prim_var1,
-                           normal_covector, mesh_velocity,
+                           out_var1, out_var2, max_abs_char_speed, out_var3,
+                           var1, var2, var3, flux_var1, flux_var2, var3_squared,
+                           prim_var1, normal_covector, mesh_velocity,
                            normal_dot_mesh_velocity, volume_number);
   }
 
@@ -333,9 +368,11 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const gsl::not_null<Scalar<DataVector>*> out_var1,
       const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
       const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var3,
 
       const Scalar<DataVector>& var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var3,
 
       const Scalar<DataVector>& var3_squared,
 
@@ -373,6 +410,9 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
     }
     *out_var1 = var1;
     *out_var2 = var2;
+    // Pass the auxiliary variable through verbatim so `dg_boundary_terms` can
+    // check the framework delivered it correctly.
+    *out_var3 = var3;
 
     get(*max_abs_char_speed) = 2.0 * max(get(var3_squared));
 
@@ -390,9 +430,11 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const gsl::not_null<Scalar<DataVector>*> out_var1,
       const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
       const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var3,
 
       const Scalar<DataVector>& var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var3,
 
       const Scalar<DataVector>& var3_squared,
 
@@ -404,9 +446,9 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
     CHECK_ITERABLE_APPROX(get(dot_product(normal_covector, normal_vector)),
                           DataVector(get(var1).size(), 1.0));
     return dg_package_data(out_normal_dot_flux_var1, out_normal_dot_flux_var2,
-                           out_var1, out_var2, max_abs_char_speed, var1, var2,
-                           var3_squared, normal_covector, mesh_velocity,
-                           normal_dot_mesh_velocity);
+                           out_var1, out_var2, max_abs_char_speed, out_var3,
+                           var1, var2, var3, var3_squared, normal_covector,
+                           mesh_velocity, normal_dot_mesh_velocity);
   }
 
   // Mixed system, no prims, flat background
@@ -417,9 +459,11 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const gsl::not_null<Scalar<DataVector>*> out_var1,
       const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
       const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var3,
 
       const Scalar<DataVector>& var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var3,
 
       const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
 
@@ -459,6 +503,9 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
     }
     *out_var1 = var1;
     *out_var2 = var2;
+    // Pass the auxiliary variable through verbatim so `dg_boundary_terms` can
+    // check the framework delivered it correctly.
+    *out_var3 = var3;
 
     get(*max_abs_char_speed) = 2.0 * max(get(var3_squared));
 
@@ -476,9 +523,11 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const gsl::not_null<Scalar<DataVector>*> out_var1,
       const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
       const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var3,
 
       const Scalar<DataVector>& var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var3,
 
       const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
 
@@ -491,10 +540,10 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
     CHECK_ITERABLE_APPROX(get(dot_product(normal_covector, normal_vector)),
                           DataVector(get(var1).size(), 1.0));
-    return dg_package_data(out_normal_dot_flux_var1, out_normal_dot_flux_var2,
-                           out_var1, out_var2, max_abs_char_speed, var1, var2,
-                           flux_var2, var3_squared, normal_covector,
-                           mesh_velocity, normal_dot_mesh_velocity);
+    return dg_package_data(
+        out_normal_dot_flux_var1, out_normal_dot_flux_var2, out_var1, out_var2,
+        max_abs_char_speed, out_var3, var1, var2, var3, flux_var2, var3_squared,
+        normal_covector, mesh_velocity, normal_dot_mesh_velocity);
   }
 
   // Mixed system with prims, flat background
@@ -505,9 +554,11 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const gsl::not_null<Scalar<DataVector>*> out_var1,
       const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
       const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var3,
 
       const Scalar<DataVector>& var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var3,
 
       const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
 
@@ -522,9 +573,9 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
 
       const double volume_number) const {
     dg_package_data(out_normal_dot_flux_var1, out_normal_dot_flux_var2,
-                    out_var1, out_var2, max_abs_char_speed, var1, var2,
-                    flux_var2, var3_squared, normal_covector, mesh_velocity,
-                    normal_dot_mesh_velocity);
+                    out_var1, out_var2, max_abs_char_speed, out_var3, var1,
+                    var2, var3, flux_var2, var3_squared, normal_covector,
+                    mesh_velocity, normal_dot_mesh_velocity);
     get(*out_var1) += get(prim_var1) + volume_number;
     return max(get(*max_abs_char_speed));
   }
@@ -537,9 +588,11 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const gsl::not_null<Scalar<DataVector>*> out_var1,
       const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
       const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var3,
 
       const Scalar<DataVector>& var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var3,
 
       const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
 
@@ -557,10 +610,10 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
     CHECK_ITERABLE_APPROX(get(dot_product(normal_covector, normal_vector)),
                           DataVector(get(var1).size(), 1.0));
     return dg_package_data(out_normal_dot_flux_var1, out_normal_dot_flux_var2,
-                           out_var1, out_var2, max_abs_char_speed, var1, var2,
-                           flux_var2, var3_squared, prim_var1, normal_covector,
-                           mesh_velocity, normal_dot_mesh_velocity,
-                           volume_number);
+                           out_var1, out_var2, max_abs_char_speed, out_var3,
+                           var1, var2, var3, flux_var2, var3_squared, prim_var1,
+                           normal_covector, mesh_velocity,
+                           normal_dot_mesh_velocity, volume_number);
   }
 
   void dg_boundary_terms(
@@ -572,11 +625,13 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const Scalar<DataVector>& int_var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& int_var2,
       const Scalar<DataVector>& int_max_abs_char_speed,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& int_var3,
       const Scalar<DataVector>& ext_normal_dot_flux_var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& ext_normal_dot_flux_var2,
       const Scalar<DataVector>& ext_var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& ext_var2,
       const Scalar<DataVector>& ext_max_abs_char_speed,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& ext_var3,
       const dg::Formulation formulation) const {
     static_assert(Dim == 1,
                   "Flux dot normal assumes 1d, mostly because normal vector is "
@@ -649,6 +704,14 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
         DataVector(num_pts,
                    2.0 * offset_temporaries +
                        sign_of_normal_ / normalization_factor * mesh_velocity));
+    // The interior auxiliary variable is the volume Var3 projected to the face.
+    // `test_1d` fills the volume auxiliary variables with `fill_variables`
+    // starting at `offset_evolved_vars`, so the projected face value is
+    // `offset_evolved_vars + i` (constant per component).
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(int_var3.get(i),
+                            DataVector(num_pts, offset_evolved_vars + i));
+    }
 
     if (SysType == SystemType::Conservative) {
       // The two comes from the dg_package_data also subtracting off the mesh
@@ -701,6 +764,13 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
         DataVector(num_pts,
                    2.0 * (offset_boundary_condition + 2.0 + 2 * Dim) -
                        sign_of_normal_ / normalization_factor * mesh_velocity));
+    // The exterior auxiliary variable is the Var3 written by `Ghost::dg_ghost`,
+    // which sets `out_var3.get(i) = offset_boundary_condition + 2 + i`.
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(
+          ext_var3.get(i),
+          DataVector(num_pts, offset_boundary_condition + 2.0 + i));
+    }
   }
 
   void dg_boundary_terms(
@@ -712,18 +782,21 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const Scalar<DataVector>& int_var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& int_var2,
       const Scalar<DataVector>& int_max_abs_char_speed,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& int_var3,
       const Scalar<DataVector>& ext_normal_dot_flux_var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& ext_normal_dot_flux_var2,
       const Scalar<DataVector>& ext_var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& ext_var2,
       const Scalar<DataVector>& ext_max_abs_char_speed,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& ext_var3,
       const dg::Formulation formulation, const double& volume_number) const {
     CHECK(volume_number == 3.5);
     dg_boundary_terms(boundary_correction_var1, boundary_correction_var2,
                       int_normal_dot_flux_var1, int_normal_dot_flux_var2,
-                      int_var1, int_var2, int_max_abs_char_speed,
+                      int_var1, int_var2, int_max_abs_char_speed, int_var3,
                       ext_normal_dot_flux_var1, ext_normal_dot_flux_var2,
-                      ext_var1, ext_var2, ext_max_abs_char_speed, formulation);
+                      ext_var1, ext_var2, ext_max_abs_char_speed, ext_var3,
+                      formulation);
   }
 
   // auxiliary-pass analogues of the dg_package_data / dg_boundary_terms
@@ -1128,10 +1201,17 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
         volume_number);
   }
 
+  // LDG auxiliary boundary terms. Following the production caller
+  // `call_dg_auxiliary_boundary_terms`, the argument order is: one out-pointer
+  // per `auxiliary_variables` tag (here Var3, a `tnsr::I`), then the interior
+  // `dg_auxiliary_package_field_tags` fields, then the same exterior fields,
+  // then the `dg::Formulation`, then the
+  // `dg_auxiliary_boundary_terms_volume_tags` (present only when `HasPrims`).
+  // The correction is a simple deterministic value (an average of the interior
+  // and exterior packaged Var2) - it is not physically meaningful.
   void dg_auxiliary_boundary_terms(
-      const gsl::not_null<Scalar<DataVector>*> boundary_correction_var1,
       const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
-          boundary_correction_var2,
+          boundary_correction_var3,
       const Scalar<DataVector>& int_normal_dot_flux_var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& int_normal_dot_flux_var2,
       const Scalar<DataVector>& int_var1,
@@ -1142,17 +1222,22 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const Scalar<DataVector>& ext_var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& ext_var2,
       const Scalar<DataVector>& ext_max_abs_char_speed,
-      const dg::Formulation formulation) const {
+      const dg::Formulation /*formulation*/) const {
     static_assert(Dim == 1,
                   "Flux dot normal assumes 1d, mostly because normal vector is "
                   "assumed to be 1d.");
 
-    get(*boundary_correction_var1) =
-        offset_boundary_correction *
-        (formulation == dg::Formulation::WeakInertial ? 2.0 : 1.0);
+    // The auxiliary correction is a simple deterministic value (an average of
+    // the interior and exterior packaged Var2); it is not physically
+    // meaningful.
     for (size_t i = 0; i < Dim; ++i) {
-      boundary_correction_var2->get(i) = offset_boundary_correction + 1.0 + i;
+      boundary_correction_var3->get(i) =
+          0.5 * (int_var2.get(i) + ext_var2.get(i));
     }
+
+    // Verify the framework delivered the correct interior/exterior packaged
+    // data to the auxiliary boundary terms (mirrors the physical
+    // `dg_boundary_terms` input checks).
     const size_t num_pts = get(int_var1).size();
 
     const double mesh_velocity = mesh_is_moving_ ? 1.2 : 0.0;
@@ -1269,9 +1354,8 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
   }
 
   void dg_auxiliary_boundary_terms(
-      const gsl::not_null<Scalar<DataVector>*> boundary_correction_var1,
       const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
-          boundary_correction_var2,
+          boundary_correction_var3,
       const Scalar<DataVector>& int_normal_dot_flux_var1,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& int_normal_dot_flux_var2,
       const Scalar<DataVector>& int_var1,
@@ -1285,11 +1369,10 @@ struct BoundaryTerms final : public evolution::BoundaryCorrection {
       const dg::Formulation formulation, const double& volume_number) const {
     CHECK(volume_number == 3.5);
     dg_auxiliary_boundary_terms(
-        boundary_correction_var1, boundary_correction_var2,
-        int_normal_dot_flux_var1, int_normal_dot_flux_var2, int_var1, int_var2,
-        int_max_abs_char_speed, ext_normal_dot_flux_var1,
-        ext_normal_dot_flux_var2, ext_var1, ext_var2, ext_max_abs_char_speed,
-        formulation);
+        boundary_correction_var3, int_normal_dot_flux_var1,
+        int_normal_dot_flux_var2, int_var1, int_var2, int_max_abs_char_speed,
+        ext_normal_dot_flux_var1, ext_normal_dot_flux_var2, ext_var1, ext_var2,
+        ext_max_abs_char_speed, formulation);
   }
 
  private:
@@ -1537,11 +1620,19 @@ class Ghost : public BoundaryCondition<System> {
   using dg_gridless_tags = tmpl::list<Tags::BoundaryConditionVolumeTag>;
 
   // Nonconservative system, flat background
+  //
+  // `dg_ghost` supplies the exterior values of every field it declares. For an
+  // LDG system that includes the auxiliary variable Var3 (a `tnsr::I`), which
+  // is filled here in the base overload; the value is a simple deterministic
+  // one and is not physically meaningful.
   std::optional<std::string> dg_ghost(
       const gsl::not_null<Scalar<DataVector>*> out_var1,
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           out_var2,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
       const gsl::not_null<Scalar<DataVector>*> out_var3_squared,
       const std::optional<tnsr::I<DataVector, System::volume_dim,
                                   Frame::Inertial>>& face_mesh_velocity,
@@ -1555,6 +1646,10 @@ class Ghost : public BoundaryCondition<System> {
     for (size_t i = 0; i < System::volume_dim; ++i) {
       out_var2->get(i) =
           offset_boundary_condition + 1.0 + static_cast<double>(i);
+    }
+    for (size_t i = 0; i < System::volume_dim; ++i) {
+      out_var3->get(i) =
+          offset_boundary_condition + 2.0 + static_cast<double>(i);
     }
     get(*out_var3_squared) = offset_boundary_condition + 1.0 +
                              (2 + System::volume_dim) * System::volume_dim;
@@ -1605,6 +1700,9 @@ class Ghost : public BoundaryCondition<System> {
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           out_var2,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
       const gsl::not_null<Scalar<DataVector>*> out_var3_squared,
       const gsl::not_null<
           tnsr::II<DataVector, System::volume_dim, Frame::Inertial>*>
@@ -1623,9 +1721,9 @@ class Ghost : public BoundaryCondition<System> {
     check_normal_vector_set_inverse_spatial_metric(
         inv_spatial_metric, outward_directed_normal_covector,
         outward_directed_normal_vector);
-    return dg_ghost(out_var1, out_var2, out_var3_squared, face_mesh_velocity,
-                    outward_directed_normal_covector, var1, var2, var3_squared,
-                    dt_var1, volume_number);
+    return dg_ghost(out_var1, out_var2, out_var3, out_var3_squared,
+                    face_mesh_velocity, outward_directed_normal_covector, var1,
+                    var2, var3_squared, dt_var1, volume_number);
   }
 
   // Mixed conservative non-conservative system, no prims, flat background
@@ -1634,6 +1732,9 @@ class Ghost : public BoundaryCondition<System> {
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           out_var2,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
       const gsl::not_null<
           tnsr::IJ<DataVector, System::volume_dim, Frame::Inertial>*>
           flux_var2,
@@ -1646,7 +1747,7 @@ class Ghost : public BoundaryCondition<System> {
       const tnsr::I<DataVector, System::volume_dim, Frame::Inertial>& var2,
       const Scalar<DataVector>& var3_squared, const Scalar<DataVector>& dt_var1,
       const double volume_number) const {
-    dg_ghost(out_var1, out_var2, out_var3_squared, face_mesh_velocity,
+    dg_ghost(out_var1, out_var2, out_var3, out_var3_squared, face_mesh_velocity,
              outward_directed_normal_covector, var1, var2, var3_squared,
              dt_var1, volume_number);
     for (size_t i = 0; i < System::volume_dim; ++i) {
@@ -1665,6 +1766,9 @@ class Ghost : public BoundaryCondition<System> {
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           out_var2,
       const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
+      const gsl::not_null<
           tnsr::IJ<DataVector, System::volume_dim, Frame::Inertial>*>
           flux_var2,
       const gsl::not_null<Scalar<DataVector>*> out_var3_squared,
@@ -1685,7 +1789,7 @@ class Ghost : public BoundaryCondition<System> {
     check_normal_vector_set_inverse_spatial_metric(
         inv_spatial_metric, outward_directed_normal_covector,
         outward_directed_normal_vector);
-    return dg_ghost(out_var1, out_var2, flux_var2, out_var3_squared,
+    return dg_ghost(out_var1, out_var2, out_var3, flux_var2, out_var3_squared,
                     face_mesh_velocity, outward_directed_normal_covector, var1,
                     var2, var3_squared, dt_var1, volume_number);
   }
@@ -1696,6 +1800,9 @@ class Ghost : public BoundaryCondition<System> {
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           out_var2,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
       const gsl::not_null<
           tnsr::IJ<DataVector, System::volume_dim, Frame::Inertial>*>
           flux_var2,
@@ -1712,7 +1819,7 @@ class Ghost : public BoundaryCondition<System> {
       const tnsr::i<DataVector, System::volume_dim, Frame::Inertial>& prim_var2,
       const Scalar<DataVector>& var3_squared, const Scalar<DataVector>& dt_var1,
       const double volume_number) const {
-    dg_ghost(out_var1, out_var2, flux_var2, out_var3_squared,
+    dg_ghost(out_var1, out_var2, out_var3, flux_var2, out_var3_squared,
              face_mesh_velocity, outward_directed_normal_covector, var1, var2,
              var3_squared, dt_var1, volume_number);
     get(*out_prim_var1) = get(*out_var3_squared) + 1.0;
@@ -1733,6 +1840,9 @@ class Ghost : public BoundaryCondition<System> {
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           out_var2,
       const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
+      const gsl::not_null<
           tnsr::IJ<DataVector, System::volume_dim, Frame::Inertial>*>
           flux_var2,
       const gsl::not_null<Scalar<DataVector>*> out_var3_squared,
@@ -1756,7 +1866,7 @@ class Ghost : public BoundaryCondition<System> {
     check_normal_vector_set_inverse_spatial_metric(
         inv_spatial_metric, outward_directed_normal_covector,
         outward_directed_normal_vector);
-    return dg_ghost(out_var1, out_var2, flux_var2, out_var3_squared,
+    return dg_ghost(out_var1, out_var2, out_var3, flux_var2, out_var3_squared,
                     out_prim_var1, face_mesh_velocity,
                     outward_directed_normal_covector, var1, var2, prim_var1,
                     prim_var2, var3_squared, dt_var1, volume_number);
@@ -1768,6 +1878,9 @@ class Ghost : public BoundaryCondition<System> {
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           out_var2,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           flux_var1,
@@ -1783,7 +1896,7 @@ class Ghost : public BoundaryCondition<System> {
       const tnsr::I<DataVector, System::volume_dim, Frame::Inertial>& var2,
       const Scalar<DataVector>& var3_squared, const Scalar<DataVector>& dt_var1,
       const double volume_number) const {
-    dg_ghost(out_var1, out_var2, flux_var2, out_var3_squared,
+    dg_ghost(out_var1, out_var2, out_var3, flux_var2, out_var3_squared,
              face_mesh_velocity, outward_directed_normal_covector, var1, var2,
              var3_squared, dt_var1, volume_number);
     for (size_t i = 0; i < System::volume_dim; ++i) {
@@ -1801,6 +1914,9 @@ class Ghost : public BoundaryCondition<System> {
           out_var2,
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           flux_var1,
       const gsl::not_null<
           tnsr::IJ<DataVector, System::volume_dim, Frame::Inertial>*>
@@ -1822,9 +1938,10 @@ class Ghost : public BoundaryCondition<System> {
     check_normal_vector_set_inverse_spatial_metric(
         inv_spatial_metric, outward_directed_normal_covector,
         outward_directed_normal_vector);
-    dg_ghost(out_var1, out_var2, flux_var1, flux_var2, out_var3_squared,
-             face_mesh_velocity, outward_directed_normal_covector, var1, var2,
-             var3_squared, dt_var1, volume_number);
+    dg_ghost(out_var1, out_var2, out_var3, flux_var1, flux_var2,
+             out_var3_squared, face_mesh_velocity,
+             outward_directed_normal_covector, var1, var2, var3_squared,
+             dt_var1, volume_number);
     return std::nullopt;
   }
 
@@ -1834,6 +1951,9 @@ class Ghost : public BoundaryCondition<System> {
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           out_var2,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           flux_var1,
@@ -1853,9 +1973,10 @@ class Ghost : public BoundaryCondition<System> {
       const tnsr::i<DataVector, System::volume_dim, Frame::Inertial>& prim_var2,
       const Scalar<DataVector>& var3_squared, const Scalar<DataVector>& dt_var1,
       const double volume_number) const {
-    dg_ghost(out_var1, out_var2, flux_var1, flux_var2, out_var3_squared,
-             face_mesh_velocity, outward_directed_normal_covector, var1, var2,
-             var3_squared, dt_var1, volume_number);
+    dg_ghost(out_var1, out_var2, out_var3, flux_var1, flux_var2,
+             out_var3_squared, face_mesh_velocity,
+             outward_directed_normal_covector, var1, var2, var3_squared,
+             dt_var1, volume_number);
     get(*out_prim_var1) = get(*out_var3_squared) + 1.0;
     const size_t num_pts = get(var1).size();
     CHECK_ITERABLE_APPROX(get(prim_var1),
@@ -1875,6 +1996,9 @@ class Ghost : public BoundaryCondition<System> {
           out_var2,
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           flux_var1,
       const gsl::not_null<
           tnsr::IJ<DataVector, System::volume_dim, Frame::Inertial>*>
@@ -1900,8 +2024,8 @@ class Ghost : public BoundaryCondition<System> {
     check_normal_vector_set_inverse_spatial_metric(
         inv_spatial_metric, outward_directed_normal_covector,
         outward_directed_normal_vector);
-    return dg_ghost(out_var1, out_var2, flux_var1, flux_var2, out_var3_squared,
-                    out_prim_var1, face_mesh_velocity,
+    return dg_ghost(out_var1, out_var2, out_var3, flux_var1, flux_var2,
+                    out_var3_squared, out_prim_var1, face_mesh_velocity,
                     outward_directed_normal_covector, var1, var2, prim_var1,
                     prim_var2, var3_squared, dt_var1, volume_number);
   }
@@ -2296,6 +2420,9 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           out_var2,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
       const gsl::not_null<Scalar<DataVector>*> out_var3_squared,
       const std::optional<tnsr::I<DataVector, System::volume_dim,
                                   Frame::Inertial>>& face_mesh_velocity,
@@ -2306,9 +2433,9 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
       const Scalar<DataVector>& var3_squared, const Scalar<DataVector>& dt_var1,
       const tnsr::i<DataVector, System::volume_dim, Frame::Inertial>& d_var1,
       const double volume_number) const {
-    ghost_.dg_ghost(out_var1, out_var2, out_var3_squared, face_mesh_velocity,
-                    outward_directed_normal_covector, var1, var2, var3_squared,
-                    dt_var1, volume_number);
+    ghost_.dg_ghost(out_var1, out_var2, out_var3, out_var3_squared,
+                    face_mesh_velocity, outward_directed_normal_covector, var1,
+                    var2, var3_squared, dt_var1, volume_number);
     const size_t num_pts = get(var1).size();
     for (size_t i = 0; i < System::volume_dim; ++i) {
       CHECK_ITERABLE_APPROX(d_var1.get(i),
@@ -2323,6 +2450,9 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           out_var2,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
       const gsl::not_null<Scalar<DataVector>*> out_var3_squared,
       const gsl::not_null<
           tnsr::II<DataVector, System::volume_dim, Frame::Inertial>*>
@@ -2342,9 +2472,9 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
     ghost_.check_normal_vector_set_inverse_spatial_metric(
         inv_spatial_metric, outward_directed_normal_covector,
         outward_directed_normal_vector);
-    return dg_ghost(out_var1, out_var2, out_var3_squared, face_mesh_velocity,
-                    outward_directed_normal_covector, var1, var2, var3_squared,
-                    dt_var1, d_var1, volume_number);
+    return dg_ghost(out_var1, out_var2, out_var3, out_var3_squared,
+                    face_mesh_velocity, outward_directed_normal_covector, var1,
+                    var2, var3_squared, dt_var1, d_var1, volume_number);
   }
 
   // Mixed conservative non-conservative system, no prims, flat background
@@ -2353,6 +2483,9 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           out_var2,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
       const gsl::not_null<
           tnsr::IJ<DataVector, System::volume_dim, Frame::Inertial>*>
           flux_var2,
@@ -2366,7 +2499,7 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
       const Scalar<DataVector>& var3_squared, const Scalar<DataVector>& dt_var1,
       const tnsr::i<DataVector, System::volume_dim, Frame::Inertial>& d_var1,
       const double volume_number) const {
-    ghost_.dg_ghost(out_var1, out_var2, flux_var2, out_var3_squared,
+    ghost_.dg_ghost(out_var1, out_var2, out_var3, flux_var2, out_var3_squared,
                     face_mesh_velocity, outward_directed_normal_covector, var1,
                     var2, var3_squared, dt_var1, volume_number);
     const size_t num_pts = get(var1).size();
@@ -2384,6 +2517,9 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           out_var2,
       const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
+      const gsl::not_null<
           tnsr::IJ<DataVector, System::volume_dim, Frame::Inertial>*>
           flux_var2,
       const gsl::not_null<Scalar<DataVector>*> out_var3_squared,
@@ -2405,7 +2541,7 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
     ghost_.check_normal_vector_set_inverse_spatial_metric(
         inv_spatial_metric, outward_directed_normal_covector,
         outward_directed_normal_vector);
-    return dg_ghost(out_var1, out_var2, flux_var2, out_var3_squared,
+    return dg_ghost(out_var1, out_var2, out_var3, flux_var2, out_var3_squared,
                     face_mesh_velocity, outward_directed_normal_covector, var1,
                     var2, var3_squared, dt_var1, d_var1, volume_number);
   }
@@ -2416,6 +2552,9 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           out_var2,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
       const gsl::not_null<
           tnsr::IJ<DataVector, System::volume_dim, Frame::Inertial>*>
           flux_var2,
@@ -2432,7 +2571,7 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
       const Scalar<DataVector>& var3_squared, const Scalar<DataVector>& dt_var1,
       const tnsr::i<DataVector, System::volume_dim, Frame::Inertial>& d_var1,
       const double volume_number) const {
-    ghost_.dg_ghost(out_var1, out_var2, flux_var2, out_var3_squared,
+    ghost_.dg_ghost(out_var1, out_var2, out_var3, flux_var2, out_var3_squared,
                     out_prim_var1, face_mesh_velocity,
                     outward_directed_normal_covector, var1, var2, prim_var1,
                     prim_var2, var3_squared, dt_var1, volume_number);
@@ -2451,6 +2590,9 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           out_var2,
       const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
+      const gsl::not_null<
           tnsr::IJ<DataVector, System::volume_dim, Frame::Inertial>*>
           flux_var2,
       const gsl::not_null<Scalar<DataVector>*> out_var3_squared,
@@ -2475,7 +2617,7 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
     ghost_.check_normal_vector_set_inverse_spatial_metric(
         inv_spatial_metric, outward_directed_normal_covector,
         outward_directed_normal_vector);
-    return dg_ghost(out_var1, out_var2, flux_var2, out_var3_squared,
+    return dg_ghost(out_var1, out_var2, out_var3, flux_var2, out_var3_squared,
                     out_prim_var1, face_mesh_velocity,
                     outward_directed_normal_covector, var1, var2, prim_var1,
                     prim_var2, var3_squared, dt_var1, d_var1, volume_number);
@@ -2489,6 +2631,9 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
           out_var2,
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           flux_var1,
       const gsl::not_null<
           tnsr::IJ<DataVector, System::volume_dim, Frame::Inertial>*>
@@ -2502,9 +2647,10 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
       const tnsr::I<DataVector, System::volume_dim, Frame::Inertial>& var2,
       const Scalar<DataVector>& var3_squared, const Scalar<DataVector>& dt_var1,
       const double volume_number) const {
-    ghost_.dg_ghost(out_var1, out_var2, flux_var1, flux_var2, out_var3_squared,
-                    face_mesh_velocity, outward_directed_normal_covector, var1,
-                    var2, var3_squared, dt_var1, volume_number);
+    ghost_.dg_ghost(out_var1, out_var2, out_var3, flux_var1, flux_var2,
+                    out_var3_squared, face_mesh_velocity,
+                    outward_directed_normal_covector, var1, var2, var3_squared,
+                    dt_var1, volume_number);
     return std::nullopt;
   }
 
@@ -2514,6 +2660,9 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           out_var2,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           flux_var1,
@@ -2537,9 +2686,10 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
     ghost_.check_normal_vector_set_inverse_spatial_metric(
         inv_spatial_metric, outward_directed_normal_covector,
         outward_directed_normal_vector);
-    dg_ghost(out_var1, out_var2, flux_var1, flux_var2, out_var3_squared,
-             face_mesh_velocity, outward_directed_normal_covector, var1, var2,
-             var3_squared, dt_var1, volume_number);
+    dg_ghost(out_var1, out_var2, out_var3, flux_var1, flux_var2,
+             out_var3_squared, face_mesh_velocity,
+             outward_directed_normal_covector, var1, var2, var3_squared,
+             dt_var1, volume_number);
     return std::nullopt;
   }
 
@@ -2549,6 +2699,9 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           out_var2,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           flux_var1,
@@ -2568,8 +2721,8 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
       const tnsr::i<DataVector, System::volume_dim, Frame::Inertial>& prim_var2,
       const Scalar<DataVector>& var3_squared, const Scalar<DataVector>& dt_var1,
       const double volume_number) const {
-    ghost_.dg_ghost(out_var1, out_var2, flux_var1, flux_var2, out_var3_squared,
-                    out_prim_var1, face_mesh_velocity,
+    ghost_.dg_ghost(out_var1, out_var2, out_var3, flux_var1, flux_var2,
+                    out_var3_squared, out_prim_var1, face_mesh_velocity,
                     outward_directed_normal_covector, var1, var2, prim_var1,
                     prim_var2, var3_squared, dt_var1, volume_number);
     return std::nullopt;
@@ -2583,6 +2736,9 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
           out_var2,
       const gsl::not_null<
           tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
           flux_var1,
       const gsl::not_null<
           tnsr::IJ<DataVector, System::volume_dim, Frame::Inertial>*>
@@ -2608,8 +2764,8 @@ class GhostAndTimeDerivative : public BoundaryCondition<System> {
     ghost_.check_normal_vector_set_inverse_spatial_metric(
         inv_spatial_metric, outward_directed_normal_covector,
         outward_directed_normal_vector);
-    ghost_.dg_ghost(out_var1, out_var2, flux_var1, flux_var2, out_var3_squared,
-                    out_prim_var1, face_mesh_velocity,
+    ghost_.dg_ghost(out_var1, out_var2, out_var3, flux_var1, flux_var2,
+                    out_var3_squared, out_prim_var1, face_mesh_velocity,
                     outward_directed_normal_covector, var1, var2, prim_var1,
                     prim_var2, var3_squared, dt_var1, volume_number);
     return std::nullopt;
@@ -2651,6 +2807,10 @@ struct System
 
   using variables_tag =
       ::Tags::Variables<tmpl::list<Tags::Var1, Tags::Var2<Dim>>>;
+  // Auxiliary (LDG) variables, held in their own storage
+  // `::Tags::Variables<auxiliary_variables>` separately from the evolved
+  // `variables_tag`, mirroring how Phi is auxiliary-only in SoScalarWave.
+  using auxiliary_variables = tmpl::list<Tags::Var3<Dim>>;
   using flux_variables = tmpl::conditional_t<
       system_type == SystemType::Conservative,
       tmpl::list<Tags::Var1, Tags::Var2<Dim>>,
@@ -2796,6 +2956,12 @@ void test_1d(const bool moving_mesh, const dg::Formulation formulation,
   Variables<typename System::variables_tag::tags_list> evolved_vars{
       mesh.number_of_grid_points()};
   fill_variables(make_not_null(&evolved_vars), offset_evolved_vars);
+  // Storage for the auxiliary variables. The physical pass projects them to the
+  // face and passes them (unused) to `dg_package_data`; the value here is a
+  // simple deterministic one and does not affect any physical result.
+  Variables<typename System::auxiliary_variables> auxiliary_vars{
+      mesh.number_of_grid_points()};
+  fill_variables(make_not_null(&auxiliary_vars), offset_evolved_vars);
   Variables<
       typename System::compute_volume_time_derivative_terms::temporary_tags>
       temporaries{mesh.number_of_grid_points()};
@@ -2857,7 +3023,8 @@ void test_1d(const bool moving_mesh, const dg::Formulation formulation,
                                     Frame::Inertial>,
       domain::Tags::DetInvJacobian<Frame::ElementLogical, Frame::Inertial>,
       evolution::dg::Tags::NormalCovectorAndMagnitude<Dim>,
-      typename System::variables_tag, dt_variables_tag,
+      typename System::variables_tag,
+      ::Tags::Variables<typename System::auxiliary_variables>, dt_variables_tag,
       Tags::BoundaryConditionVolumeTag, Tags::BoundaryCorrectionVolumeTag,
       ::dg::Tags::Formulation>;
   using compute_tags = tmpl::list<>;
@@ -2868,7 +3035,7 @@ void test_1d(const bool moving_mesh, const dg::Formulation formulation,
       std::move(element_map), grid_to_inertial_map->get_clone(), time,
       clone_unique_ptrs(functions_of_time), mesh_velocity, inv_jacobian,
       det_inv_jacobian, normal_covector_and_magnitude, evolved_vars,
-      dt_evolved_vars, boundary_condition_volume_tag_number,
+      auxiliary_vars, dt_evolved_vars, boundary_condition_volume_tag_number,
       boundary_correction_volume_tag_number, formulation);
 
   {
@@ -3264,6 +3431,12 @@ void test_auxiliary_1d(const bool moving_mesh,
   Variables<typename System::variables_tag::tags_list> evolved_vars{
       mesh.number_of_grid_points()};
   fill_variables(make_not_null(&evolved_vars), offset_evolved_vars);
+  // Storage for the auxiliary variables. In the auxiliary pass this is the
+  // `tag_to_update` that receives the lifted auxiliary correction; it is
+  // seeded with a simple deterministic value.
+  Variables<typename System::auxiliary_variables> auxiliary_vars{
+      mesh.number_of_grid_points()};
+  fill_variables(make_not_null(&auxiliary_vars), offset_evolved_vars);
   Variables<
       typename System::compute_volume_time_derivative_terms::temporary_tags>
       temporaries{mesh.number_of_grid_points()};
@@ -3325,7 +3498,8 @@ void test_auxiliary_1d(const bool moving_mesh,
                                     Frame::Inertial>,
       domain::Tags::DetInvJacobian<Frame::ElementLogical, Frame::Inertial>,
       evolution::dg::Tags::NormalCovectorAndMagnitude<Dim>,
-      typename System::variables_tag, dt_variables_tag,
+      typename System::variables_tag,
+      ::Tags::Variables<typename System::auxiliary_variables>, dt_variables_tag,
       Tags::BoundaryConditionVolumeTag, Tags::BoundaryCorrectionVolumeTag,
       ::dg::Tags::Formulation>;
   using compute_tags = tmpl::list<>;
@@ -3336,21 +3510,24 @@ void test_auxiliary_1d(const bool moving_mesh,
       std::move(element_map), grid_to_inertial_map->get_clone(), time,
       clone_unique_ptrs(functions_of_time), mesh_velocity, inv_jacobian,
       det_inv_jacobian, normal_covector_and_magnitude, evolved_vars,
-      dt_evolved_vars, boundary_condition_volume_tag_number,
+      auxiliary_vars, dt_evolved_vars, boundary_condition_volume_tag_number,
       boundary_correction_volume_tag_number, formulation);
 
   {
     INFO("DemandOutgoingCharSpeeds only");
-    // DemandOutgoingCharSpeeds both sides, evolved vars in volume shouldn't
-    // change (no boundary correction is lifted).
+    // DemandOutgoingCharSpeeds both sides: neither side uses a ghost condition,
+    // so the auxiliary pass lifts no correction. It is a complete no-op: the
+    // evolved variables (variables_tag), the auxiliary variables
+    // (::Tags::Variables<auxiliary_variables>, i.e. Var3), and the time
+    // derivatives (which the dg_time_derivative path leaves alone under
+    // `not ComputeAuxiliary`) are all unchanged.
     // Deviation: ComputeAuxiliary=true, so the auxiliary pass is exercised.
     evolution::dg::Actions::detail::
         apply_boundary_conditions_on_all_external_faces<
             System, Dim, /*ComputeAuxiliary=*/true>(
             make_not_null(&box), BndryTerms{moving_mesh, 0.0}, temporaries,
             volume_fluxes, partial_derivs, primitive_vars_ptr);
-    // Deviation: assert the evolved variables (variables_tag), not the time
-    // derivatives, are unchanged.
+    // The evolved variables (variables_tag) are unchanged.
     CHECK_ITERABLE_APPROX(
         get(get<Tags::Var1>(box)),
         DataVector(mesh.number_of_grid_points(), offset_evolved_vars));
@@ -3359,23 +3536,51 @@ void test_auxiliary_1d(const bool moving_mesh,
                             DataVector(mesh.number_of_grid_points(),
                                        offset_evolved_vars + 1 + i));
     }
+    // The auxiliary variables (Var3) are unchanged: no ghost correction lifted.
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(
+          get<Tags::Var3<Dim>>(box).get(i),
+          DataVector(mesh.number_of_grid_points(), offset_evolved_vars + i));
+    }
+    // The time derivatives are unchanged: the dg_time_derivative path is
+    // skipped in the auxiliary pass.
+    CHECK_ITERABLE_APPROX(
+        get(get<::Tags::dt<Tags::Var1>>(box)),
+        DataVector(mesh.number_of_grid_points(), offset_dt_evolved_vars));
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(get<::Tags::dt<Tags::Var2<Dim>>>(box).get(i),
+                            DataVector(mesh.number_of_grid_points(),
+                                       offset_dt_evolved_vars + 1 + i));
+    }
   }
 
-  const auto expected_ghost_correction = [&box, &formulation,
-                                          &mesh](const auto& ghost_direction) {
-    Variables<tmpl::list<::Tags::dt<Tags::Var1>, ::Tags::dt<Tags::Var2<Dim>>>>
-        expected_on_boundary{mesh.slice_away(ghost_direction.dimension())
-                                 .number_of_grid_points()};
-    get(get<::Tags::dt<Tags::Var1>>(expected_on_boundary)) =
-        offset_boundary_correction *
-        (formulation == dg::Formulation::WeakInertial ? 2.0 : 1.0);
+  // Expected lifted auxiliary (Var3) correction added to the
+  // ::Tags::Variables<auxiliary_variables> container by the auxiliary pass on a
+  // ghost face. The correction on the face is the mock's
+  // `dg_auxiliary_boundary_terms` output, `0.5 * (int_var2 + ext_var2)`. From
+  // the packaged data, `int_var2.get(i) == offset_evolved_vars + 1 + i`
+  // (projected volume Var2) and `ext_var2.get(i) == offset_boundary_condition +
+  // 1 + i` (the Var2 the Ghost boundary condition supplies), so the face value
+  // is
+  //   Var3.get(i) = 0.5 * ((offset_evolved_vars + 1 + i) +
+  //                        (offset_boundary_condition + 1 + i)).
+  // Unlike the physical correction it does not depend on the DG formulation.
+  // This lambda mirrors the physical `expected_ghost_dt_correction` lift logic
+  // (GaussLobatto: lift_flux + add_slice_to_data; Gauss:
+  // lift_boundary_terms_gauss_points) but for a Var3-shaped `tnsr::I`
+  // correction.
+  const auto expected_ghost_var3_correction = [&box, &mesh](
+                                                  const auto& ghost_direction) {
+    Variables<tmpl::list<Tags::Var3<Dim>>> expected_on_boundary{
+        mesh.slice_away(ghost_direction.dimension()).number_of_grid_points()};
     for (size_t i = 0; i < Dim; ++i) {
-      get<::Tags::dt<Tags::Var2<Dim>>>(expected_on_boundary).get(i) =
-          offset_boundary_correction + 1.0 + i;
+      get<Tags::Var3<Dim>>(expected_on_boundary).get(i) =
+          0.5 * ((offset_evolved_vars + 1.0 + i) +
+                 (offset_boundary_condition + 1.0 + i));
     }
-    // lift into volume and add to volume evolved variables
-    Variables<tmpl::list<::Tags::dt<Tags::Var1>, ::Tags::dt<Tags::Var2<Dim>>>>
-        expected_volume_correction{mesh.number_of_grid_points(), 0.0};
+    // lift into volume and add to volume auxiliary variables
+    Variables<tmpl::list<Tags::Var3<Dim>>> expected_volume_correction{
+        mesh.number_of_grid_points(), 0.0};
     const Scalar<DataVector>& volume_det_inv_jacobian = db::get<
         domain::Tags::DetInvJacobian<Frame::ElementLogical, Frame::Inertial>>(
         box);
@@ -3417,8 +3622,9 @@ void test_auxiliary_1d(const bool moving_mesh,
     return expected_volume_correction;
   };
 
-  const auto check_outgoing_and_ghost = [&box, &evolved_vars,
-                                         &expected_ghost_correction,
+  const auto check_outgoing_and_ghost = [&box, &auxiliary_vars,
+                                         &dt_evolved_vars, &evolved_vars,
+                                         &expected_ghost_var3_correction,
                                          &moving_mesh, &partial_derivs,
                                          &primitive_vars_ptr, &temporaries,
                                          &volume_fluxes](
@@ -3426,12 +3632,18 @@ void test_auxiliary_1d(const bool moving_mesh,
                                                 outgoing_direction) {
     INFO("Ghost");
     CAPTURE(outgoing_direction);
-    // Deviation: reset the evolved variables (variables_tag) rather than the
-    // time derivatives, since the auxiliary correction is lifted into them.
+    // Reset the auxiliary variables (::Tags::Variables<auxiliary_variables>,
+    // i.e. Var3), which are the `tag_to_update` that receives the lifted
+    // auxiliary correction, to a known baseline. Also reset the evolved
+    // variables (variables_tag) and the time derivatives (dt_variables_tag)
+    // so the "unchanged" checks below start from a known state.
     db::mutate<domain::Tags::ExternalBoundaryConditions<Dim>,
-               typename System::variables_tag>(
-        [&moving_mesh, &outgoing_direction](const auto all_boundary_conditions,
-                                            const auto vars_ptr) {
+               typename System::variables_tag,
+               ::Tags::Variables<typename System::auxiliary_variables>,
+               dt_variables_tag>(
+        [&moving_mesh, &outgoing_direction](
+            const auto all_boundary_conditions, const auto vars_ptr,
+            const auto aux_vars_ptr, const auto dt_vars_ptr) {
           DirectionMap<Dim, std::unique_ptr<
                                 domain::BoundaryConditions::BoundaryCondition>>
               boundary_conditions{};
@@ -3442,6 +3654,8 @@ void test_auxiliary_1d(const bool moving_mesh,
           (*all_boundary_conditions)[0] = std::move(boundary_conditions);
 
           fill_variables(vars_ptr, offset_evolved_vars);
+          fill_variables(aux_vars_ptr, offset_evolved_vars);
+          fill_variables(dt_vars_ptr, offset_dt_evolved_vars);
         },
         make_not_null(&box));
     // Deviation: ComputeAuxiliary=true.
@@ -3452,15 +3666,31 @@ void test_auxiliary_1d(const bool moving_mesh,
             BndryTerms{moving_mesh, outgoing_direction.opposite().sign()},
             temporaries, volume_fluxes, partial_derivs, primitive_vars_ptr);
 
-    // Deviation: the lifted correction is added to the evolved variables.
-    auto expected_evolved_vars = evolved_vars;
-    expected_evolved_vars +=
-        expected_ghost_correction(outgoing_direction.opposite());
+    // The lifted auxiliary correction is added to the auxiliary variables
+    // (Var3), NOT to the evolved variables_tag.
+    auto expected_auxiliary_vars = auxiliary_vars;
+    expected_auxiliary_vars +=
+        expected_ghost_var3_correction(outgoing_direction.opposite());
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(
+          get<Tags::Var3<Dim>>(box).get(i),
+          get<Tags::Var3<Dim>>(expected_auxiliary_vars).get(i));
+    }
+    // The evolved variables (variables_tag) are untouched by the auxiliary
+    // pass.
     CHECK_ITERABLE_APPROX(get(get<Tags::Var1>(box)),
-                          get(get<Tags::Var1>(expected_evolved_vars)));
+                          get(get<Tags::Var1>(evolved_vars)));
     for (size_t i = 0; i < Dim; ++i) {
       CHECK_ITERABLE_APPROX(get<Tags::Var2<Dim>>(box).get(i),
-                            get<Tags::Var2<Dim>>(expected_evolved_vars).get(i));
+                            get<Tags::Var2<Dim>>(evolved_vars).get(i));
+    }
+    // The time derivatives are untouched by the auxiliary pass.
+    CHECK_ITERABLE_APPROX(get(get<::Tags::dt<Tags::Var1>>(box)),
+                          get(get<::Tags::dt<Tags::Var1>>(dt_evolved_vars)));
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(
+          get<::Tags::dt<Tags::Var2<Dim>>>(box).get(i),
+          get<::Tags::dt<Tags::Var2<Dim>>>(dt_evolved_vars).get(i));
     }
   };
   // DemandOutgoingCharSpeeds +xi, Ghost -xi
@@ -3476,23 +3706,27 @@ void test_auxiliary_1d(const bool moving_mesh,
   // condition `uses_ghost_condition` (TimeDerivative has
   // bc_type::TimeDerivative and DemandOutgoingCharSpeeds has
   // bc_type::DemandOutgoingCharSpeeds), so no auxiliary correction is lifted
-  // into the volume variables_tag either: the auxiliary pass is a complete
-  // no-op here. This asserts the actual production behavior.
-  const auto check_outgoing_and_dt = [&box, &dt_evolved_vars, &evolved_vars,
-                                      &moving_mesh, &partial_derivs,
-                                      &primitive_vars_ptr, &temporaries,
+  // into ::Tags::Variables<auxiliary_variables> (Var3) either: the auxiliary
+  // pass is a complete no-op here. This asserts the actual production behavior.
+  const auto check_outgoing_and_dt = [&box, &auxiliary_vars, &dt_evolved_vars,
+                                      &evolved_vars, &moving_mesh,
+                                      &partial_derivs, &primitive_vars_ptr,
+                                      &temporaries,
                                       &volume_fluxes](const Direction<Dim>&
                                                           outgoing_direction) {
     INFO("TimeDerivative");
     CAPTURE(outgoing_direction);
-    // Reset both the evolved variables (variables_tag) and the time
-    // derivatives (dt_variables_tag) to a known baseline so that both the
+    // Reset the evolved variables (variables_tag), the auxiliary variables
+    // (::Tags::Variables<auxiliary_variables>, i.e. Var3), and the time
+    // derivatives (dt_variables_tag) to a known baseline so all three
     // "untouched" checks below start from a known state.
     db::mutate<domain::Tags::ExternalBoundaryConditions<Dim>,
-               typename System::variables_tag, dt_variables_tag>(
-        [&moving_mesh, &outgoing_direction](const auto all_boundary_conditions,
-                                            const auto vars_ptr,
-                                            const auto dt_vars_ptr) {
+               typename System::variables_tag,
+               ::Tags::Variables<typename System::auxiliary_variables>,
+               dt_variables_tag>(
+        [&moving_mesh, &outgoing_direction](
+            const auto all_boundary_conditions, const auto vars_ptr,
+            const auto aux_vars_ptr, const auto dt_vars_ptr) {
           DirectionMap<Dim, std::unique_ptr<
                                 domain::BoundaryConditions::BoundaryCondition>>
               boundary_conditions{};
@@ -3504,6 +3738,7 @@ void test_auxiliary_1d(const bool moving_mesh,
           (*all_boundary_conditions)[0] = std::move(boundary_conditions);
 
           fill_variables(vars_ptr, offset_evolved_vars);
+          fill_variables(aux_vars_ptr, offset_evolved_vars);
           fill_variables(dt_vars_ptr, offset_dt_evolved_vars);
         },
         make_not_null(&box));
@@ -3516,14 +3751,20 @@ void test_auxiliary_1d(const bool moving_mesh,
             temporaries, volume_fluxes, partial_derivs, primitive_vars_ptr);
 
     // (a) Neither boundary condition uses a ghost condition, so no
-    // auxiliary correction is lifted: the evolved variables are untouched.
+    // auxiliary correction is lifted: the auxiliary variables (Var3) are
+    // untouched.
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(get<Tags::Var3<Dim>>(box).get(i),
+                            get<Tags::Var3<Dim>>(auxiliary_vars).get(i));
+    }
+    // (b) The evolved variables are untouched.
     CHECK_ITERABLE_APPROX(get(get<Tags::Var1>(box)),
                           get(get<Tags::Var1>(evolved_vars)));
     for (size_t i = 0; i < Dim; ++i) {
       CHECK_ITERABLE_APPROX(get<Tags::Var2<Dim>>(box).get(i),
                             get<Tags::Var2<Dim>>(evolved_vars).get(i));
     }
-    // (b) The dg_time_derivative path is skipped in the auxiliary pass, so
+    // (c) The dg_time_derivative path is skipped in the auxiliary pass, so
     // the time derivatives are left untouched.
     CHECK_ITERABLE_APPROX(get(get<::Tags::dt<Tags::Var1>>(box)),
                           get(get<::Tags::dt<Tags::Var1>>(dt_evolved_vars)));
@@ -3542,16 +3783,16 @@ void test_auxiliary_1d(const bool moving_mesh,
   // carries a Ghost boundary condition and the opposite side a pure
   // TimeDerivative (dt-condition) boundary condition. In the auxiliary pass:
   // - the Ghost side `uses_ghost_condition`, so its auxiliary boundary
-  //   correction IS lifted into the evolved variables_tag, exactly as in the
-  //   other auxiliary ghost scenarios;
+  //   correction IS lifted into ::Tags::Variables<auxiliary_variables> (Var3),
+  //   exactly as in the other auxiliary ghost scenarios;
   // - the TimeDerivative side does not use a ghost condition, and the
   //   dg_time_derivative path is guarded by `not ComputeAuxiliary`, so it
   //   contributes nothing and dt_variables_tag is left untouched.
-  // This asserts the actual production behavior: dt untouched, volume variables
-  // modified on the ghost side.
-  const auto check_ghost_and_dt_opposite = [&box, &dt_evolved_vars,
-                                            &evolved_vars,
-                                            &expected_ghost_correction,
+  // This asserts the actual production behavior: dt untouched, evolved
+  // variables_tag untouched, auxiliary Var3 modified on the ghost side.
+  const auto check_ghost_and_dt_opposite = [&box, &auxiliary_vars,
+                                            &dt_evolved_vars, &evolved_vars,
+                                            &expected_ghost_var3_correction,
                                             &moving_mesh, &partial_derivs,
                                             &primitive_vars_ptr, &temporaries,
                                             &volume_fluxes](
@@ -3559,15 +3800,18 @@ void test_auxiliary_1d(const bool moving_mesh,
                                                    ghost_direction) {
     INFO("Ghost and TimeDerivative on opposite sides");
     CAPTURE(ghost_direction);
-    // Reset both the evolved variables (variables_tag), into which the
-    // auxiliary ghost correction is lifted, and the time derivatives
+    // Reset the auxiliary variables (::Tags::Variables<auxiliary_variables>,
+    // i.e. Var3), into which the auxiliary ghost correction is lifted, and
+    // the evolved variables (variables_tag) and the time derivatives
     // (dt_variables_tag), which must remain untouched by the auxiliary
     // pass.
     db::mutate<domain::Tags::ExternalBoundaryConditions<Dim>,
-               typename System::variables_tag, dt_variables_tag>(
-        [&moving_mesh, &ghost_direction](const auto all_boundary_conditions,
-                                         const auto vars_ptr,
-                                         const auto dt_vars_ptr) {
+               typename System::variables_tag,
+               ::Tags::Variables<typename System::auxiliary_variables>,
+               dt_variables_tag>(
+        [&moving_mesh, &ghost_direction](
+            const auto all_boundary_conditions, const auto vars_ptr,
+            const auto aux_vars_ptr, const auto dt_vars_ptr) {
           DirectionMap<Dim, std::unique_ptr<
                                 domain::BoundaryConditions::BoundaryCondition>>
               boundary_conditions{};
@@ -3579,6 +3823,7 @@ void test_auxiliary_1d(const bool moving_mesh,
           (*all_boundary_conditions)[0] = std::move(boundary_conditions);
 
           fill_variables(vars_ptr, offset_evolved_vars);
+          fill_variables(aux_vars_ptr, offset_evolved_vars);
           fill_variables(dt_vars_ptr, offset_dt_evolved_vars);
         },
         make_not_null(&box));
@@ -3590,18 +3835,25 @@ void test_auxiliary_1d(const bool moving_mesh,
             BndryTerms{moving_mesh, ghost_direction.sign()}, temporaries,
             volume_fluxes, partial_derivs, primitive_vars_ptr);
 
-    // (a) The auxiliary ghost correction is lifted into the evolved
-    // variables on the ghost side, exactly as in the other auxiliary ghost
-    // scenarios. The TimeDerivative side contributes nothing.
-    auto expected_evolved_vars = evolved_vars;
-    expected_evolved_vars += expected_ghost_correction(ghost_direction);
+    // (a) The auxiliary ghost correction is lifted into the auxiliary
+    // variables (Var3) on the ghost side, exactly as in the other auxiliary
+    // ghost scenarios. The TimeDerivative side contributes nothing.
+    auto expected_auxiliary_vars = auxiliary_vars;
+    expected_auxiliary_vars += expected_ghost_var3_correction(ghost_direction);
+    for (size_t i = 0; i < Dim; ++i) {
+      CHECK_ITERABLE_APPROX(
+          get<Tags::Var3<Dim>>(box).get(i),
+          get<Tags::Var3<Dim>>(expected_auxiliary_vars).get(i));
+    }
+    // (b) The evolved variables (variables_tag) are untouched by the
+    // auxiliary pass.
     CHECK_ITERABLE_APPROX(get(get<Tags::Var1>(box)),
-                          get(get<Tags::Var1>(expected_evolved_vars)));
+                          get(get<Tags::Var1>(evolved_vars)));
     for (size_t i = 0; i < Dim; ++i) {
       CHECK_ITERABLE_APPROX(get<Tags::Var2<Dim>>(box).get(i),
-                            get<Tags::Var2<Dim>>(expected_evolved_vars).get(i));
+                            get<Tags::Var2<Dim>>(evolved_vars).get(i));
     }
-    // (b) The dg_time_derivative path is skipped in the auxiliary pass, so
+    // (c) The dg_time_derivative path is skipped in the auxiliary pass, so
     // the time derivatives are left untouched.
     CHECK_ITERABLE_APPROX(get(get<::Tags::dt<Tags::Var1>>(box)),
                           get(get<::Tags::dt<Tags::Var1>>(dt_evolved_vars)));
@@ -3619,72 +3871,82 @@ void test_auxiliary_1d(const bool moving_mesh,
   // Auxiliary analogue of test_1d's check_ghost_and_dt_combined_bc. The
   // GhostAndTimeDerivative boundary condition supplies BOTH ghost data and a
   // dg_time_derivative condition. In the auxiliary pass the ghost part's
-  // auxiliary boundary correction is lifted into the evolved variables_tag,
-  // while the dg_time_derivative path is guarded by `not ComputeAuxiliary` in
-  // the production code and therefore skipped: this means dt_variables_tag must
-  // be left untouched. This is the key behavior under test.
-  const auto check_ghost_and_dt_combined_bc = [&box, &evolved_vars,
-                                               &expected_ghost_correction,
-                                               &mesh, &moving_mesh,
-                                               &partial_derivs,
-                                               &primitive_vars_ptr,
-                                               &temporaries, &volume_fluxes](
-                                                  const Direction<Dim>&
-                                                      outgoing_direction) {
-    INFO("GhostAndTimeDerivative combined on one side");
-    CAPTURE(outgoing_direction);
-    // Reset both the evolved variables (variables_tag), into which the
-    // auxiliary ghost correction is lifted, and the time derivatives
-    // (dt_variables_tag), which must remain untouched by the auxiliary
-    // pass.
-    db::mutate<domain::Tags::ExternalBoundaryConditions<Dim>,
-               typename System::variables_tag, dt_variables_tag>(
-        [&moving_mesh, &outgoing_direction](const auto all_boundary_conditions,
-                                            const auto vars_ptr,
-                                            const auto dt_vars_ptr) {
-          DirectionMap<Dim, std::unique_ptr<
-                                domain::BoundaryConditions::BoundaryCondition>>
-              boundary_conditions{};
-          boundary_conditions[outgoing_direction.opposite()] =
-              std::make_unique<GhostAndTimeDerivative<System>>(moving_mesh);
-          boundary_conditions[outgoing_direction] =
-              std::make_unique<DemandOutgoingCharSpeeds<System>>(moving_mesh);
-          (*all_boundary_conditions)[0] = std::move(boundary_conditions);
+  // auxiliary boundary correction is lifted into
+  // ::Tags::Variables<auxiliary_variables> (Var3), while the dg_time_derivative
+  // path is guarded by `not ComputeAuxiliary` in the production code and
+  // therefore skipped: this means dt_variables_tag must be left untouched. This
+  // is the key behavior under test.
+  const auto check_ghost_and_dt_combined_bc =
+      [&box, &auxiliary_vars, &evolved_vars, &expected_ghost_var3_correction,
+       &mesh, &moving_mesh, &partial_derivs, &primitive_vars_ptr, &temporaries,
+       &volume_fluxes](const Direction<Dim>& outgoing_direction) {
+        INFO("GhostAndTimeDerivative combined on one side");
+        CAPTURE(outgoing_direction);
+        // Reset the auxiliary variables
+        // (::Tags::Variables<auxiliary_variables>, i.e. Var3), into which the
+        // auxiliary ghost correction is lifted, and the evolved variables
+        // (variables_tag) and the time derivatives (dt_variables_tag), which
+        // must remain untouched by the auxiliary pass.
+        db::mutate<domain::Tags::ExternalBoundaryConditions<Dim>,
+                   typename System::variables_tag,
+                   ::Tags::Variables<typename System::auxiliary_variables>,
+                   dt_variables_tag>(
+            [&moving_mesh, &outgoing_direction](
+                const auto all_boundary_conditions, const auto vars_ptr,
+                const auto aux_vars_ptr, const auto dt_vars_ptr) {
+              DirectionMap<Dim,
+                           std::unique_ptr<
+                               domain::BoundaryConditions::BoundaryCondition>>
+                  boundary_conditions{};
+              boundary_conditions[outgoing_direction.opposite()] =
+                  std::make_unique<GhostAndTimeDerivative<System>>(moving_mesh);
+              boundary_conditions[outgoing_direction] =
+                  std::make_unique<DemandOutgoingCharSpeeds<System>>(
+                      moving_mesh);
+              (*all_boundary_conditions)[0] = std::move(boundary_conditions);
 
-          fill_variables(vars_ptr, offset_evolved_vars);
-          fill_variables(dt_vars_ptr, offset_dt_evolved_vars);
-        },
-        make_not_null(&box));
-    // Deviation: ComputeAuxiliary=true, so the auxiliary pass is exercised.
-    evolution::dg::Actions::detail::
-        apply_boundary_conditions_on_all_external_faces<
-            System, Dim, /*ComputeAuxiliary=*/true>(
-            make_not_null(&box),
-            BndryTerms{moving_mesh, outgoing_direction.opposite().sign()},
-            temporaries, volume_fluxes, partial_derivs, primitive_vars_ptr);
+              fill_variables(vars_ptr, offset_evolved_vars);
+              fill_variables(aux_vars_ptr, offset_evolved_vars);
+              fill_variables(dt_vars_ptr, offset_dt_evolved_vars);
+            },
+            make_not_null(&box));
+        // Deviation: ComputeAuxiliary=true, so the auxiliary pass is exercised.
+        evolution::dg::Actions::detail::
+            apply_boundary_conditions_on_all_external_faces<
+                System, Dim, /*ComputeAuxiliary=*/true>(
+                make_not_null(&box),
+                BndryTerms{moving_mesh, outgoing_direction.opposite().sign()},
+                temporaries, volume_fluxes, partial_derivs, primitive_vars_ptr);
 
-    // (a) The auxiliary ghost correction is lifted into the evolved
-    // variables, exactly as in the other auxiliary ghost scenarios.
-    auto expected_evolved_vars = evolved_vars;
-    expected_evolved_vars +=
-        expected_ghost_correction(outgoing_direction.opposite());
-    CHECK_ITERABLE_APPROX(get(get<Tags::Var1>(box)),
-                          get(get<Tags::Var1>(expected_evolved_vars)));
-    for (size_t i = 0; i < Dim; ++i) {
-      CHECK_ITERABLE_APPROX(get<Tags::Var2<Dim>>(box).get(i),
-                            get<Tags::Var2<Dim>>(expected_evolved_vars).get(i));
-    }
-    // (b) The dg_time_derivative path is skipped in the auxiliary pass, so
-    // the time derivatives are left untouched.
-    CHECK_ITERABLE_APPROX(
-        get(get<::Tags::dt<Tags::Var1>>(box)),
-        DataVector(mesh.number_of_grid_points(), offset_dt_evolved_vars));
-    for (size_t i = 0; i < Dim; ++i) {
-      CHECK_ITERABLE_APPROX(get<::Tags::dt<Tags::Var2<Dim>>>(box).get(i),
-                            DataVector(mesh.number_of_grid_points(),
-                                       offset_dt_evolved_vars + 1 + i));
-    }
-  };
+        // (a) The auxiliary ghost correction is lifted into the auxiliary
+        // variables (Var3), exactly as in the other auxiliary ghost scenarios.
+        auto expected_auxiliary_vars = auxiliary_vars;
+        expected_auxiliary_vars +=
+            expected_ghost_var3_correction(outgoing_direction.opposite());
+        for (size_t i = 0; i < Dim; ++i) {
+          CHECK_ITERABLE_APPROX(
+              get<Tags::Var3<Dim>>(box).get(i),
+              get<Tags::Var3<Dim>>(expected_auxiliary_vars).get(i));
+        }
+        // (b) The evolved variables (variables_tag) are untouched by the
+        // auxiliary pass.
+        CHECK_ITERABLE_APPROX(get(get<Tags::Var1>(box)),
+                              get(get<Tags::Var1>(evolved_vars)));
+        for (size_t i = 0; i < Dim; ++i) {
+          CHECK_ITERABLE_APPROX(get<Tags::Var2<Dim>>(box).get(i),
+                                get<Tags::Var2<Dim>>(evolved_vars).get(i));
+        }
+        // (c) The dg_time_derivative path is skipped in the auxiliary pass, so
+        // the time derivatives are left untouched.
+        CHECK_ITERABLE_APPROX(
+            get(get<::Tags::dt<Tags::Var1>>(box)),
+            DataVector(mesh.number_of_grid_points(), offset_dt_evolved_vars));
+        for (size_t i = 0; i < Dim; ++i) {
+          CHECK_ITERABLE_APPROX(get<::Tags::dt<Tags::Var2<Dim>>>(box).get(i),
+                                DataVector(mesh.number_of_grid_points(),
+                                           offset_dt_evolved_vars + 1 + i));
+        }
+      };
   // DemandOutgoingCharSpeeds +xi, GhostAndTimeDerivative -xi
   check_ghost_and_dt_combined_bc(Direction<Dim>::upper_xi());
   // DemandOutgoingCharSpeeds -xi, GhostAndTimeDerivative +xi
@@ -3731,12 +3993,14 @@ void test_cartoon_mesh_compatibility() {
       domain::Tags::InverseJacobian<1, Frame::ElementLogical, Frame::Inertial>,
       domain::Tags::DetInvJacobian<Frame::ElementLogical, Frame::Inertial>,
       evolution::dg::Tags::NormalCovectorAndMagnitude<1>,
-      typename TestSystem::variables_tag, dt_variables_tag,
-      Tags::BoundaryConditionVolumeTag, Tags::BoundaryCorrectionVolumeTag,
-      ::dg::Tags::Formulation>;
+      typename TestSystem::variables_tag,
+      ::Tags::Variables<typename TestSystem::auxiliary_variables>,
+      dt_variables_tag, Tags::BoundaryConditionVolumeTag,
+      Tags::BoundaryCorrectionVolumeTag, ::dg::Tags::Formulation>;
   using compute_tags = tmpl::list<>;
 
   Variables<typename TestSystem::variables_tag::tags_list> evolved_vars{3, 1.0};
+  Variables<typename TestSystem::auxiliary_variables> auxiliary_vars{3, 1.0};
   Variables<db::wrap_tags_in<::Tags::dt,
                              typename TestSystem::variables_tag::tags_list>>
       dt_evolved_vars{3, 0.0};
@@ -3759,7 +4023,7 @@ void test_cartoon_mesh_compatibility() {
           3_st, 1.0},
       Scalar<DataVector>{3_st, 1.0},
       evolution::dg::Tags::NormalCovectorAndMagnitude<1>::type{}, evolved_vars,
-      dt_evolved_vars, boundary_condition_volume_tag_number,
+      auxiliary_vars, dt_evolved_vars, boundary_condition_volume_tag_number,
       boundary_correction_volume_tag_number, dg::Formulation::StrongInertial);
 
   // Create minimal temporaries, fluxes, and partial derivatives
@@ -3800,6 +4064,7 @@ void test_cartoon_mesh_compatibility() {
 
     Variables<typename TestSystem::variables_tag::tags_list> evolved_vars2{3,
                                                                            1.0};
+    Variables<typename TestSystem::auxiliary_variables> auxiliary_vars2{3, 1.0};
     Variables<db::wrap_tags_in<::Tags::dt,
                                typename TestSystem::variables_tag::tags_list>>
         dt_evolved_vars2{3, 0.0};
@@ -3822,7 +4087,8 @@ void test_cartoon_mesh_compatibility() {
             3_st, 1.0},
         Scalar<DataVector>{3_st, 1.0},
         evolution::dg::Tags::NormalCovectorAndMagnitude<1>::type{},
-        evolved_vars2, dt_evolved_vars2, boundary_condition_volume_tag_number,
+        evolved_vars2, auxiliary_vars2, dt_evolved_vars2,
+        boundary_condition_volume_tag_number,
         boundary_correction_volume_tag_number, dg::Formulation::StrongInertial);
 
     CHECK_NOTHROW(

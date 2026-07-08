@@ -77,13 +77,23 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
   using dg_package_data_volume_tags = tmpl::list<>;
   using dg_boundary_terms_volume_tags = tmpl::list<>;
 
+  /*!
+   * The projected input fields are passed positionally in the order the DG
+   * framework projects them to the face: the evolved variables
+   * (`System::variables_tag`, i.e. `Psi, Pi, BoundaryPsi`) followed by the
+   * auxiliary variables (`System::auxiliary_variables`, i.e. `Phi`). This
+   * matches the framework's projection list
+   * `append<variables_tag::tags_list, auxiliary_variables, ...>`. `Phi` is an
+   * auxiliary (LDG) variable, so it follows the evolved variables here even
+   * though the physical flux uses it.
+   */
   double dg_package_data(
       gsl::not_null<Scalar<DataVector>*> packaged_pi,
       gsl::not_null<Scalar<DataVector>*> packaged_normal_dot_phi,
 
       const Scalar<DataVector>& /*psi*/, const Scalar<DataVector>& pi,
-      const tnsr::i<DataVector, Dim, Frame::Inertial>& phi,
       const Scalar<DataVector>& /*boundary_psi*/,
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& phi,
 
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
@@ -95,8 +105,6 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
   void dg_boundary_terms(
       gsl::not_null<Scalar<DataVector>*> psi_boundary_correction,
       gsl::not_null<Scalar<DataVector>*> pi_boundary_correction,
-      gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
-          phi_boundary_correction,
       gsl::not_null<Scalar<DataVector>*> boundary_psi_boundary_correction,
 
       const Scalar<DataVector>& pi_int,
@@ -113,13 +121,19 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
   using dg_auxiliary_package_data_volume_tags = tmpl::list<>;
   using dg_auxiliary_boundary_terms_volume_tags = tmpl::list<>;
 
+  /*!
+   * The auxiliary pass projects only the evolved variables
+   * (`System::variables_tag`, i.e. `Psi, Pi, BoundaryPsi`) to the face - the
+   * auxiliary variables (`Phi`) are being computed by this pass and are not
+   * read here. The projected inputs are therefore passed positionally in
+   * `variables_tag` order.
+   */
   double dg_auxiliary_package_data(
       gsl::not_null<Scalar<DataVector>*> packaged_psi,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
           psi_times_normal,
 
       const Scalar<DataVector>& psi, const Scalar<DataVector>& /*pi*/,
-      const tnsr::i<DataVector, Dim, Frame::Inertial>& /*phi*/,
       const Scalar<DataVector>& /*boundary_psi*/,
 
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
@@ -129,11 +143,8 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       const;
 
   void dg_auxiliary_boundary_terms(
-      gsl::not_null<Scalar<DataVector>*> psi_boundary_correction,
-      gsl::not_null<Scalar<DataVector>*> pi_boundary_correction,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
           phi_boundary_correction,
-      gsl::not_null<Scalar<DataVector>*> boundary_psi_boundary_correction,
 
       const Scalar<DataVector>& psi_int,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& psi_times_normal_int,

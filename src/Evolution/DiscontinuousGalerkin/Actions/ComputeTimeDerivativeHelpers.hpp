@@ -127,6 +127,41 @@ template <typename T>
 using get_auxiliary_variables_or_empty_t =
     typename get_auxiliary_variables_or_empty<T>::type;
 
+// The `Variables` that the volume time-derivative terms differentiate: the
+// evolved variables (`variables_tag`) together with the auxiliary variables
+// (`auxiliary_variables`).
+//
+// `gradient_variables` is prepended even though it is a subset of
+// `variables_tag union auxiliary_variables`, which makes the `append` look
+// redundant. The reason is ordering, not content: `partial_derivatives`
+// requires the differentiated tags to be the *leading* tags of the source
+// `Variables` (it takes the first `size(gradient_variables)` tags as the
+// differentiated block), so `gradient_variables` must physically lead. The
+// trailing `variables_tag` / `auxiliary_variables` then supply any remaining
+// fields - those read by the moving-mesh terms but not themselves
+// differentiated - and `remove_duplicates` drops the overlap with the head.
+template <typename System>
+using vars_to_differentiate_tags = tmpl::remove_duplicates<
+    tmpl::append<typename System::gradient_variables,
+                 typename System::variables_tag::tags_list,
+                 get_auxiliary_variables_or_empty_t<System>>>;
+
+// The evolved-variable-like fields a DG boundary correction reads on a face,
+// listed in the order the framework projects them to the face: the evolved
+// variables (`System::variables_tag`), followed - for the physical pass only -
+// by the auxiliary variables (`System::auxiliary_variables`). The physical
+// boundary correction may read auxiliary variables (e.g. an LDG numerical flux
+// reads the auxiliary gradient), so they are projected after the evolved
+// variables; the boundary correction's `dg_package_data` must take its inputs
+// in this order. The auxiliary pass computes the auxiliary variables and does
+// not read them, so it projects only the evolved variables.
+template <typename System, bool ComputeAuxiliary>
+using dg_boundary_correction_projected_evolved_tags = tmpl::conditional_t<
+    ComputeAuxiliary, typename System::variables_tag::tags_list,
+    tmpl::remove_duplicates<
+        tmpl::append<typename System::variables_tag::tags_list,
+                     get_auxiliary_variables_or_empty_t<System>>>>;
+
 template <bool HasPrimitiveVars = false>
 struct get_primitive_vars {
   template <typename BoundaryCorrection>
