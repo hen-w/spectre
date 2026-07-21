@@ -422,6 +422,11 @@ void test_polynomial_interpolant(const std::array<size_t, Dim>& extents,
   const intrp::Irregular irregular_interp{mesh, target_xi,
                                           std::optional<size_t>{max_degree}};
 
+  // The target points lie half a grid spacing outside the outermost cell
+  // centers, where the one-sided Lagrange stencils extrapolate and their
+  // weights amplify roundoff (up to ~3e-14 for the 5-point order-4 stencil
+  // in 3d). The tolerance below still asserts exactness to ~12 digits.
+  Approx custom_approx = Approx::custom().epsilon(1.e-12).scale(1.);
   for (size_t degree = 0; degree <= max_degree; ++degree) {
     const auto source_vars = polynomial<Dim>(source_x, degree);
     const auto target_vars = irregular_interp.interpolate(source_vars);
@@ -429,7 +434,7 @@ void test_polynomial_interpolant(const std::array<size_t, Dim>& extents,
     CAPTURE(Dim);
     CAPTURE(max_degree);
     CAPTURE(degree);
-    CHECK_VARIABLES_APPROX(target_vars, expected_vars);
+    CHECK_VARIABLES_CUSTOM_APPROX(target_vars, expected_vars, custom_approx);
   }
 }
 
@@ -476,17 +481,23 @@ void test_tov(const size_t max_degree, const bool specified_interp_order) {
   std::adjacent_difference(std::begin(errors), std::end(errors),
                            std::begin(ratio_of_errors), std::divides<>{});
 
-  Approx custom_approx = Approx::custom().epsilon(1.e-2).scale(1.);
+  // since \rho is a symmetric function across the center, quadratic and
+  // quartic extrapolation has one order higher convergence rate at the center
+  const double expected_ratio =
+      specified_interp_order
+          ? (max_degree == 2
+                 ? 16.0
+                 : (max_degree == 4 ? 64.0 : two_to_the(max_degree + 1)))
+          : 4.0;
+  // A deviation of the convergence *order* by delta changes the ratio by
+  // ~expected_ratio * 2^delta, so the allowed deviation must scale with the
+  // expected ratio. The tolerance below corresponds to an order window of
+  // about +-0.14 at every order.
+  Approx custom_approx = Approx::custom().epsilon(5.e-2).scale(expected_ratio);
   for (size_t i = 1; i < n_resolutions; ++i) {
     CAPTURE(max_degree);
     CAPTURE(i);
-    // since \rho is a symmetric function across the center, quadratic and
-    // quartic extrapolation has one order higher convergence rate at the center
-    CHECK((specified_interp_order
-               ? (max_degree == 2
-                      ? 16.0
-                      : (max_degree == 4 ? 64 : two_to_the(max_degree + 1)))
-               : 4.0) == custom_approx(gsl::at(ratio_of_errors, i)));
+    CHECK(expected_ratio == custom_approx(gsl::at(ratio_of_errors, i)));
   }
 }
 

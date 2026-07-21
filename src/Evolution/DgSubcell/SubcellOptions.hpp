@@ -210,7 +210,7 @@ class SubcellOptions {
         "The interpolation order to use when interpolating from FD block to FD "
         "block."};
     static constexpr type lower_bound() { return 1; }
-    static constexpr type upper_bound() { return 3; }
+    static constexpr type upper_bound() { return 4; }
   };
 
   /// \brief Subcell steps per slab in regions allowed to do subcell

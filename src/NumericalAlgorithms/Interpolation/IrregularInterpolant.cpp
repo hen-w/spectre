@@ -489,7 +489,7 @@ Matrix interpolation_matrix(
         default:
           ERROR("Unsupported fd_to_fd_interp_order: "
                 << fd_to_fd_interp_order.value_or(default_order)
-                << "; expected 1, 2, or 3.");
+                << "; expected 1, 2, 3, or 4.");
       }
       for (size_t i = 0; i < number_of_source_points; ++i) {
         result(p, i) = stencil[i];
@@ -562,7 +562,7 @@ Matrix interpolation_matrix(
         default:
           ERROR("Unsupported fd_to_fd_interp_order: "
                 << fd_to_fd_interp_order.value_or(default_order)
-                << "; expected 1, 2, or 3.");
+                << "; expected 1, 2, 3, or 4.");
       }
       for (size_t j = 0, s = 0; j < mesh.extents(1); ++j) {
         for (size_t i = 0; i < mesh.extents(0); ++i) {
@@ -693,7 +693,7 @@ Matrix interpolation_matrix(
         default:
           ERROR("Unsupported fd_to_fd_interp_order: "
                 << fd_to_fd_interp_order.value_or(default_order)
-                << "; expected 1, 2, or 3.");
+                << "; expected 1, 2, 3, or 4.");
       }
       for (size_t k = 0, s = 0; k < mesh.extents(2); ++k) {
         for (size_t j = 0; j < mesh.extents(1); ++j) {

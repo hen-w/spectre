@@ -308,7 +308,7 @@ void test(const bool enable_extension, const size_t fd_to_fd_interp_order) {
 SPECTRE_TEST_CASE("Unit.Evolution.Subcell.SetInterpolators",
                   "[Evolution][Unit]") {
   for (const bool enable_extension : {false, true}) {
-    for (size_t fd_interp_order = 1; fd_interp_order <= 3; ++fd_interp_order) {
+    for (size_t fd_interp_order = 1; fd_interp_order <= 4; ++fd_interp_order) {
       test<1>(enable_extension, fd_interp_order);
       test<2>(enable_extension, fd_interp_order);
       test<3>(enable_extension, fd_interp_order);
