@@ -11,6 +11,7 @@
 
 #include "DataStructures/VariablesTag.hpp"
 #include "Evolution/Systems/SoScalarWave/Tags.hpp"
+#include "Evolution/Systems/SoScalarWave/TimeDerivative.hpp"
 #include "Utilities/TMPL.hpp"
 
 /*!
@@ -36,5 +37,7 @@ struct System {
   using flux_variables = tmpl::list<>;
   using auxiliary_variables = tmpl::list<Tags::Phi<Dim>>;
   using gradient_variables = tmpl::list<Tags::Phi<Dim>>;
+
+  using compute_volume_time_derivative_terms = TimeDerivative<Dim>;
 };
 }  // namespace SoScalarWave
