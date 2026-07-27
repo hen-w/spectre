@@ -14,6 +14,8 @@ template <size_t Dim>
 evolution::dg::TimeDerivativeDecisions<Dim> TimeDerivative<Dim>::apply(
     const gsl::not_null<Scalar<DataVector>*> dt_psi,
     const gsl::not_null<Scalar<DataVector>*> dt_pi,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*d_psi*/,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& /*d_pi*/,
     const tnsr::ij<DataVector, Dim, Frame::Inertial>& d_phi,
     const Scalar<DataVector>& pi) {
   get(*dt_psi) = -get(pi);

@@ -28,6 +28,15 @@ void test_time_derivative(const gsl::not_null<std::mt19937*> generator) {
 
   const auto pi = make_with_random_values<Scalar<DataVector>>(
       generator, nn_distribution, used_for_size);
+  // The evolved variables' derivatives are unused by the time derivative
+  // (they are in gradient_variables only for the framework's moving-mesh
+  // term); random values prove they do not enter the result.
+  const auto d_psi =
+      make_with_random_values<tnsr::i<DataVector, Dim, Frame::Inertial>>(
+          generator, nn_distribution, used_for_size);
+  const auto d_pi =
+      make_with_random_values<tnsr::i<DataVector, Dim, Frame::Inertial>>(
+          generator, nn_distribution, used_for_size);
   const auto d_phi =
       make_with_random_values<tnsr::ij<DataVector, Dim, Frame::Inertial>>(
           generator, nn_distribution, used_for_size);
@@ -35,7 +44,7 @@ void test_time_derivative(const gsl::not_null<std::mt19937*> generator) {
   Scalar<DataVector> dt_psi{num_pts};
   Scalar<DataVector> dt_pi{num_pts};
   const auto decisions = SoScalarWave::TimeDerivative<Dim>::apply(
-      make_not_null(&dt_psi), make_not_null(&dt_pi), d_phi, pi);
+      make_not_null(&dt_psi), make_not_null(&dt_pi), d_psi, d_pi, d_phi, pi);
 
   CHECK_ITERABLE_APPROX(dt_psi, Scalar<DataVector>(-1.0 * get(pi)));
 

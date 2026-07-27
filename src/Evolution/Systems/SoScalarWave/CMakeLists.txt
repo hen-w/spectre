@@ -8,6 +8,8 @@ add_spectre_library(${LIBRARY})
 spectre_target_sources(
   ${LIBRARY}
   PRIVATE
+  Characteristics.cpp
+  SpectralFilter.cpp
   TimeDerivative.cpp
   )
 
@@ -15,10 +17,12 @@ spectre_target_headers(
   ${LIBRARY}
   INCLUDE_DIRECTORY ${CMAKE_SOURCE_DIR}/src
   HEADERS
+  Characteristics.hpp
   System.hpp
   Tags.hpp
   TagsDeclarations.hpp
   TimeDerivative.hpp
+  UpdateAuxiliaryVariables.hpp
   )
 
 target_link_libraries(
@@ -26,5 +30,11 @@ target_link_libraries(
   PUBLIC
   DataStructures
   DiscontinuousGalerkin
+  Domain
+  Events
+  LinearOperators
+  Time
   Utilities
   )
+
+add_subdirectory(Instantiations)

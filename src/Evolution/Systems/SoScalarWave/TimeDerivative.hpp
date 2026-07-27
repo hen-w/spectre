@@ -34,7 +34,11 @@ struct TimeDerivative {
       gsl::not_null<Scalar<DataVector>*> dt_pi,
 
       // Partial derivative arguments. Listed in the system struct as
-      // gradient_variables.
+      // gradient_variables. Only the derivative of Phi enters the time
+      // derivatives; the evolved variables' derivatives are in
+      // gradient_variables solely for the framework's moving-mesh term.
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& /*d_psi*/,
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& /*d_pi*/,
       const tnsr::ij<DataVector, Dim, Frame::Inertial>& d_phi,
 
       // Terms list in argument_tags above
