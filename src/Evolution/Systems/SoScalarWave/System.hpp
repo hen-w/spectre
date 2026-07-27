@@ -10,6 +10,7 @@
 #include <string>
 
 #include "DataStructures/VariablesTag.hpp"
+#include "Evolution/Systems/SoScalarWave/BoundaryConditions/BoundaryCondition.hpp"
 #include "Evolution/Systems/SoScalarWave/Characteristics.hpp"
 #include "Evolution/Systems/SoScalarWave/Tags.hpp"
 #include "Evolution/Systems/SoScalarWave/TimeDerivative.hpp"
@@ -29,6 +30,8 @@ namespace SoScalarWave {
 template <size_t Dim>
 struct System {
   static std::string name() { return "SoScalarWave"; }
+
+  using boundary_conditions_base = BoundaryConditions::BoundaryCondition<Dim>;
 
   static constexpr bool is_in_flux_conservative_form = false;
   static constexpr bool has_primitive_and_conservative_vars = false;

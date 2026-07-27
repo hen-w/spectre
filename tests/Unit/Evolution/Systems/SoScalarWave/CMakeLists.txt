@@ -4,6 +4,7 @@
 set(LIBRARY Test_SoScalarWave)
 
 set(LIBRARY_SOURCES
+  BoundaryConditions/Test_Periodic.cpp
   Test_System.cpp
   Test_Tags.cpp
   Test_TimeDerivative.cpp

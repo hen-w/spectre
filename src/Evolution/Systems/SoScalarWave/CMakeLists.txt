@@ -31,10 +31,12 @@ target_link_libraries(
   DataStructures
   DiscontinuousGalerkin
   Domain
+  DomainBoundaryConditions
   Events
   LinearOperators
   Time
   Utilities
   )
 
+add_subdirectory(BoundaryConditions)
 add_subdirectory(Instantiations)
