@@ -152,4 +152,59 @@ template <typename BoundaryCondition>
 using get_deriv_vars_from_boundary_condition =
     typename get_deriv_vars_from_boundary_condition_impl<
         BoundaryCondition>::type;
+
+// The interior inputs to a boundary condition's
+// `boundary_field_time_derivatives` method (the boundary-evolved-fields
+// facility). They are declared separately from the `dg_ghost` interior inputs
+// so that a boundary condition can request a different projected interior state
+// for its boundary-field time derivative. A boundary condition that does not
+// opt into boundary-evolved fields defines none of them, so these
+// "detect-or-default" metafunctions yield the declared list when present and an
+// empty `tmpl::list<>` otherwise. Per the facility design the assembled
+// interior inputs must be a subset of the interior face fields projected for
+// this boundary condition. `apply_boundary_condition_impl` only compile-checks
+// that each tag is a member of the interior-face `Variables` type, not that it
+// was actually projected; in practice a boundary condition lists here only tags
+// it also feeds to `dg_ghost`, which are projected (a member-but-unprojected
+// tag would read signaling NaN, trapped in debug).
+CREATE_GET_TYPE_ALIAS_OR_DEFAULT(
+    boundary_field_time_derivatives_evolved_variables_tags)
+CREATE_GET_TYPE_ALIAS_OR_DEFAULT(boundary_field_time_derivatives_primitive_tags)
+CREATE_GET_TYPE_ALIAS_OR_DEFAULT(boundary_field_time_derivatives_temporary_tags)
+
+// The assembled interior inputs to `boundary_field_time_derivatives`, in the
+// order evolved, primitive, temporary; empty for a non-opting boundary
+// condition.
+template <typename BoundaryCondition>
+using boundary_field_time_derivatives_interior_tags = tmpl::append<
+    get_boundary_field_time_derivatives_evolved_variables_tags_or_default_t<
+        BoundaryCondition, tmpl::list<>>,
+    get_boundary_field_time_derivatives_primitive_tags_or_default_t<
+        BoundaryCondition, tmpl::list<>>,
+    get_boundary_field_time_derivatives_temporary_tags_or_default_t<
+        BoundaryCondition, tmpl::list<>>>;
+
+// Detect whether a boundary condition defines the facility's derivative member
+// function `boundary_field_time_derivatives`, to fail loud on a boundary
+// condition that defines the method but forgets to opt in via
+// `boundary_evolved_variables` (without the opt-in the facility block is
+// discarded and the method is silently never called). SpECTRE's member-function
+// trait `CREATE_IS_CALLABLE` does not apply here: it tests callability with a
+// specific argument list, and this method's argument types derive from the very
+// `boundary_evolved_variables` / `boundary_field_time_derivatives_*_tags`
+// declarations a mis-wired boundary condition omits, so those types are unknown
+// at the point we must check. We therefore detect the member's existence with
+// the standard SFINAE detection idiom -- the same `void_t` structure
+// `CREATE_IS_CALLABLE` and `CREATE_HAS_TYPE_ALIAS` are built from, keyed on the
+// member itself rather than on a call or a type alias.
+template <typename BoundaryCondition, typename = std::void_t<>>
+struct has_boundary_field_time_derivatives : std::false_type {};
+template <typename BoundaryCondition>
+struct has_boundary_field_time_derivatives<
+    BoundaryCondition,
+    std::void_t<decltype(&BoundaryCondition::boundary_field_time_derivatives)>>
+    : std::true_type {};
+template <typename BoundaryCondition>
+constexpr bool has_boundary_field_time_derivatives_v =
+    has_boundary_field_time_derivatives<BoundaryCondition>::value;
 }  // namespace evolution::dg::Actions::detail
