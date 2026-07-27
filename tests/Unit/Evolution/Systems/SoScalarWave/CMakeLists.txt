@@ -5,6 +5,7 @@ set(LIBRARY Test_SoScalarWave)
 
 set(LIBRARY_SOURCES
   BoundaryConditions/Test_Periodic.cpp
+  Test_Characteristics.cpp
   Test_System.cpp
   Test_Tags.cpp
   Test_TimeDerivative.cpp
@@ -17,6 +18,9 @@ target_link_libraries(
   ${LIBRARY}
   PRIVATE
   DataStructures
+  MathFunctions
   SoScalarWave
+  Time
   Utilities
+  WaveEquationSolutions
   )
