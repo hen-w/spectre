@@ -12,6 +12,7 @@ spectre_target_headers(
   InternalMortarDataImpl.hpp
   NormalCovectorAndMagnitude.hpp
   PackageDataImpl.hpp
+  SendAuxiliaryBoundaryData.hpp
   VolumeTermsImpl.hpp
   VolumeTermsImpl.tpp
   )

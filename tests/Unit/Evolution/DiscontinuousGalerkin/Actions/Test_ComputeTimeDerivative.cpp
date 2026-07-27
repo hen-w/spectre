@@ -7,6 +7,7 @@
 #include <optional>
 #include <pup.h>
 #include <random>
+#include <type_traits>
 
 #include "DataStructures/DataBox/DataBox.hpp"
 #include "DataStructures/DataBox/DataBoxTag.hpp"
@@ -14,6 +15,7 @@
 #include "DataStructures/Tensor/EagerMath/DotProduct.hpp"
 #include "DataStructures/Tensor/EagerMath/Magnitude.hpp"
 #include "DataStructures/Variables.hpp"
+#include "DataStructures/VariablesTag.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.tpp"
 #include "Domain/CoordinateMaps/Identity.hpp"
@@ -36,11 +38,32 @@ struct Var1 : db::SimpleTag {
   using type = Scalar<DataVector>;
 };
 
+// Auxiliary (LDG) variable, a dedicated tag (not one of the evolved
+// variables), used to exercise the auxiliary-variable tag-list helper below.
+template <size_t Dim>
+struct AuxVar : db::SimpleTag {
+  using type = tnsr::I<DataVector, Dim, Frame::Inertial>;
+};
+
 template <size_t Dim>
 struct System {
+  using variables_tag = ::Tags::Variables<tmpl::list<Var1>>;
+  using gradient_variables = tmpl::list<Var1>;
+  using auxiliary_variables = tmpl::list<AuxVar<Dim>>;
   using flux_variables = tmpl::list<Var1>;
   using inverse_spatial_metric_tag = InverseSpatialMetric<Dim>;
 };
+
+// Pins the differentiation source once a system declares auxiliary (LDG)
+// variables: the gradient variables lead (they are what `partial_derivatives`
+// differentiates), followed by the remaining evolved and auxiliary variables,
+// with duplicates removed.
+static_assert(
+    std::is_same_v<::evolution::dg::Actions::detail::
+                       evolved_and_auxiliary_vars_tags<System<1>>,
+                   tmpl::list<Var1, AuxVar<1>>>,
+    "The differentiation source must be the gradient variables, then the "
+    "remaining evolved and auxiliary variables, with duplicates removed.");
 
 template <size_t Dim>
 struct BoundaryTerms {

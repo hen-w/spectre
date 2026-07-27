@@ -859,6 +859,63 @@ struct BoundaryTerms final : public ::evolution::BoundaryCorrection {
     return max(get(*max_abs_char_speed));
   }
 
+  // Nonconservative system with an auxiliary (LDG) variable. On the physical
+  // pass the framework projects the auxiliary variables after the evolved
+  // variables (a physical boundary correction may read them, e.g. an LDG flux
+  // reads the auxiliary gradient); this mock does not, so the argument is
+  // accepted and ignored.
+  double dg_package_data(
+      const gsl::not_null<Scalar<DataVector>*> out_normal_dot_flux_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
+          out_normal_dot_flux_var2,
+      const gsl::not_null<Scalar<DataVector>*> out_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
+      const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+
+      const Scalar<DataVector>& var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+      const Scalar<DataVector>& /*var_aux*/,
+
+      const Scalar<DataVector>& var3_squared,
+
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+      const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+          mesh_velocity,
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+    return dg_package_data(out_normal_dot_flux_var1, out_normal_dot_flux_var2,
+                           out_var1, out_var2, max_abs_char_speed, var1, var2,
+                           var3_squared, normal_covector, mesh_velocity,
+                           normal_dot_mesh_velocity);
+  }
+
+  // Mixed system with an auxiliary (LDG) variable; see the nonconservative
+  // overload above.
+  double dg_package_data(
+      const gsl::not_null<Scalar<DataVector>*> out_normal_dot_flux_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*>
+          out_normal_dot_flux_var2,
+      const gsl::not_null<Scalar<DataVector>*> out_var1,
+      const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> out_var2,
+      const gsl::not_null<Scalar<DataVector>*> max_abs_char_speed,
+
+      const Scalar<DataVector>& var1,
+      const tnsr::I<DataVector, Dim, Frame::Inertial>& var2,
+      const Scalar<DataVector>& /*var_aux*/,
+
+      const tnsr::IJ<DataVector, Dim, Frame::Inertial>& flux_var2,
+
+      const Scalar<DataVector>& var3_squared,
+
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+      const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+          mesh_velocity,
+      const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
+    return dg_package_data(out_normal_dot_flux_var1, out_normal_dot_flux_var2,
+                           out_var1, out_var2, max_abs_char_speed, var1, var2,
+                           flux_var2, var3_squared, normal_covector,
+                           mesh_velocity, normal_dot_mesh_velocity);
+  }
+
   // Mixed system with prims
   /// [bt_mp]
   double dg_package_data(
