@@ -11,6 +11,8 @@ spectre_target_sources(
   PlaneWave.cpp
   RegularSphericalWave.cpp
   SemidiscretizedDg.cpp
+  SoPlaneWave.cpp
+  SoStandingWave.cpp
   )
 
 spectre_target_headers(
@@ -22,6 +24,8 @@ spectre_target_headers(
   RegularSphericalWave.hpp
   SemidiscretizedDg.hpp
   Solutions.hpp
+  SoPlaneWave.hpp
+  SoStandingWave.hpp
   )
 
 target_link_libraries(

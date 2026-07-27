@@ -14,6 +14,8 @@ set(LIBRARY_SOURCES
   Test_PlaneWave.cpp
   Test_RegularSphericalWave.cpp
   # Test_SemidiscretizedDg.cpp
+  Test_SoPlaneWave.cpp
+  Test_SoStandingWave.cpp
   )
 
 add_test_library(${LIBRARY} "${LIBRARY_SOURCES}")
