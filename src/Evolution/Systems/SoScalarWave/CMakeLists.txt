@@ -36,7 +36,10 @@ target_link_libraries(
   LinearOperators
   Time
   Utilities
+  PRIVATE
+  WaveEquationSolutions
   )
 
 add_subdirectory(BoundaryConditions)
+add_subdirectory(BoundaryCorrections)
 add_subdirectory(Instantiations)
