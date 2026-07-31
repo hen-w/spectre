@@ -4,6 +4,7 @@
 set(LIBRARY "Test_BoundaryEvolvedFields")
 
 set(LIBRARY_SOURCES
+  Test_Actions.cpp
   Test_InitializeBoundaryEvolvedFields.cpp
   Test_Tags.cpp
   )

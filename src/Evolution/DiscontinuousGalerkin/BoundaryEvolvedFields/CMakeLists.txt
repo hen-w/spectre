@@ -5,6 +5,7 @@ spectre_target_headers(
   ${LIBRARY}
   INCLUDE_DIRECTORY ${CMAKE_SOURCE_DIR}/src
   HEADERS
+  Actions.hpp
   InitializeBoundaryEvolvedFields.hpp
   NamespaceDocs.hpp
   Tags.hpp
