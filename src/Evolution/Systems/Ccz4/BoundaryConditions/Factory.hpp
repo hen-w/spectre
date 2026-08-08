@@ -6,6 +6,9 @@
 #include "Domain/BoundaryConditions/Periodic.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/ConstraintsRadiationPreserving.hpp"
+#include "Evolution/Systems/Ccz4/BoundaryConditions/CRPBCExp1.hpp"
+#include "Evolution/Systems/Ccz4/BoundaryConditions/CRPBCExp2.hpp"
+#include "Evolution/Systems/Ccz4/BoundaryConditions/CRPBCExp3.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/DirichletAnalytic.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/DirichletCharacteristics.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Sommerfeld.hpp"
@@ -16,5 +19,6 @@ namespace Ccz4::BoundaryConditions {
 using standard_boundary_conditions =
     tmpl::list<DirichletAnalytic, DirichletCharacteristics,
                domain::BoundaryConditions::Periodic<BoundaryCondition>,
-               Sommerfeld, ConstraintsRadiationPreserving>;
+               Sommerfeld, ConstraintsRadiationPreserving, CRPBCExp1,
+               CRPBCExp2, CRPBCExp3>;
 }  // namespace Ccz4::BoundaryConditions
