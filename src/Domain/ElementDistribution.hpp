@@ -38,7 +38,11 @@ enum class ElementWeight {
   /// cost
   Uniform,
   /// A weighting scheme where each `Element`'s computational cost is equal to
-  /// the number of grid points in that `Element`
+  /// the number of grid points in that `Element`. In a filled-sphere domain
+  /// (a block named `InnerCube`), the elements of the static DG-subcell (FD)
+  /// region — the InnerCube block and the innermost radial layer of the
+  /// innermost shell's wedges — are weighted by their FD point count
+  /// \f$(2n-1)^3\f$ instead of the declared \f$n^3\f$
   NumGridPoints,
   /// A weighting scheme where each `Element`'s computational cost is weighted
   /// by both the number of grid points and minimum spacing between grid points

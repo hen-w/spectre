@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <functional>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -38,6 +39,7 @@
 #include "Utilities/Gsl.hpp"
 #include "Utilities/Literals.hpp"
 #include "Utilities/Numeric.hpp"
+#include "Utilities/StdHelpers.hpp"
 
 namespace domain {
 namespace {
@@ -77,6 +79,92 @@ double get_num_points_and_grid_spacing_cost(
 
   return mesh.number_of_grid_points() / sqrt(min_grid_spacing);
 }
+
+// \brief Whether the `ElementWeight::NumGridPoints` cost must account for the
+// static DG-subcell (FD) region of a filled-sphere domain.
+//
+// \details Elements running DG-subcell carry a mesh of (2n-1)^3 grid points,
+// not the declared n^3, so weighting them by their declared point count
+// overloads whichever cores host FD elements. In the filled-sphere domains
+// the FD region is static and known at allocation time: every element of the
+// InnerCube block plus the innermost radial (zeta) layer of the innermost
+// shell's wedges. Subcell weighting engages whenever the domain contains a
+// block named InnerCube; layouts that violate the assumptions behind that
+// static FD region are an error rather than a silent misweighting.
+template <size_t Dim>
+bool use_subcell_fd_weighting(
+    const std::vector<Block<Dim>>& blocks,
+    const std::vector<std::array<size_t, Dim>>& initial_refinement_levels) {
+  if constexpr (Dim == 3) {
+    std::optional<size_t> inner_cube_block_number{};
+    size_t number_of_shell0_blocks = 0;
+    for (size_t block_number = 0; block_number < blocks.size();
+         block_number++) {
+      if (blocks[block_number].name() == "InnerCube") {
+        inner_cube_block_number = block_number;
+      } else if (blocks[block_number].name().starts_with("Shell0")) {
+        number_of_shell0_blocks++;
+      }
+    }
+    if (not inner_cube_block_number.has_value()) {
+      return false;
+    }
+    if (initial_refinement_levels[inner_cube_block_number.value()] !=
+        std::array<size_t, Dim>{{1, 1, 1}}) {
+      ERROR(
+          "Subcell-aware element weighting assumes the InnerCube block has "
+          "initial refinement [1, 1, 1] (every InnerCube element runs FD), "
+          "but block "
+          << inner_cube_block_number.value() << " has initial refinement "
+          << initial_refinement_levels[inner_cube_block_number.value()]
+          << ". The static FD region is unknown for this layout; extend "
+             "use_subcell_fd_weighting() if this layout is intended.");
+    }
+    if (number_of_shell0_blocks == 0) {
+      ERROR(
+          "Subcell-aware element weighting found a block named InnerCube but "
+          "no blocks named Shell0*, so the innermost radial layer of the "
+          "innermost shell cannot be identified. Extend "
+          "use_subcell_fd_weighting() if this layout is intended.");
+    }
+    for (size_t block_number = 0; block_number < blocks.size();
+         block_number++) {
+      if (blocks[block_number].name().starts_with("Shell0") and
+          initial_refinement_levels[block_number][2] != 1) {
+        ERROR(
+            "Subcell-aware element weighting assumes radial (zeta) "
+            "refinement 1 in the innermost shell (the FD region is the "
+            "innermost of two radial layers), but block '"
+            << blocks[block_number].name() << "' has radial refinement "
+            << initial_refinement_levels[block_number][2]
+            << ". The static FD region is unknown for this layout; extend "
+               "use_subcell_fd_weighting() if this layout is intended.");
+      }
+    }
+    return true;
+  } else {
+    (void)blocks;
+    (void)initial_refinement_levels;
+    return false;
+  }
+}
+
+// \brief Whether `element_id` is in the static FD region of a filled-sphere
+// domain (see `use_subcell_fd_weighting()`): the InnerCube block or the
+// innermost radial (zeta) layer of the innermost shell's wedges.
+template <size_t Dim>
+bool is_static_fd_element(const ElementId<Dim>& element_id,
+                          const Block<Dim>& block) {
+  if constexpr (Dim == 3) {
+    return block.name() == "InnerCube" or
+           (block.name().starts_with("Shell0") and
+            element_id.segment_id(2).index() == 0);
+  } else {
+    (void)element_id;
+    (void)block;
+    return false;
+  }
+}
 }  //  namespace
 
 std::ostream& operator<<(std::ostream& os, ElementWeight weight) {
@@ -102,6 +190,10 @@ std::unordered_map<ElementId<Dim>, double> get_element_costs(
     const std::optional<Spectral::Quadrature>& i1_quadrature) {
   std::unordered_map<ElementId<Dim>, double> element_costs{};
 
+  const bool subcell_fd_weighting =
+      element_weight == ElementWeight::NumGridPoints and
+      use_subcell_fd_weighting(blocks, initial_refinement_levels);
+
   for (size_t block_number = 0; block_number < blocks.size(); block_number++) {
     const auto& block = blocks[block_number];
     const auto initial_ref_levs = initial_refinement_levels[block_number];
@@ -109,12 +201,23 @@ std::unordered_map<ElementId<Dim>, double> get_element_costs(
         initial_element_ids(block.id(), initial_ref_levs);
     const size_t grid_points_per_element = alg::accumulate(
         initial_extents[block_number], 1_st, std::multiplies<size_t>());
+    // The number of grid points of the (2n-1)^Dim FD mesh of a DG-subcell
+    // element that declares n^Dim DG points
+    const size_t subcell_grid_points_per_element =
+        alg::accumulate(initial_extents[block_number], 1_st,
+                        [](const size_t product, const size_t num_points) {
+                          return product * (2 * num_points - 1);
+                        });
 
     for (const auto& element_id : element_ids) {
       if (element_weight == ElementWeight::Uniform) {
         element_costs.insert({element_id, 1.0});
       } else if (element_weight == ElementWeight::NumGridPoints) {
-        element_costs.insert({element_id, grid_points_per_element});
+        element_costs.insert(
+            {element_id,
+             subcell_fd_weighting and is_static_fd_element(element_id, block)
+                 ? subcell_grid_points_per_element
+                 : grid_points_per_element});
       } else {
         ASSERT(element_weight == ElementWeight::NumGridPointsAndGridSpacing,
                "Unknown element_weight");
