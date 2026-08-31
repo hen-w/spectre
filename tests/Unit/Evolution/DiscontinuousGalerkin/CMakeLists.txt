@@ -20,6 +20,7 @@ set(LIBRARY_SOURCES
   Test_BoundaryCorrectionsHelper.cpp
   Test_BoundaryData.cpp
   Test_BoundaryEvolvedVariables.cpp
+  Test_BoundaryEvolvedVariablesStepping.cpp
   Test_CleanMortarHistory.cpp
   Test_InboxTags.cpp
   Test_InterfaceDataPolicy.cpp
