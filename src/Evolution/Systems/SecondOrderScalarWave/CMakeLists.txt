@@ -9,6 +9,7 @@ spectre_target_sources(
   ${LIBRARY}
   PRIVATE
   Characteristics.cpp
+  SpectralFilter.cpp
   TimeDerivative.cpp
   )
 
@@ -31,7 +32,9 @@ target_link_libraries(
   DiscontinuousGalerkin
   Domain
   DomainBoundaryConditions
+  Events
   LinearOperators
+  Time
   Utilities
   PRIVATE
   WaveEquationSolutions
@@ -39,3 +42,4 @@ target_link_libraries(
 
 add_subdirectory(BoundaryConditions)
 add_subdirectory(BoundaryCorrections)
+add_subdirectory(Instantiations)

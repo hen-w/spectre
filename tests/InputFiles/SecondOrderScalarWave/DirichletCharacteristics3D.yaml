@@ -1,0 +1,141 @@
+# Distributed under the MIT License.
+# See LICENSE.txt for details.
+
+# Exercises the boundary-evolved variables end to end: every face carries
+# DirichletCharacteristics, whose ghost Psi is the per-face time-integrated
+# BoundaryValue(Psi). The dense triggers exercise dense output of the split
+# variables (including the BoundaryVariables entry) and the ChangeSlabSize
+# event exercises the slab-size re-synchronization of all histories.
+
+Executable: EvolveSecondOrderScalarWave3D
+Testing:
+  Check: parse;execute
+  Priority: High
+ExpectedOutput:
+  - SecondOrderScalarWaveCharacteristics3DReductions.h5
+
+---
+
+Parallelization:
+  ElementDistribution: NumGridPoints
+
+ResourceInfo:
+  AvoidGlobalProc0: false
+  Singletons: Auto
+
+InitialData: &InitialData
+  SecondOrderPlaneWave:
+    WaveVector: [1.0, 0.0, 0.0]
+    Center: [0.0, 0.0, 0.0]
+    Profile:
+      Sinusoid:
+        Amplitude: 1.0
+        Wavenumber: 1.0
+        Phase: 0.0
+
+PhaseChangeAndTriggers:
+
+Evolution:
+  InitialTime: 0.0
+  InitialTimeStep: 0.01
+  MinimumTimeStep: 1e-9
+  TimeStepper:
+    AdamsBashforth:
+      Order: 3
+
+RandomizeInitialData: None
+
+DomainCreator:
+  AlignedLattice:
+    BlockBounds: [[0.0, 6.283185307179586], [0.0, 6.283185307179586],
+                  [0.0, 6.283185307179586]]
+    Distributions: [[], [], []]
+    SingularityPositions: [[], [], []]
+    InitialLevels: [0, 0, 0]
+    InitialGridPoints: [6, 6, 6]
+    RefinedLevels: []
+    RefinedGridPoints: []
+    BlocksToExclude: []
+    BoundaryConditions:
+      - DirichletCharacteristics:
+          AnalyticPrescription: *InitialData
+          PrescribeZeroSpeedModes: false
+          ZeroIncomingMode: false
+          CopyPsiFromInterior: false
+      - DirichletCharacteristics:
+          AnalyticPrescription: *InitialData
+          PrescribeZeroSpeedModes: false
+          ZeroIncomingMode: false
+          CopyPsiFromInterior: false
+      - DirichletCharacteristics:
+          AnalyticPrescription: *InitialData
+          PrescribeZeroSpeedModes: false
+          ZeroIncomingMode: false
+          CopyPsiFromInterior: false
+
+SpatialDiscretization:
+  BoundaryCorrection:
+    LaxFriedrichs:
+      Tau1: 1.0
+      Tau2: 0.0
+  DiscontinuousGalerkin:
+    Formulation: StrongInertial
+    Quadrature: GaussLobatto
+    Filtering:
+      - Hypercube:
+          HalfPower: 128
+          Enable: false
+          BlocksToFilter: All
+          VolumeFilterOnSubstep: true
+          BoundaryCorrectionFilterOnSubstep: false
+          VolumeFilterEveryNSteps: None
+          BoundaryCorrectionFilterEveryNSteps: None
+
+EventsAndTriggersAtSlabs:
+  - Trigger:
+      Slabs:
+        EvenlySpaced:
+          Interval: 1
+          Offset: 0
+    Events:
+      - ChangeSlabSize:
+          DelayChange: 0
+          StepChoosers:
+            - ErrorControl:
+                AbsoluteTolerance: 1e-09
+                RelativeTolerance: 1e-09
+                MaxFactor: 2
+                MinFactor: 0.25
+                SafetyFactor: 0.95
+  - Trigger:
+      Slabs:
+        Specified:
+          Values: [15]
+    Events:
+      - Completion
+
+EventsAndTriggersAtCheckpoints:
+
+EventsAndDenseTriggers:
+  - Trigger:
+      Times:
+        EvenlySpaced:
+          Interval: 0.025
+          Offset: 0.0125
+    Events:
+      - ObserveNorms:
+          TensorsToObserve:
+            - Name: Error(Psi)
+              NormType: L2Norm
+              Components: Sum
+            - Name: Error(Pi)
+              NormType: L2Norm
+              Components: Sum
+            - Name: Error(Phi)
+              NormType: L2Norm
+              Components: Sum
+          SubfileName: ObserveNorms
+
+Observers:
+  VolumeFileName: "SecondOrderScalarWaveCharacteristics3DVolume"
+  ReductionFileName: "SecondOrderScalarWaveCharacteristics3DReductions"

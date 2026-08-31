@@ -1,0 +1,105 @@
+# Distributed under the MIT License.
+# See LICENSE.txt for details.
+
+Executable: EvolveSecondOrderScalarWave2D
+Testing:
+  Check: parse;execute
+  Priority: High
+ExpectedOutput:
+  - SecondOrderScalarWavePlaneWave2DReductions.h5
+
+---
+
+Parallelization:
+  ElementDistribution: NumGridPoints
+
+ResourceInfo:
+  AvoidGlobalProc0: false
+  Singletons: Auto
+
+InitialData: &InitialData
+  SecondOrderPlaneWave:
+    WaveVector: [1.0, 0.0]
+    Center: [0.0, 0.0]
+    Profile:
+      Sinusoid:
+        Amplitude: 1.0
+        Wavenumber: 1.0
+        Phase: 0.0
+
+PhaseChangeAndTriggers:
+
+Evolution:
+  InitialTime: 0.0
+  InitialTimeStep: 0.01
+  MinimumTimeStep: 1e-9
+  TimeStepper:
+    AdamsBashforth:
+      Order: 3
+
+RandomizeInitialData: None
+
+DomainCreator:
+  AlignedLattice:
+    BlockBounds: [[0.0, 6.283185307179586], [0.0, 6.283185307179586]]
+    Distributions: [[], []]
+    SingularityPositions: [[], []]
+    InitialLevels: [0, 0]
+    InitialGridPoints: [6, 6]
+    RefinedLevels: []
+    RefinedGridPoints: []
+    BlocksToExclude: []
+    BoundaryConditions:
+      - DirichletAnalytic:
+          AnalyticPrescription: *InitialData
+      - DirichletAnalytic:
+          AnalyticPrescription: *InitialData
+
+SpatialDiscretization:
+  BoundaryCorrection:
+    LaxFriedrichs:
+      Tau1: 1.0
+      Tau2: 0.0
+  DiscontinuousGalerkin:
+    Formulation: StrongInertial
+    Quadrature: GaussLobatto
+    Filtering:
+      - Hypercube:
+          HalfPower: 128
+          Enable: false
+          BlocksToFilter: All
+          VolumeFilterOnSubstep: true
+          BoundaryCorrectionFilterOnSubstep: false
+          VolumeFilterEveryNSteps: None
+          BoundaryCorrectionFilterEveryNSteps: None
+
+EventsAndTriggersAtSlabs:
+  - Trigger:
+      Slabs:
+        EvenlySpaced:
+          Interval: 5
+          Offset: 0
+    Events:
+      - ObserveNorms:
+          TensorsToObserve:
+            - Name: Error(Psi)
+              NormType: L2Norm
+              Components: Sum
+            - Name: Error(Pi)
+              NormType: L2Norm
+              Components: Sum
+          SubfileName: ObserveNorms
+  - Trigger:
+      Slabs:
+        Specified:
+          Values: [20]
+    Events:
+      - Completion
+
+EventsAndTriggersAtCheckpoints:
+
+EventsAndDenseTriggers:
+
+Observers:
+  VolumeFileName: "SecondOrderScalarWavePlaneWave2DVolume"
+  ReductionFileName: "SecondOrderScalarWavePlaneWave2DReductions"
