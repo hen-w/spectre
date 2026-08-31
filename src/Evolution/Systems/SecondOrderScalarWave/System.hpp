@@ -7,6 +7,8 @@
 #include <string>
 
 #include "DataStructures/VariablesTag.hpp"
+#include "Domain/BoundaryVariablesTag.hpp"
+#include "Evolution/DiscontinuousGalerkin/BoundaryEvolvedVariables.hpp"
 #include "Evolution/Systems/SecondOrderScalarWave/BoundaryConditions/BoundaryCondition.hpp"
 #include "Evolution/Systems/SecondOrderScalarWave/Characteristics.hpp"
 #include "Evolution/Systems/SecondOrderScalarWave/Tags.hpp"
@@ -34,7 +36,19 @@ struct System {
   static constexpr bool has_primitive_and_conservative_vars = false;
   static constexpr size_t volume_dim = Dim;
 
-  using variables_tag = ::Tags::Variables<tmpl::list<Tags::Psi, Tags::Pi>>;
+  using volume_vars = tmpl::list<Tags::Psi, Tags::Pi>;
+  // The boundary-evolved variables: BoundaryValue(Psi) is stored and
+  // time-integrated only on external boundary faces that carry a boundary
+  // condition evolving it (e.g. characteristic Dirichlet conditions that
+  // integrate the boundary Psi from its characteristic time derivative). The
+  // standard time-stepping machinery integrates the `BoundaryVariables`
+  // entry alongside the volume variables; the DG actions must be pointed at
+  // the volume entry explicitly.
+  using boundary_vars =
+      tmpl::list<evolution::dg::Tags::BoundaryValue<Tags::Psi>>;
+  using variables_tag =
+      tmpl::list<::Tags::Variables<volume_vars>,
+                 ::Tags::BoundaryVariables<Dim, boundary_vars>>;
   using flux_variables = tmpl::list<>;
   using auxiliary_variables = tmpl::list<Tags::Phi<Dim>>;
   // The time derivative reads only the derivative of Phi, but the evolved
