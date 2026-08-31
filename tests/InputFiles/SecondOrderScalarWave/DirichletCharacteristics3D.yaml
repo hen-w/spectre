@@ -21,7 +21,6 @@ Parallelization:
 
 ResourceInfo:
   AvoidGlobalProc0: false
-  Singletons: Auto
 
 InitialData: &InitialData
   SecondOrderPlaneWave:
@@ -37,11 +36,16 @@ PhaseChangeAndTriggers:
 
 Evolution:
   InitialTime: 0.0
-  InitialTimeStep: 0.01
+  InitialTimeStep: &initial_time_step 0.01
+  InitialSlabSize: *initial_time_step
   MinimumTimeStep: 1e-9
+  LocalTimeStepping: Off
   TimeStepper:
     AdamsBashforth:
       Order: 3
+  LtsStepChoosers:
+  VariableOrderAlgorithm:
+    GoalOrder: 3
 
 RandomizeInitialData: None
 
