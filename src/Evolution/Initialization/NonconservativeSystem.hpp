@@ -18,6 +18,7 @@
 #include "Parallel/GlobalCache.hpp"
 #include "ParallelAlgorithms/Initialization/MutateAssign.hpp"
 #include "Utilities/TMPL.hpp"
+#include "Utilities/TypeTraits/IsA.hpp"
 
 /// \cond
 namespace domain {
@@ -40,7 +41,9 @@ namespace Actions {
 ///
 /// DataBox changes:
 /// - Adds:
-///   * System::variables_tag
+///   * System::variables_tag (for a system with a list-valued
+///     `variables_tag` only the first entry, which holds the volume
+///     variables)
 ///   * `::Tags::Variables<System::auxiliary_variables>` (only if the system
 ///     declares a non-empty `auxiliary_variables`)
 ///
@@ -51,7 +54,13 @@ struct NonconservativeSystem {
   static_assert(not System::is_in_flux_conservative_form,
                 "System is in flux conservative form");
   static constexpr size_t dim = System::volume_dim;
-  using variables_tag = typename System::variables_tag;
+  // For a system with a list-valued `variables_tag` (split volume/boundary
+  // variables) allocate only the volume entry: the other entries cannot be
+  // sized from the mesh and require their own domain-aware initialization.
+  using variables_tag = tmpl::conditional_t<
+      tt::is_a_v<tmpl::list, typename System::variables_tag>,
+      tmpl::front<typename System::variables_tag>,
+      typename System::variables_tag>;
   using auxiliary_variables =
       evolution::dg::Actions::detail::get_auxiliary_variables_or_default_t<
           System, tmpl::list<>>;

@@ -30,6 +30,7 @@
 #include "Utilities/ErrorHandling/Error.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/TMPL.hpp"
+#include "Utilities/TypeTraits/IsA.hpp"
 
 /// \cond
 namespace Parallel {
@@ -52,7 +53,9 @@ namespace evolution::Initialization::Actions {
 /// - Adds: nothing
 /// - Removes: nothing
 /// - Modifies:
-///   * System::variables_tag (if system has no primitive variables)
+///   * System::variables_tag (if system has no primitive variables; for a
+///     system with a list-valued `variables_tag` only the first entry, which
+///     holds the volume variables)
 ///   * System::primitive_variables_tag (if system has primitive variables)
 template <typename LogicalCoordinatesTag>
 struct SetVariables {
@@ -135,7 +138,13 @@ struct SetVariables {
             box);
       }
     } else {
-      using variables_tag = typename system::variables_tag;
+      // For a system with a list-valued `variables_tag` (split
+      // volume/boundary variables) set only the volume entry; the other
+      // entries are initialized by their own domain-aware initialization.
+      using variables_tag = tmpl::conditional_t<
+          tt::is_a_v<tmpl::list, typename system::variables_tag>,
+          tmpl::front<typename system::variables_tag>,
+          typename system::variables_tag>;
 
       // Set initial data from analytic solution
       if constexpr (not std::is_same_v<typename variables_tag::tags_list,
