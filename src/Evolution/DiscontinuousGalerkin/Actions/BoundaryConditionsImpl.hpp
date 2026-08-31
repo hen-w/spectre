@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 
@@ -40,6 +41,7 @@
 #include "Evolution/DiscontinuousGalerkin/Actions/ComputeTimeDerivativeHelpers.hpp"
 #include "Evolution/DiscontinuousGalerkin/Actions/NormalCovectorAndMagnitude.hpp"
 #include "Evolution/DiscontinuousGalerkin/Actions/PackageDataImpl.hpp"
+#include "Evolution/DiscontinuousGalerkin/BoundaryEvolvedVariables.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/InterpolateFromBoundary.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/LiftFlux.hpp"
@@ -70,6 +72,39 @@ std::optional<std::string> apply_boundary_condition_impl(
     tmpl::list<TagsFromFace...> /*meta*/, const VolumeArgs&... volume_args) {
   return boundary_condition_helper(
       get<TagsFromFace>(fields_on_interior_face)..., volume_args...);
+}
+
+// Bundles the stored per-face boundary-evolved variables into a tuple of
+// const references (in the order of `BoundaryValueTags...`) so they can be
+// passed to `dg_ghost` as extra arguments. The referenced `stored` `Variables`
+// must outlive the returned tuple.
+template <typename StoredVariables, typename... BoundaryValueTags>
+auto boundary_evolved_values_as_tuple(
+    const StoredVariables& stored, tmpl::list<BoundaryValueTags...> /*meta*/) {
+  return std::forward_as_tuple(get<BoundaryValueTags>(stored)...);
+}
+
+// Invokes an opting boundary condition's `boundary_field_time_derivatives`,
+// expanding the per-field output pointers (`::Tags::dt<BoundaryValueTags>` in
+// `boundary_dt`) and the current per-face boundary values (`BoundaryValueTags`
+// in `stored`) over the system's boundary-evolved variables. The projected
+// interior face fields and gridless volume args are forwarded unchanged.
+// Returns the boundary condition's error message (or `std::nullopt`).
+template <typename BoundaryCondition, typename DtVariables,
+          typename StoredVariables, typename... BoundaryValueTags,
+          typename MeshVelocity, typename NormalCovector,
+          typename... InteriorFaceAndVolumeArgs>
+std::optional<std::string> call_boundary_field_time_derivatives(
+    const BoundaryCondition& boundary_condition,
+    const gsl::not_null<DtVariables*> boundary_dt,
+    const StoredVariables& stored, tmpl::list<BoundaryValueTags...> /*meta*/,
+    const MeshVelocity& face_mesh_velocity,
+    const NormalCovector& interior_normal_covector,
+    const InteriorFaceAndVolumeArgs&... interior_face_and_volume_args) {
+  return boundary_condition.boundary_field_time_derivatives(
+      make_not_null(&get<::Tags::dt<BoundaryValueTags>>(*boundary_dt))...,
+      face_mesh_velocity, interior_normal_covector,
+      get<BoundaryValueTags>(stored)..., interior_face_and_volume_args...);
 }
 
 template <typename System, size_t Dim, bool ComputeAuxiliary = false,
@@ -137,6 +172,46 @@ void apply_boundary_condition_on_face(
                           dt_variables_tag>;
   using projected_auxiliary_vars_tags =
       tmpl::conditional_t<ComputeAuxiliary, tmpl::list<>, auxiliary_variables>;
+
+  // Boundary-evolved variables (compiles away for non-opting boundary
+  // conditions, whose DataBoxes need not carry the storage). The presence of
+  // `boundary_field_time_derivatives` is the opt-in; the fields are the
+  // system's `::Tags::BoundaryVariables` entry, so a boundary condition
+  // cannot evolve a subset of them: the calls below expand the full system
+  // list, and a non-matching method signature fails to compile.
+  constexpr bool bc_evolves_boundary_variables =
+      evolution::dg::evolves_boundary_variables_v<BoundaryCondition>;
+  static_assert(
+      bc_evolves_boundary_variables or
+          not evolution::dg::detail::has_boundary_field_time_derivatives_v<
+              BoundaryCondition>,
+      "This boundary condition defines `boundary_field_time_derivatives` but "
+      "does not opt into evolving boundary variables, so the method would "
+      "silently never be called. Add `static constexpr bool "
+      "evolves_boundary_variables = true;` to the boundary condition, or "
+      "remove the method.");
+  static_assert(
+      not bc_evolves_boundary_variables or
+          evolution::dg::system_has_boundary_variables_v<System>,
+      "This boundary condition opts into evolving boundary variables, but "
+      "the system's variables_tag has no ::Tags::BoundaryVariables entry "
+      "holding boundary-evolved variables to integrate. Declare the "
+      "boundary-evolved variables in the system's variables_tag, or remove "
+      "the opt-in.");
+  static_assert(
+      not(bc_evolves_boundary_variables and
+          BoundaryCondition::bc_type ==
+              evolution::BoundaryConditions::Type::DemandOutgoingCharSpeeds),
+      "A boundary condition that evolves boundary variables must not have "
+      "`bc_type == DemandOutgoingCharSpeeds`: that branch returns before the "
+      "per-face boundary-variable time derivative is computed, so the "
+      "variables would integrate uninitialized data.");
+  using bc_boundary_variables_tag =
+      tmpl::conditional_t<bc_evolves_boundary_variables,
+                          evolution::dg::boundary_variables_tag<System>,
+                          ::Tags::Variables<tmpl::list<>>>;
+  using boundary_variables_field_tags =
+      typename bc_boundary_variables_tag::tags_list;
 
   const Mesh<Dim - 1> face_mesh = volume_mesh.slice_away(direction.dimension());
   const size_t number_of_points_on_face = face_mesh.number_of_grid_points();
@@ -441,6 +516,84 @@ void apply_boundary_condition_on_face(
     (void)dt_time_derivative_correction;
   }
 
+  // Boundary-evolved variables: compute the per-face time derivatives and
+  // write them straight into this direction's entry of the `::Tags::dt` twin
+  // of the system's `BoundaryVariables` storage (no lift; the dt stays on
+  // the face); the standard `RecordTimeStepperData` then records them. Gated
+  // on the physical pass only, since the auxiliary pass also walks every
+  // external face and must not double-produce; and discarded entirely for a
+  // non-opting boundary condition.
+  // The current per-face boundary-evolved values, read once and shared by
+  // the time-derivative block below and the `dg_ghost` splice: a
+  // per-direction `Variables` view into the system's `BoundaryVariables`
+  // storage. Null for a non-opting boundary condition, whose DataBox need
+  // not carry the storage.
+  [[maybe_unused]] const Variables<boundary_variables_field_tags>*
+      stored_boundary_variables = nullptr;
+  if constexpr (bc_evolves_boundary_variables) {
+    stored_boundary_variables =
+        &db::get<bc_boundary_variables_tag>(*box).variables().at(direction);
+  }
+  if constexpr (bc_evolves_boundary_variables and not ComputeAuxiliary) {
+    // The interior inputs to the boundary-field derivative, assembled in the
+    // order evolved, primitive, temporary. These must be a subset of the
+    // fields actually projected into `interior_face_fields` for this
+    // boundary condition -- in practice a subset of its `dg_interior_*`
+    // tags, which are projected because `dg_ghost` consumes them too.
+    // `get<>` in `apply_boundary_condition_impl` compile-checks only
+    // membership in the `tags_on_interior_face` type; a tag that is in that
+    // type but not projected for this boundary condition would read
+    // signaling NaN (trapped in debug).
+    using bfd_interior_tags =
+        evolution::dg::boundary_field_time_derivatives_interior_tags<
+            BoundaryCondition>;
+    using dt_boundary_variables_tag =
+        db::add_tag_prefix<::Tags::dt, bc_boundary_variables_tag>;
+    // The gridless volume arguments, retrieved before the mutate below
+    // because the DataBox forbids retrieving items while mutating.
+    const auto volume_args =
+        std::forward_as_tuple(db::get<BoundaryConditionVolumeTags>(*box)...);
+    // The boundary condition writes its per-field time derivatives directly
+    // into this direction's entry of the dt twin; the standard
+    // `RecordTimeStepperData` then records them.
+    db::mutate<dt_boundary_variables_tag>(
+        [&](const auto dt_boundary_variables) {
+          ASSERT(dt_boundary_variables->variables().contains(direction),
+                 "The dt twin of the boundary-evolved variables has no entry "
+                 "for direction "
+                     << direction
+                     << ". The initialization must allocate an entry for "
+                        "every external face whose boundary condition "
+                        "evolves boundary variables.");
+          auto& entry = dt_boundary_variables->variables().at(direction);
+          ASSERT(entry.number_of_grid_points() == number_of_points_on_face,
+                 "The dt twin of the boundary-evolved variables for direction "
+                     << direction << " has " << entry.number_of_grid_points()
+                     << " grid points, but the face mesh has "
+                     << number_of_points_on_face
+                     << ". The entry must be sized to the face mesh.");
+          auto apply_bfd = [&](const auto&... interior_face_and_volume_args) {
+            return detail::call_boundary_field_time_derivatives(
+                boundary_condition, make_not_null(&entry),
+                *stored_boundary_variables, boundary_variables_field_tags{},
+                face_mesh_velocity, interior_normal_covector,
+                interior_face_and_volume_args...);
+          };
+          const std::optional<std::string> error_message = std::apply(
+              [&](const auto&... expanded_volume_args) {
+                return apply_boundary_condition_impl(
+                    apply_bfd, interior_face_fields, bfd_interior_tags{},
+                    expanded_volume_args...);
+              },
+              volume_args);
+          if (error_message.has_value()) {
+            ERROR(*error_message << "\n\nIn element:" << element.id()
+                                 << "\nIn direction: " << direction);
+          }
+        },
+        box);
+  }
+
   // Now we populate the fields on the exterior side of the face using the
   // boundary condition.
   // `auxiliary_variables` is included unconditionally: `dg_ghost` supplies the
@@ -504,24 +657,51 @@ void apply_boundary_condition_on_face(
     //   tags that the boundary correction needs.
     // - For systems with constraint damping parameters, the constraint damping
     //   parameters are just copied from the projected values from the interior.
+    // Boundary-evolved variables: an opting boundary condition consumes its
+    // current per-face boundary values as extra `dg_ghost` arguments, read
+    // directly from the per-face storage (mirroring how
+    // `interior_normal_covector`, itself a per-direction stored quantity, is
+    // fed in). This runs in both the physical and the auxiliary pass because
+    // `dg_ghost` runs in both. For a non-opting boundary condition the tuple
+    // is empty and the spliced call is identical to before, so no
+    // boundary-variables tag is read.
+    const auto boundary_value_args = [&stored_boundary_variables]() {
+      if constexpr (bc_evolves_boundary_variables) {
+        return detail::boundary_evolved_values_as_tuple(
+            *stored_boundary_variables, boundary_variables_field_tags{});
+      } else {
+        (void)stored_boundary_variables;
+        return std::tuple<>{};
+      }
+    }();
     auto apply_bc = [&boundary_condition, &exterior_face_fields,
-                     &face_mesh_velocity, &interior_normal_covector](
+                     &face_mesh_velocity, &interior_normal_covector,
+                     &boundary_value_args](
                         const auto&... interior_face_and_volume_args) {
       if constexpr (has_inv_spatial_metric) {
-        return boundary_condition.dg_ghost(
-            make_not_null(&get<BoundaryCorrectionPackagedDataInputTags>(
-                exterior_face_fields))...,
-            make_not_null(
-                &get<tmpl::front<detail::inverse_spatial_metric_tag<System>>>(
-                    exterior_face_fields)),
-            face_mesh_velocity, interior_normal_covector,
-            interior_face_and_volume_args...);
+        return std::apply(
+            [&](const auto&... boundary_values) {
+              return boundary_condition.dg_ghost(
+                  make_not_null(&get<BoundaryCorrectionPackagedDataInputTags>(
+                      exterior_face_fields))...,
+                  make_not_null(
+                      &get<tmpl::front<
+                          detail::inverse_spatial_metric_tag<System>>>(
+                          exterior_face_fields)),
+                  face_mesh_velocity, interior_normal_covector,
+                  boundary_values..., interior_face_and_volume_args...);
+            },
+            boundary_value_args);
       } else {
-        return boundary_condition.dg_ghost(
-            make_not_null(&get<BoundaryCorrectionPackagedDataInputTags>(
-                exterior_face_fields))...,
-            face_mesh_velocity, interior_normal_covector,
-            interior_face_and_volume_args...);
+        return std::apply(
+            [&](const auto&... boundary_values) {
+              return boundary_condition.dg_ghost(
+                  make_not_null(&get<BoundaryCorrectionPackagedDataInputTags>(
+                      exterior_face_fields))...,
+                  face_mesh_velocity, interior_normal_covector,
+                  boundary_values..., interior_face_and_volume_args...);
+            },
+            boundary_value_args);
       }
     };
     const std::optional<std::string> error_message =

@@ -28,6 +28,8 @@
 #include "Domain/BoundaryConditions/Cartoon.hpp"
 #include "Domain/BoundaryConditions/None.hpp"
 #include "Domain/BoundaryConditions/Periodic.hpp"
+#include "Domain/BoundaryVariables.hpp"
+#include "Domain/BoundaryVariablesTag.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.tpp"
 #include "Domain/CoordinateMaps/Identity.hpp"
@@ -38,6 +40,7 @@
 #include "Evolution/BoundaryConditions/Type.hpp"
 #include "Evolution/BoundaryCorrection.hpp"
 #include "Evolution/DiscontinuousGalerkin/Actions/BoundaryConditionsImpl.hpp"
+#include "Evolution/DiscontinuousGalerkin/BoundaryEvolvedVariables.hpp"
 #include "Helpers/Evolution/DiscontinuousGalerkin/Actions/SystemType.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/LiftFromBoundary.hpp"
@@ -3345,6 +3348,521 @@ void test_1d(const bool moving_mesh, const dg::Formulation formulation,
   check_ghost_and_dt_combined_bc(Direction<Dim>::lower_xi());
 }
 
+// ============================================================================
+// Boundary-evolved-variables facility plumbing
+//
+// Tests the two facility behaviors added to `BoundaryConditionsImpl.hpp`,
+// reusing the standard mocks above: `OptingGhost` is the stock `Ghost`
+// extended with the facility opt-in (it defines
+// `boundary_field_time_derivatives`), the non-opting stock
+// `DemandOutgoingCharSpeeds` provides the other face, and `BoundaryTerms` is
+// the boundary correction.
+// (1) On the physical pass the opting boundary condition's
+// `boundary_field_time_derivatives` output is written into this direction's
+// entry of the `::Tags::dt` twin of the system's `BoundaryVariables` storage
+// -- verified exactly at the test site as a function of the stored boundary
+// value and the projected interior fields -- and the auxiliary pass leaves
+// that dt entry untouched (a pre-filled sentinel survives).
+// (2) The stored per-face boundary value is spliced into `dg_ghost` as an
+// extra argument in both passes -- `OptingGhost` checks the delivered value
+// the way the stock mocks check their inputs, and the test site verifies the
+// stock lifted corrections, which proves the `dg_ghost` path ran (so the
+// input check cannot pass vacuously).
+// (3) The (non-opting) `DemandOutgoingCharSpeeds` face gets no dt entry: the
+// storage for the outgoing direction is left untouched.
+//
+// Note: the DemandOutgoingCharSpeeds-must-not-opt-in guard and the
+// system-not-split guard are compile-time `static_assert`s in
+// `apply_boundary_condition_on_face`, so they cannot be exercised at runtime.
+// ============================================================================
+using BoundaryVar1 = evolution::dg::Tags::BoundaryValue<Tags::Var1>;
+
+// The frozen mock `System` above carries a single-tag `variables_tag`; the
+// facility requires a list-valued `variables_tag` whose last entry is a
+// `::Tags::BoundaryVariables`. `SplitSystem` mirrors the frozen `System` (so
+// the stock `Ghost`/`DemandOutgoingCharSpeeds`/`BoundaryTerms` mocks apply
+// unchanged) but with that list `variables_tag`; the volume entry holds the
+// same evolved variables. The stock `System` is left untouched so every
+// other test in this file pins that the machinery compiles away for a
+// single-tag system.
+template <size_t Dim, SystemType SysType, bool HasPrimitiveVariables,
+          bool HasInverseSpatialMetric>
+struct SplitSystem
+    : public InverseSpatialMetricTagImpl<HasInverseSpatialMetric, Dim> {
+  static constexpr SystemType system_type = SysType;
+  static constexpr bool has_primitive_and_conservative_vars =
+      HasPrimitiveVariables;
+  static constexpr size_t volume_dim = Dim;
+  static constexpr bool has_inverse_spatial_metric = HasInverseSpatialMetric;
+
+  using boundary_conditions_base = BoundaryCondition<SplitSystem>;
+
+  // The volume evolved variables (the `System`'s single-tag `variables_tag`);
+  // this is the tag stored in and read from the DataBox, and the
+  // `VariablesTag` passed to the boundary-condition action.
+  using volume_variables_tag =
+      ::Tags::Variables<tmpl::list<Tags::Var1, Tags::Var2<Dim>>>;
+  // The boundary-evolved variables: `BoundaryValue(Var1)` is stored and
+  // time-integrated only on opting external faces.
+  using boundary_variables =
+      tmpl::list<evolution::dg::Tags::BoundaryValue<Tags::Var1>>;
+  using variables_tag =
+      tmpl::list<volume_variables_tag,
+                 ::Tags::BoundaryVariables<Dim, boundary_variables>>;
+  using auxiliary_variables = tmpl::list<Tags::Var3<Dim>>;
+  using flux_variables = tmpl::conditional_t<
+      system_type == SystemType::Conservative,
+      tmpl::list<Tags::Var1, Tags::Var2<Dim>>,
+      tmpl::conditional_t<system_type == SystemType::Nonconservative,
+                          tmpl::list<>, tmpl::list<Tags::Var2<Dim>>>>;
+  using gradient_variables = tmpl::conditional_t<
+      system_type == SystemType::Conservative, tmpl::list<>,
+      tmpl::conditional_t<system_type == SystemType::Nonconservative,
+                          tmpl::list<Tags::Var1, Tags::Var2<Dim>>,
+                          tmpl::list<Tags::Var1>>>;
+  using primitive_variables_tag =
+      ::Tags::Variables<tmpl::list<Tags::PrimVar1, Tags::PrimVar2<Dim>>>;
+
+  struct compute_volume_time_derivative_terms {
+    using temporary_tags = tmpl::append<
+        tmpl::list<Tags::TempVar>,
+        tmpl::conditional_t<HasInverseSpatialMetric,
+                            tmpl::list<Tags::InverseSpatialMetric<Dim>>,
+                            tmpl::list<>>>;
+  };
+};
+
+// The seeded per-face boundary value; distinct from every interior offset so
+// its delivery is unambiguous in the expected values.
+constexpr double facility_boundary_value = 100.0;
+// Coefficients of the mock per-face time derivative
+//   dt = facility_dt_stored_coefficient * (stored boundary value)
+//        + facility_dt_var1_coefficient * Var1
+//        + facility_dt_temporary_coefficient * TempVar.
+constexpr double facility_dt_stored_coefficient = 2.5;
+constexpr double facility_dt_var1_coefficient = -0.5;
+constexpr double facility_dt_temporary_coefficient = 0.25;
+
+// The stock `Ghost` extended with the boundary-evolved-variables opt-in. Its
+// `dg_ghost` takes the stored boundary value as an extra argument (spliced in
+// after the normal covector), checks it, and delegates to the stock `Ghost`
+// overload -- which checks every interior input and writes the stock exterior
+// data. `boundary_field_time_derivatives` (the opt-in; its presence is what
+// the framework detects) produces the per-face dt from the stored value and
+// the projected interior fields (verified exactly at the test site); it also
+// receives the `dg_gridless_tags` volume arguments, like every
+// boundary-condition method. Only the Nonconservative, flat-background
+// overload is provided, the only configuration the facility tests use.
+template <typename System>
+class OptingGhost : public Ghost<System> {
+ public:
+  OptingGhost() = default;
+  OptingGhost(OptingGhost&&) = default;
+  OptingGhost& operator=(OptingGhost&&) = default;
+  OptingGhost(const OptingGhost&) = default;
+  OptingGhost& operator=(const OptingGhost&) = default;
+  ~OptingGhost() override = default;
+
+  explicit OptingGhost(CkMigrateMessage* msg) : Ghost<System>(msg) {}
+
+  WRAPPED_PUPable_decl_base_template(
+      domain::BoundaryConditions::BoundaryCondition, OptingGhost);
+
+  auto get_clone() const -> std::unique_ptr<
+      domain::BoundaryConditions::BoundaryCondition> override {
+    return std::make_unique<OptingGhost<System>>(*this);
+  }
+
+  // NOLINTNEXTLINE
+  void pup(PUP::er& p) override { Ghost<System>::pup(p); }
+
+  static constexpr bool evolves_boundary_variables = true;
+
+  using boundary_field_time_derivatives_evolved_variables_tags =
+      tmpl::list<Tags::Var1>;
+  using boundary_field_time_derivatives_temporary_tags =
+      tmpl::list<Tags::TempVar>;
+
+  std::optional<std::string> dg_ghost(
+      const gsl::not_null<Scalar<DataVector>*> out_var1,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var2,
+      const gsl::not_null<
+          tnsr::I<DataVector, System::volume_dim, Frame::Inertial>*>
+          out_var3,
+      const gsl::not_null<Scalar<DataVector>*> out_temp_var,
+      const std::optional<tnsr::I<DataVector, System::volume_dim,
+                                  Frame::Inertial>>& face_mesh_velocity,
+      const tnsr::i<DataVector, System::volume_dim, Frame::Inertial>&
+          outward_directed_normal_covector,
+      const Scalar<DataVector>& boundary_var1, const Scalar<DataVector>& var1,
+      const tnsr::I<DataVector, System::volume_dim, Frame::Inertial>& var2,
+      const Scalar<DataVector>& temp_var, const Scalar<DataVector>& dt_var1,
+      const double volume_number) const {
+    CHECK_ITERABLE_APPROX(
+        get(boundary_var1),
+        DataVector(get(boundary_var1).size(), facility_boundary_value));
+    return Ghost<System>::dg_ghost(out_var1, out_var2, out_var3, out_temp_var,
+                                   face_mesh_velocity,
+                                   outward_directed_normal_covector, var1, var2,
+                                   temp_var, dt_var1, volume_number);
+  }
+
+  std::optional<std::string> boundary_field_time_derivatives(
+      const gsl::not_null<Scalar<DataVector>*> dt_boundary_var1,
+      const std::optional<tnsr::I<DataVector, System::volume_dim,
+                                  Frame::Inertial>>& /*face_mesh_velocity*/,
+      const tnsr::i<DataVector, System::volume_dim, Frame::Inertial>&
+      /*outward_directed_normal_covector*/,
+      const Scalar<DataVector>& boundary_var1, const Scalar<DataVector>& var1,
+      const Scalar<DataVector>& temp_var, const double volume_number) const {
+    CHECK(volume_number == 2.5);
+    get(*dt_boundary_var1) =
+        facility_dt_stored_coefficient * get(boundary_var1) +
+        facility_dt_var1_coefficient * get(var1) +
+        facility_dt_temporary_coefficient * get(temp_var);
+    return std::nullopt;
+  }
+};
+
+template <typename System>
+// NOLINTNEXTLINE
+PUP::able::PUP_ID OptingGhost<System>::my_PUP_ID = 0;
+
+// The opting condition cannot join `standard_boundary_conditions`: those tests
+// run on single-tag `System`s whose DataBoxes carry no facility storage, and
+// the opting condition's system is the list-`variables_tag` `SplitSystem`.
+template <typename System>
+using boundary_conditions_with_opting =
+    tmpl::list<DemandOutgoingCharSpeeds<System>, OptingGhost<System>>;
+
+static_assert(evolution::dg::evolves_boundary_variables_v<OptingGhost<
+                  SplitSystem<1, SystemType::Nonconservative, false, false>>>);
+static_assert(
+    not evolution::dg::evolves_boundary_variables_v<
+        Ghost<SplitSystem<1, SystemType::Nonconservative, false, false>>>);
+static_assert(evolution::dg::system_has_boundary_variables_v<
+              SplitSystem<1, SystemType::Nonconservative, false, false>>);
+
+template <typename System>
+struct MetavariablesWithOptingGhost {
+  struct factory_creation
+      : tt::ConformsTo<Options::protocols::FactoryCreation> {
+    using factory_classes =
+        tmpl::map<tmpl::pair<BoundaryCondition<System>,
+                             boundary_conditions_with_opting<System>>>;
+  };
+};
+
+// Lifts a face-sized boundary correction into a zero-initialized volume-sized
+// Variables, mirroring the lift in `apply_boundary_condition_on_face`
+// (GaussLobatto: lift_flux + add_slice_to_data; Gauss:
+// lift_boundary_terms_gauss_points), so a ghost correction's expected volume
+// effect can be computed at the test site. This is the free-function form of
+// the lift lambdas inside `test_1d`.
+template <size_t Dim, typename TagsList>
+Variables<TagsList> lifted_boundary_correction(
+    Variables<TagsList> correction_on_face, const Mesh<Dim>& mesh,
+    const Direction<Dim>& direction,
+    const Scalar<DataVector>& volume_det_inv_jacobian,
+    const Scalar<DataVector>& magnitude_of_face_normal) {
+  Variables<TagsList> volume_correction{mesh.number_of_grid_points(), 0.0};
+  if (mesh.quadrature(direction.dimension()) == Spectral::Quadrature::Gauss) {
+    Scalar<DataVector> face_det_inv_jacobian{
+        mesh.slice_away(direction.dimension()).number_of_grid_points()};
+    const Matrix identity{};
+    auto interpolation_matrices = make_array<Dim>(std::cref(identity));
+    const std::pair<Matrix, Matrix>& matrices =
+        Spectral::boundary_interpolation_matrices(
+            mesh.slice_through(direction.dimension()));
+    gsl::at(interpolation_matrices, direction.dimension()) =
+        direction.side() == Side::Upper ? matrices.second : matrices.first;
+    apply_matrices(make_not_null(&get(face_det_inv_jacobian)),
+                   interpolation_matrices, get(volume_det_inv_jacobian),
+                   mesh.extents());
+    const Scalar<DataVector> face_det_jacobian{1.0 /
+                                               get(face_det_inv_jacobian)};
+    ::dg::lift_boundary_terms_gauss_points(
+        make_not_null(&volume_correction), volume_det_inv_jacobian, mesh,
+        direction, correction_on_face, magnitude_of_face_normal,
+        face_det_jacobian);
+  } else {
+    ::dg::lift_flux(
+        make_not_null(&correction_on_face), mesh.extents(direction.dimension()),
+        magnitude_of_face_normal, mesh.basis(direction.dimension()));
+    add_slice_to_data(make_not_null(&volume_correction), correction_on_face,
+                      mesh.extents(), direction.dimension(),
+                      index_to_slice_at(mesh.extents(), direction));
+  }
+  return volume_correction;
+}
+
+// One System configuration; the stock corrections depend on the formulation
+// and the lift path on the quadrature, so the caller varies both. Static mesh
+// (the facility does not exercise the mesh-velocity path in the dt formula).
+template <typename System, size_t Dim = System::volume_dim>
+void test_boundary_evolved_fields(const dg::Formulation formulation,
+                                  const Spectral::Quadrature quadrature) {
+  CAPTURE(formulation);
+  CAPTURE(quadrature);
+  static_assert(System::volume_dim == 1);
+  using volume_variables_tag = typename System::volume_variables_tag;
+  using dt_volume_variables_tag =
+      db::add_tag_prefix<::Tags::dt, volume_variables_tag>;
+  using boundary_variables_tag =
+      ::Tags::BoundaryVariables<Dim, typename System::boundary_variables>;
+  using dt_boundary_variables_tag =
+      db::add_tag_prefix<::Tags::dt, boundary_variables_tag>;
+
+  const Mesh<Dim> mesh{5, Spectral::Basis::Legendre, quadrature};
+  const ElementId<Dim> self_id{0, {{{1, 0}}}};
+  const Element<Dim> element{self_id, {}};
+  ElementMap<Dim, Frame::Grid> element_map{
+      self_id,
+      domain::make_coordinate_map_base<Frame::BlockLogical, Frame::Grid>(
+          domain::CoordinateMaps::Identity<Dim>{})};
+  auto grid_to_inertial_map =
+      domain::make_coordinate_map_base<Frame::Grid, Frame::Inertial>(
+          domain::CoordinateMaps::Identity<Dim>{});
+  const double time{1.2};
+  std::unordered_map<std::string,
+                     std::unique_ptr<domain::FunctionsOfTime::FunctionOfTime>>
+      functions_of_time{};
+  const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>
+      mesh_velocity{};
+  ::InverseJacobian<DataVector, Dim, Frame::ElementLogical, Frame::Inertial>
+      inv_jacobian{mesh.number_of_grid_points(), 0.0};
+  for (size_t i = 0; i < Dim; ++i) {
+    inv_jacobian.get(i, i) = 2.0;
+  }
+  const auto det_inv_jacobian = determinant(inv_jacobian);
+  const auto opting_direction = Direction<Dim>::lower_xi();
+  const auto outgoing_direction = Direction<Dim>::upper_xi();
+  const size_t num_face_pts =
+      mesh.slice_away(opting_direction.dimension()).number_of_grid_points();
+
+  DirectionMap<Dim, std::optional<Variables<
+                        tmpl::list<evolution::dg::Tags::MagnitudeOfNormal,
+                                   evolution::dg::Tags::NormalCovector<Dim>>>>>
+      normal_covector_and_magnitude{};
+  normal_covector_and_magnitude[opting_direction] = std::nullopt;
+  normal_covector_and_magnitude[outgoing_direction] = std::nullopt;
+  const double boundary_condition_volume_tag_number{2.5};
+  const double boundary_correction_volume_tag_number{3.5};
+  const double boundary_correction_auxiliary_volume_tag_number{4.5};
+
+  Variables<
+      db::wrap_tags_in<::Tags::dt, typename volume_variables_tag::tags_list>>
+      dt_evolved_vars{mesh.number_of_grid_points()};
+  fill_variables(make_not_null(&dt_evolved_vars), offset_dt_evolved_vars);
+  Variables<typename volume_variables_tag::tags_list> evolved_vars{
+      mesh.number_of_grid_points()};
+  fill_variables(make_not_null(&evolved_vars), offset_evolved_vars);
+  Variables<typename System::auxiliary_variables> auxiliary_vars{
+      mesh.number_of_grid_points()};
+  fill_variables(make_not_null(&auxiliary_vars), offset_evolved_vars);
+
+  // The opting condition on one face; the (non-opting) stock
+  // DemandOutgoingCharSpeeds on the other, as in `test_1d`.
+  std::vector<DirectionMap<
+      Dim, std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>
+      external_boundary_conditions{1};
+  external_boundary_conditions[0][opting_direction] =
+      std::make_unique<OptingGhost<System>>();
+  external_boundary_conditions[0][outgoing_direction] =
+      std::make_unique<DemandOutgoingCharSpeeds<System>>(false);
+
+  // The per-face boundary-variable storage: a face-sized entry on the opting
+  // face only, seeded with the sentinel boundary value. Its `::Tags::dt` twin
+  // has a face-sized (zeroed) entry on the same face.
+  typename boundary_variables_tag::type boundary_values{};
+  boundary_values.initialize(
+      DirectionMap<Dim, size_t>{{opting_direction, num_face_pts}});
+  get(get<BoundaryVar1>(boundary_values.variables().at(opting_direction))) =
+      facility_boundary_value;
+  typename dt_boundary_variables_tag::type dt_boundary_values{};
+  dt_boundary_values.initialize(
+      DirectionMap<Dim, size_t>{{opting_direction, num_face_pts}});
+  get(get<::Tags::dt<BoundaryVar1>>(
+      dt_boundary_values.variables().at(opting_direction))) = 0.0;
+
+  Domain<Dim> domain{make_vector(Block<Dim>{
+      domain::make_coordinate_map_base<Frame::BlockLogical, Frame::Inertial>(
+          domain::CoordinateMaps::Identity<Dim>{}),
+      0,
+      {}})};
+  domain.inject_time_dependent_map_for_block(0,
+                                             grid_to_inertial_map->get_clone());
+
+  using simple_tags = tmpl::list<
+      Parallel::Tags::MetavariablesImpl<MetavariablesWithOptingGhost<System>>,
+      domain::Tags::Domain<Dim>, domain::Tags::ExternalBoundaryConditions<Dim>,
+      domain::Tags::Mesh<Dim>, domain::Tags::Element<Dim>,
+      domain::Tags::ElementMap<Dim, Frame::Grid>,
+      domain::CoordinateMaps::Tags::CoordinateMap<Dim, Frame::Grid,
+                                                  Frame::Inertial>,
+      ::Tags::Time, domain::Tags::FunctionsOfTimeInitialize,
+      domain::Tags::MeshVelocity<Dim>,
+      domain::Tags::InverseJacobian<Dim, Frame::ElementLogical,
+                                    Frame::Inertial>,
+      domain::Tags::DetInvJacobian<Frame::ElementLogical, Frame::Inertial>,
+      evolution::dg::Tags::NormalCovectorAndMagnitude<Dim>,
+      volume_variables_tag,
+      ::Tags::Variables<typename System::auxiliary_variables>,
+      dt_volume_variables_tag, boundary_variables_tag,
+      dt_boundary_variables_tag, Tags::BoundaryConditionVolumeTag,
+      Tags::BoundaryCorrectionVolumeTag,
+      Tags::BoundaryCorrectionAuxiliaryVolumeTag, ::dg::Tags::Formulation>;
+  using compute_tags = tmpl::list<>;
+
+  auto box = db::create<simple_tags, compute_tags>(
+      MetavariablesWithOptingGhost<System>{}, std::move(domain),
+      std::move(external_boundary_conditions), mesh, element,
+      std::move(element_map), grid_to_inertial_map->get_clone(), time,
+      clone_unique_ptrs(functions_of_time), mesh_velocity, inv_jacobian,
+      det_inv_jacobian, normal_covector_and_magnitude, evolved_vars,
+      auxiliary_vars, dt_evolved_vars, std::move(boundary_values),
+      std::move(dt_boundary_values), boundary_condition_volume_tag_number,
+      boundary_correction_volume_tag_number,
+      boundary_correction_auxiliary_volume_tag_number, formulation);
+
+  Variables<
+      typename System::compute_volume_time_derivative_terms::temporary_tags>
+      temporaries{mesh.number_of_grid_points()};
+  fill_variables(make_not_null(&temporaries), offset_temporaries);
+  const Variables<
+      db::wrap_tags_in<::Tags::Flux, typename System::flux_variables,
+                       tmpl::size_t<Dim>, Frame::Inertial>>
+      volume_fluxes{mesh.number_of_grid_points()};
+  const Variables<
+      db::wrap_tags_in<::Tags::deriv, typename System::gradient_variables,
+                       tmpl::size_t<Dim>, Frame::Inertial>>
+      partial_derivs{mesh.number_of_grid_points(), 0.0};
+  const Variables<tmpl::list<>>* const primitive_vars_ptr = nullptr;
+
+  using BndryTerms = BoundaryTerms<Dim, false, System::system_type,
+                                   System::has_inverse_spatial_metric>;
+  const BndryTerms boundary_terms{false, opting_direction.sign()};
+
+  const auto& stored_det_inv_jacobian = db::get<
+      domain::Tags::DetInvJacobian<Frame::ElementLogical, Frame::Inertial>>(
+      box);
+  const auto magnitude_of_face_normal =
+      [&box](const Direction<Dim>& direction) -> const Scalar<DataVector>& {
+    return get<evolution::dg::Tags::MagnitudeOfNormal>(
+        *db::get<evolution::dg::Tags::NormalCovectorAndMagnitude<Dim>>(box).at(
+            direction));
+  };
+
+  {
+    INFO("Physical pass: dt write and stored-value feed into dg_ghost");
+    evolution::dg::Actions::detail::
+        apply_boundary_conditions_on_all_external_faces<System, Dim,
+                                                        volume_variables_tag>(
+            make_not_null(&box), boundary_terms, temporaries, volume_fluxes,
+            partial_derivs, primitive_vars_ptr);
+
+    // The opting face's dt entry in the `BoundaryVariables` dt twin holds the
+    // expected per-face time derivative -- a known function of the stored
+    // boundary value and the projected interior fields -- sized to the face
+    // mesh. The non-opting face has no entry (the storage was initialized only
+    // on the opting face and the facility does not add entries).
+    const auto& dt_storage = db::get<dt_boundary_variables_tag>(box);
+    REQUIRE(dt_storage.variables().contains(opting_direction));
+    CHECK(not dt_storage.variables().contains(outgoing_direction));
+    const auto& dt_entry = dt_storage.variables().at(opting_direction);
+    CHECK(dt_entry.number_of_grid_points() == num_face_pts);
+    const double expected_dt =
+        facility_dt_stored_coefficient * facility_boundary_value +
+        facility_dt_var1_coefficient * offset_evolved_vars +
+        facility_dt_temporary_coefficient * offset_temporaries;
+    CHECK_ITERABLE_APPROX(get(get<::Tags::dt<BoundaryVar1>>(dt_entry)),
+                          DataVector(num_face_pts, expected_dt));
+
+    // The volume time derivative received exactly the stock ghost correction
+    // lifted on the opting face (DemandOutgoingCharSpeeds does not lift);
+    // identical formula to `test_1d`'s expected correction. This proves the
+    // `dg_ghost` path ran for the opting condition, so its in-mock check of
+    // the delivered stored value cannot have passed vacuously.
+    using dt_correction_tags = typename dt_volume_variables_tag::tags_list;
+    Variables<dt_correction_tags> expected_on_boundary{num_face_pts};
+    get(get<::Tags::dt<Tags::Var1>>(expected_on_boundary)) =
+        offset_boundary_correction *
+        (formulation == dg::Formulation::WeakInertial ? 2.0 : 1.0);
+    for (size_t i = 0; i < Dim; ++i) {
+      get<::Tags::dt<Tags::Var2<Dim>>>(expected_on_boundary).get(i) =
+          offset_boundary_correction + 1.0 + static_cast<double>(i);
+    }
+    Variables<dt_correction_tags> expected_dt_vars{
+        mesh.number_of_grid_points()};
+    fill_variables(make_not_null(&expected_dt_vars), offset_dt_evolved_vars);
+    expected_dt_vars += lifted_boundary_correction(
+        std::move(expected_on_boundary), mesh, opting_direction,
+        stored_det_inv_jacobian, magnitude_of_face_normal(opting_direction));
+    CHECK_ITERABLE_APPROX(get(get<::Tags::dt<Tags::Var1>>(box)),
+                          get(get<::Tags::dt<Tags::Var1>>(expected_dt_vars)));
+    CHECK_ITERABLE_APPROX(
+        get<::Tags::dt<Tags::Var2<Dim>>>(box).get(0),
+        get<::Tags::dt<Tags::Var2<Dim>>>(expected_dt_vars).get(0));
+  }
+
+  {
+    INFO("Auxiliary pass: no dt write; stored-value feed into dg_ghost");
+    // Reset the volume time derivatives to their seeded values: the stock
+    // mocks check the projected dt against the seeds, and the physical pass
+    // above lifted a correction into them.
+    db::mutate<dt_volume_variables_tag>(
+        [](const auto dt_vars_ptr) {
+          fill_variables(dt_vars_ptr, offset_dt_evolved_vars);
+        },
+        make_not_null(&box));
+    // Sentinel-seed the dt storage so a spurious auxiliary-pass write is
+    // detected.
+    const double sentinel = 999.0;
+    db::mutate<dt_boundary_variables_tag>(
+        [&opting_direction, &sentinel](const auto dt_storage_ptr) {
+          get(get<::Tags::dt<BoundaryVar1>>(
+              dt_storage_ptr->variables().at(opting_direction))) = sentinel;
+        },
+        make_not_null(&box));
+    const auto auxiliary_vars_before =
+        db::get<::Tags::Variables<typename System::auxiliary_variables>>(box);
+
+    evolution::dg::Actions::detail::
+        apply_boundary_conditions_on_all_external_faces<
+            System, Dim, volume_variables_tag, /*ComputeAuxiliary=*/true>(
+            make_not_null(&box), boundary_terms, temporaries, volume_fluxes,
+            partial_derivs, primitive_vars_ptr);
+
+    // The auxiliary pass must not produce boundary-field time derivatives: the
+    // dt storage still holds the sentinel.
+    CHECK_ITERABLE_APPROX(
+        get(get<::Tags::dt<BoundaryVar1>>(
+            db::get<dt_boundary_variables_tag>(box).variables().at(
+                opting_direction))),
+        DataVector(num_face_pts, sentinel));
+
+    // The auxiliary variables received exactly the stock lifted auxiliary
+    // correction on the opting face (`0.5 * (int_var2 + ext_var2)`, as in
+    // `test_1d`), proving `dg_ghost` -- with the spliced stored value -- ran
+    // in this pass too.
+    using var3_correction_tags = tmpl::list<Tags::Var3<Dim>>;
+    Variables<var3_correction_tags> expected_on_boundary{num_face_pts};
+    for (size_t i = 0; i < Dim; ++i) {
+      get<Tags::Var3<Dim>>(expected_on_boundary).get(i) =
+          0.5 * ((offset_evolved_vars + 1.0 + static_cast<double>(i)) +
+                 (offset_boundary_condition + 1.0 + static_cast<double>(i)));
+    }
+    auto expected_auxiliary_vars = auxiliary_vars_before;
+    expected_auxiliary_vars += lifted_boundary_correction(
+        std::move(expected_on_boundary), mesh, opting_direction,
+        stored_det_inv_jacobian, magnitude_of_face_normal(opting_direction));
+    CHECK_ITERABLE_APPROX(get<Tags::Var3<Dim>>(box).get(0),
+                          get<Tags::Var3<Dim>>(expected_auxiliary_vars).get(0));
+  }
+}
+
 void test_cartoon_mesh_compatibility() {
   INFO("Test that non-cartoon mesh throws with cartoon boundary conditions");
 
@@ -3580,6 +4098,17 @@ SPECTRE_TEST_CASE("Unit.Evolution.DG.ComputeTimeDerivative.BoundaryConditions",
           moving_mesh, dg::Formulation::StrongInertial, quadrature);
       test_1d<System<1, SystemType::Mixed, true, true>, true>(
           moving_mesh, dg::Formulation::StrongInertial, quadrature);
+    }
+  }
+  // Boundary-evolved-variables facility plumbing (single System
+  // configuration, static mesh).
+  for (const dg::Formulation formulation :
+       {dg::Formulation::WeakInertial, dg::Formulation::StrongInertial}) {
+    for (const Spectral::Quadrature quadrature :
+         {Spectral::Quadrature::Gauss, Spectral::Quadrature::GaussLobatto}) {
+      test_boundary_evolved_fields<
+          SplitSystem<1, SystemType::Nonconservative, false, false>>(
+          formulation, quadrature);
     }
   }
   test_cartoon_mesh_compatibility();
