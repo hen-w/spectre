@@ -6,25 +6,30 @@
 #
 # The second-order scalar wave system has three characteristic fields (Psi has
 # no characteristic field):
-#   v^0_i = (delta_i^k - n_i n^k) Phi_k   speed 0
-#   v^+   = Pi + n^i Phi_i                speed +1 (always outgoing)
-#   v^-   = Pi - n^i Phi_i                speed -1 (always incoming)
+#   v^0_i = (delta_i^k - n_i n^k) Phi_k   speed lambda^0
+#   v^+   = Pi + n^i Phi_i                speed lambda^+
+#   v^-   = Pi - n^i Phi_i                speed lambda^-
+#
+# The grid-frame characteristic speeds are
+#   [lambda^0, lambda^+, lambda^-] = [0, +1, -1]                (static mesh)
+#   [lambda^0, lambda^+, lambda^-] = [-ndotv, 1-ndotv, -1-ndotv]  (moving mesh)
+# with ndotv = n_i v^i and v^i the face mesh velocity.
 #
 # The inverse transform reconstructing the evolved (Pi, Phi_i) fields is
 #   Pi    = (v^+ + v^-) / 2
 #   Phi_i = (v^+ - v^-) / 2 n_i + v^0_i
 #
-# Ghost-mode selection (the class supports no moving mesh, so the speeds are
-# constant and the branching has no per-point dependence):
-#   v^+ ghost = interior v^+   (outgoing, always from the interior)
-#   v^- ghost = analytic v^-   (incoming), or 0 if ZeroIncomingMode
-#   v^0 ghost = interior v^0
+# Ghost-mode selection is per-point and per-mode: a mode with lambda >= 0
+# (including exactly 0) is taken from the interior; a mode with lambda < 0 is
+# incoming and is prescribed from data (the analytic char field, or 0 with
+# ZeroIncomingMode). The lambda^0 mask applies to every component of v^0.
 #
 # Ghost Psi: the passed boundary_psi_value (the time-integrated
-# boundary-evolved value).
+# boundary-evolved value), independent of the mesh velocity.
 #
 # dt of the boundary-evolved Psi:
-#   -0.5 (interior v^+ + (0 if ZeroIncomingMode else analytic v^-))
+#   -Pi_b + (v^i (Phi_b)_i if a mesh velocity is present, else nothing),
+# where Pi_b and Phi_b are the SAME ghost (Pi, Phi) reconstructed above.
 
 import numpy as np
 
@@ -102,7 +107,15 @@ def _analytic_phi(coords, time, dim):
 # -- Core ghost computation --
 
 
-def _ghost_char_modes(
+def _char_speeds(normal, face_mesh_velocity):
+    """Grid-frame [lambda^0, lambda^+, lambda^-] at this point."""
+    if face_mesh_velocity is None:
+        return 0.0, 1.0, -1.0
+    n_dot_v = np.dot(normal, face_mesh_velocity)
+    return -n_dot_v, 1.0 - n_dot_v, -1.0 - n_dot_v
+
+
+def _selected_modes(
     normal,
     interior_pi,
     interior_phi,
@@ -110,25 +123,38 @@ def _ghost_char_modes(
     time,
     dim,
     zero_incoming,
+    face_mesh_velocity,
 ):
-    """Return the ghost (v^0, v^+, v^-) after mode selection."""
+    """Per-point (v^0, v^+, v^-) after mode selection.
+
+    A mode with lambda >= 0 is taken from the interior; a mode with lambda < 0
+    is taken from the data (analytic char field, or 0 with ZeroIncomingMode).
+    """
     n = normal
+    lambda_zero, lambda_plus, lambda_minus = _char_speeds(n, face_mesh_velocity)
 
     n_dot_phi_int = np.dot(n, interior_phi)
+    vplus_int = interior_pi + n_dot_phi_int
+    vminus_int = interior_pi - n_dot_phi_int
+    vzero_int = interior_phi - n * n_dot_phi_int
 
-    # v^+ ghost: always the interior outgoing mode.
-    vplus_ext = interior_pi + n_dot_phi_int
-    # v^- ghost: analytic incoming mode, or zero.
     if zero_incoming:
-        vminus_ext = 0.0
+        vplus_data = 0.0
+        vminus_data = 0.0
+        vzero_data = np.zeros(dim)
     else:
         an_pi = _analytic_pi(coords, time, dim)
         an_phi = _analytic_phi(coords, time, dim)
-        vminus_ext = an_pi - np.dot(n, an_phi)
-    # v^0 ghost: always the interior zero-speed mode.
-    vzero_ext = interior_phi - n * n_dot_phi_int
+        an_n_dot_phi = np.dot(n, an_phi)
+        vplus_data = an_pi + an_n_dot_phi
+        vminus_data = an_pi - an_n_dot_phi
+        vzero_data = an_phi - n * an_n_dot_phi
 
-    return vzero_ext, vplus_ext, vminus_ext
+    vplus_sel = np.where(lambda_plus >= 0.0, vplus_int, vplus_data)
+    vminus_sel = np.where(lambda_minus >= 0.0, vminus_int, vminus_data)
+    vzero_sel = np.where(lambda_zero >= 0.0, vzero_int, vzero_data)
+
+    return vzero_sel, vplus_sel, vminus_sel
 
 
 def _ghost_pi_phi(
@@ -139,9 +165,10 @@ def _ghost_pi_phi(
     time,
     dim,
     zero_incoming,
+    face_mesh_velocity,
 ):
     """Reconstruct the ghost (Pi, Phi_i) from the selected char modes."""
-    vzero_ext, vplus_ext, vminus_ext = _ghost_char_modes(
+    vzero_sel, vplus_sel, vminus_sel = _selected_modes(
         normal,
         interior_pi,
         interior_phi,
@@ -149,25 +176,41 @@ def _ghost_pi_phi(
         time,
         dim,
         zero_incoming,
+        face_mesh_velocity,
     )
-    pi_out = 0.5 * (vplus_ext + vminus_ext)
-    phi_out = 0.5 * (vplus_ext - vminus_ext) * normal + vzero_ext
+    pi_out = 0.5 * (vplus_sel + vminus_sel)
+    phi_out = 0.5 * (vplus_sel - vminus_sel) * normal + vzero_sel
     return pi_out, phi_out
 
 
 def _dt_boundary_psi(
-    normal, interior_pi, interior_phi, coords, time, dim, zero_incoming
+    normal,
+    interior_pi,
+    interior_phi,
+    coords,
+    time,
+    dim,
+    zero_incoming,
+    face_mesh_velocity,
 ):
-    """dt of the boundary-evolved Psi = -0.5 (v^+_int + v^-_analytic)."""
-    n = normal
-    vplus_int = interior_pi + np.dot(n, interior_phi)
-    if zero_incoming:
-        vminus = 0.0
-    else:
-        an_pi = _analytic_pi(coords, time, dim)
-        an_phi = _analytic_phi(coords, time, dim)
-        vminus = an_pi - np.dot(n, an_phi)
-    return -0.5 * (vplus_int + vminus)
+    """dt of the boundary-evolved Psi = -Pi_b + v^i (Phi_b)_i.
+
+    The advection term is present only when a mesh velocity is supplied.
+    """
+    pi_b, phi_b = _ghost_pi_phi(
+        normal,
+        interior_pi,
+        interior_phi,
+        coords,
+        time,
+        dim,
+        zero_incoming,
+        face_mesh_velocity,
+    )
+    result = -pi_b
+    if face_mesh_velocity is not None:
+        result += np.dot(face_mesh_velocity, phi_b)
+    return result
 
 
 # =====================================================================
@@ -206,6 +249,7 @@ def pi_keep_zero(
         time,
         dim,
         False,
+        face_mesh_velocity,
     )
     return np.asarray(pi_out)
 
@@ -228,6 +272,7 @@ def phi_keep_zero(
         time,
         dim,
         False,
+        face_mesh_velocity,
     )
     return phi_out
 
@@ -251,6 +296,7 @@ def dt_boundary_psi_keep_zero(
             time,
             dim,
             False,
+            face_mesh_velocity,
         )
     )
 
@@ -291,6 +337,7 @@ def pi_zero_incoming(
         time,
         dim,
         True,
+        face_mesh_velocity,
     )
     return np.asarray(pi_out)
 
@@ -313,6 +360,7 @@ def phi_zero_incoming(
         time,
         dim,
         True,
+        face_mesh_velocity,
     )
     return phi_out
 
@@ -336,5 +384,6 @@ def dt_boundary_psi_zero_incoming(
             time,
             dim,
             True,
+            face_mesh_velocity,
         )
     )

@@ -3,17 +3,19 @@
 
 #include "Evolution/Systems/SecondOrderScalarWave/BoundaryConditions/DirichletCharacteristics.hpp"
 
+#include <array>
 #include <cstddef>
 #include <memory>
 #include <optional>
 #include <pup.h>
 #include <type_traits>
 
+#include "DataStructures/Tensor/EagerMath/DotProduct.hpp"
 #include "Evolution/Systems/SecondOrderScalarWave/Characteristics.hpp"
 #include "PointwiseFunctions/AnalyticSolutions/WaveEquation/Factory.hpp"
 #include "Utilities/CallWithDynamicType.hpp"
-#include "Utilities/ErrorHandling/Error.hpp"
 #include "Utilities/GenerateInstantiations.hpp"
+#include "Utilities/Math.hpp"
 
 namespace SecondOrderScalarWave::BoundaryConditions {
 template <size_t Dim>
@@ -84,9 +86,75 @@ auto evaluate_analytic(
       });
 }
 
-constexpr char moving_mesh_error[] =
-    "DirichletCharacteristics does not support moving meshes: the "
-    "characteristic speeds are defined without a mesh velocity.";
+// Compute the per-point selected characteristic modes for the ghost state.
+//
+// The grid-frame speeds [VZero, VPlus, VMinus] are evaluated from
+// `characteristic_speeds(normal, mesh_velocity)`. Pointwise, a mode with
+// non-negative speed is taken from the interior, a mode with negative speed
+// is incoming and taken from the data (the analytic prescription, or zero
+// with `zero_incoming`). Selection uses Heaviside masks, with the convention
+// step_function(0) == 1 so that a mode at speed exactly zero is interior.
+template <size_t Dim>
+Variables<tmpl::list<SecondOrderScalarWave::Tags::VZero<Dim>,
+                     SecondOrderScalarWave::Tags::VPlus,
+                     SecondOrderScalarWave::Tags::VMinus>>
+selected_characteristic_modes(
+    const Scalar<DataVector>& interior_pi,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& interior_phi,
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
+    const tnsr::I<DataVector, Dim, Frame::Inertial>& coords, const double time,
+    const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+        face_mesh_velocity,
+    const bool zero_incoming,
+    const evolution::initial_data::InitialData& analytic_prescription) {
+  const std::array<DataVector, 3> speeds =
+      characteristic_speeds(normal_covector, face_mesh_velocity);
+  // Interior char fields (non-negative-speed modes are kept from these).
+  const auto interior_char_fields =
+      characteristic_fields(interior_pi, interior_phi, normal_covector);
+
+  // The step-function masks: 1 where the mode is interior (speed >= 0), 0
+  // where it is incoming (speed < 0).
+  const DataVector interior_mask_zero = step_function(speeds[0]);
+  const DataVector interior_mask_plus = step_function(speeds[1]);
+  const DataVector interior_mask_minus = step_function(speeds[2]);
+
+  auto selected = interior_char_fields;
+  auto& v_zero_sel = get<SecondOrderScalarWave::Tags::VZero<Dim>>(selected);
+  auto& v_plus_sel = get(get<SecondOrderScalarWave::Tags::VPlus>(selected));
+  auto& v_minus_sel = get(get<SecondOrderScalarWave::Tags::VMinus>(selected));
+
+  if (zero_incoming) {
+    // data == 0, so selected_X = interior_mask_X * interior_X.
+    for (size_t i = 0; i < Dim; ++i) {
+      v_zero_sel.get(i) *= interior_mask_zero;
+    }
+    v_plus_sel *= interior_mask_plus;
+    v_minus_sel *= interior_mask_minus;
+  } else {
+    const auto data_values =
+        evaluate_analytic<Dim>(analytic_prescription, coords, time);
+    const auto data_char_fields = characteristic_fields(
+        get<SecondOrderScalarWave::Tags::Pi>(data_values),
+        get<SecondOrderScalarWave::Tags::Phi<Dim>>(data_values),
+        normal_covector);
+    const auto& v_zero_data =
+        get<SecondOrderScalarWave::Tags::VZero<Dim>>(data_char_fields);
+    const auto& v_plus_data =
+        get(get<SecondOrderScalarWave::Tags::VPlus>(data_char_fields));
+    const auto& v_minus_data =
+        get(get<SecondOrderScalarWave::Tags::VMinus>(data_char_fields));
+    for (size_t i = 0; i < Dim; ++i) {
+      v_zero_sel.get(i) = interior_mask_zero * v_zero_sel.get(i) +
+                          (1.0 - interior_mask_zero) * v_zero_data.get(i);
+    }
+    v_plus_sel = interior_mask_plus * v_plus_sel +
+                 (1.0 - interior_mask_plus) * v_plus_data;
+    v_minus_sel = interior_mask_minus * v_minus_sel +
+                  (1.0 - interior_mask_minus) * v_minus_data;
+  }
+  return selected;
+}
 }  // namespace
 
 template <size_t Dim>
@@ -102,32 +170,16 @@ std::optional<std::string> DirichletCharacteristics<Dim>::dg_ghost(
     const tnsr::i<DataVector, Dim, Frame::Inertial>& interior_phi,
     const tnsr::I<DataVector, Dim, Frame::Inertial>& coords,
     const double time) const {
-  if (face_mesh_velocity.has_value()) {
-    return moving_mesh_error;
-  }
-  const auto interior_char_fields =
-      characteristic_fields(interior_pi, interior_phi, normal_covector);
-
-  // The characteristic speeds are constant (+1, -1, 0 for v^+, v^-, v^0), so
-  // the mode selection has no per-point branching: v^+ and the zero-speed
-  // v^0 are always taken from the interior, v^- is always incoming (analytic
-  // or zero).
-  const auto& v_plus_ext = get<Tags::VPlus>(interior_char_fields);
-  const auto& v_zero_ext = get<Tags::VZero<Dim>>(interior_char_fields);
-  Scalar<DataVector> v_minus_ext{};
-  if (zero_incoming_mode_) {
-    get(v_minus_ext) = DataVector{get(interior_pi).size(), 0.0};
-  } else {
-    const auto boundary_values =
-        evaluate_analytic<Dim>(*analytic_prescription_, coords, time);
-    const auto analytic_char_fields = characteristic_fields(
-        get<Tags::Pi>(boundary_values), get<Tags::Phi<Dim>>(boundary_values),
-        normal_covector);
-    v_minus_ext = get<Tags::VMinus>(analytic_char_fields);
-  }
+  // Per-point mode selection from the grid-frame characteristic speeds:
+  // non-negative-speed modes come from the interior, negative-speed
+  // (incoming) modes from the analytic data (or zero).
+  const auto selected = selected_characteristic_modes<Dim>(
+      interior_pi, interior_phi, normal_covector, coords, time,
+      face_mesh_velocity, zero_incoming_mode_, *analytic_prescription_);
 
   const auto evolved = fields_from_inverse_characteristic_transform(
-      v_zero_ext, v_plus_ext, v_minus_ext, normal_covector);
+      get<Tags::VZero<Dim>>(selected), get<Tags::VPlus>(selected),
+      get<Tags::VMinus>(selected), normal_covector);
 
   // The ghost Psi is the time-integrated boundary-evolved value.
   *psi = boundary_psi_value;
@@ -149,26 +201,23 @@ DirichletCharacteristics<Dim>::boundary_field_time_derivatives(
     const tnsr::i<DataVector, Dim, Frame::Inertial>& interior_phi,
     const tnsr::I<DataVector, Dim, Frame::Inertial>& coords,
     const double time) const {
+  // From the same mixed-mode ghost state that dg_ghost reconstructs, the
+  // boundary (Pi, Phi) follow from the inverse characteristic transform:
+  //   Pi_b     = 0.5 (v^+_sel + v^-_sel),
+  //   (Phi_b)_i = 0.5 (v^+_sel - v^-_sel) n_i + (v^0_sel)_i,
+  // and dt BoundaryPsi = -Pi_b + v^i (Phi_b)_i.
+  const auto selected = selected_characteristic_modes<Dim>(
+      interior_pi, interior_phi, normal_covector, coords, time,
+      face_mesh_velocity, zero_incoming_mode_, *analytic_prescription_);
+
+  const auto ghost = fields_from_inverse_characteristic_transform(
+      get<Tags::VZero<Dim>>(selected), get<Tags::VPlus>(selected),
+      get<Tags::VMinus>(selected), normal_covector);
+
+  get(*dt_boundary_psi) = -get(get<Tags::Pi>(ghost));
   if (face_mesh_velocity.has_value()) {
-    return moving_mesh_error;
-  }
-  // Pi on the boundary from the mixed characteristic modes:
-  //   Pi_boundary = 0.5 (v^+ + v^-),
-  // with the outgoing v^+ from the interior and the incoming v^- from the
-  // analytic data (or zero). dt BoundaryPsi = -Pi_boundary.
-  const auto interior_char_fields =
-      characteristic_fields(interior_pi, interior_phi, normal_covector);
-  const auto& v_plus_ext = get(get<Tags::VPlus>(interior_char_fields));
-  if (zero_incoming_mode_) {
-    get(*dt_boundary_psi) = -0.5 * v_plus_ext;
-  } else {
-    const auto boundary_values =
-        evaluate_analytic<Dim>(*analytic_prescription_, coords, time);
-    const auto analytic_char_fields = characteristic_fields(
-        get<Tags::Pi>(boundary_values), get<Tags::Phi<Dim>>(boundary_values),
-        normal_covector);
-    get(*dt_boundary_psi) =
-        -0.5 * (v_plus_ext + get(get<Tags::VMinus>(analytic_char_fields)));
+    get(*dt_boundary_psi) +=
+        get(dot_product(*face_mesh_velocity, get<Tags::Phi<Dim>>(ghost)));
   }
   return std::nullopt;
 }

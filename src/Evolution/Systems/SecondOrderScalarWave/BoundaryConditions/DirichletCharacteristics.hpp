@@ -38,25 +38,29 @@ namespace SecondOrderScalarWave::BoundaryConditions {
  * \brief Sets boundary conditions using the characteristic decomposition:
  * incoming modes from analytic data, outgoing modes from the interior.
  *
- * The characteristic fields and their speeds are (see
- * `SecondOrderScalarWave::characteristic_fields`):
- * - \f$v^+ = \Pi + n^i\Phi_i\f$: speed \f$+1\f$ (always outgoing, taken from
- *   the interior)
- * - \f$v^- = \Pi - n^i\Phi_i\f$: speed \f$-1\f$ (always incoming, taken from
- *   the analytic data, or set to zero if `ZeroIncomingMode` is true)
- * - \f$v^0_i\f$: speed \f$0\f$ (taken from the interior)
+ * The characteristic fields are \f$v^0_i\f$, \f$v^+ = \Pi + n^i\Phi_i\f$, and
+ * \f$v^- = \Pi - n^i\Phi_i\f$ (see
+ * `SecondOrderScalarWave::characteristic_fields`). Their speeds are the
+ * grid-frame ones returned by
+ * `SecondOrderScalarWave::characteristic_speeds(normal, mesh_velocity)`, i.e.
+ * \f$\lambda^0 = -n_i v^i\f$ and \f$\lambda^\pm = \pm 1 - n_i v^i\f$ (on a
+ * static mesh these reduce to \f$0, +1, -1\f$).
+ *
+ * The mode selection is pointwise on the face: a mode with negative speed is
+ * incoming and is prescribed from the analytic data (or set to zero if
+ * `ZeroIncomingMode` is true), while a mode with non-negative speed is taken
+ * from the interior. On a static mesh only \f$v^-\f$ is ever incoming, so
+ * this reduces to \f$v^+\f$ and \f$v^0_i\f$ from the interior and \f$v^-\f$
+ * from the data.
  *
  * \f$\Psi\f$ has no characteristic field in the second-order system. The
  * ghost \f$\Psi\f$ is the boundary-evolved
  * `evolution::dg::Tags::BoundaryValue<Tags::Psi>`, integrated per face from
  * the time derivative this class produces in
  * `boundary_field_time_derivatives`:
- * \f$\partial_t\Psi_b = -\Pi_b = -\tfrac{1}{2}(v^+ + v^-)\f$ evaluated from
- * the mixed characteristic modes.
- *
- * Moving meshes are not supported: the characteristic speeds are defined
- * without a mesh velocity, so both member functions error if a face mesh
- * velocity is supplied.
+ * \f$\partial_t\Psi_b = -\Pi_b + v^i(\Phi_b)_i\f$, with both \f$\Pi_b\f$ and
+ * \f$(\Phi_b)_i\f$ taken from the mixed-mode ghost state (on a static mesh
+ * the mesh-velocity term drops and this is \f$-\Pi_b\f$).
  */
 template <size_t Dim>
 class DirichletCharacteristics final : public BoundaryCondition<Dim> {
@@ -68,12 +72,13 @@ class DirichletCharacteristics final : public BoundaryCondition<Dim> {
     using type = std::unique_ptr<evolution::initial_data::InitialData>;
   };
 
-  /// \brief If true, the incoming characteristic mode \f$v^-\f$ is set to
-  /// zero instead of analytic data.
+  /// \brief If true, every characteristic mode is set to zero wherever it is
+  /// incoming (negative speed), instead of taking the analytic data.
   struct ZeroIncomingMode {
     static constexpr Options::String help =
-        "If true, the incoming characteristic mode is set to zero instead of "
-        "analytic data.";
+        "If true, each characteristic mode is set to zero wherever it is "
+        "incoming, instead of analytic data. On a static mesh only v^- is "
+        "incoming.";
     using type = bool;
   };
 
@@ -148,9 +153,9 @@ class DirichletCharacteristics final : public BoundaryCondition<Dim> {
       double time) const;
 
   // Produces the per-face time derivative of the boundary-evolved
-  // `BoundaryValue<Psi>`: dt = -Pi_boundary = -0.5 (v^+ + v^-) from the mixed
-  // characteristic modes. The current boundary value `boundary_psi_value` is
-  // unused (the time derivative does not depend on the integrated value).
+  // `BoundaryValue<Psi>`: dt = -Pi_boundary + v^i (Phi_boundary)_i from the
+  // mixed-mode ghost state. The current boundary value `boundary_psi_value`
+  // is unused (the time derivative does not depend on the integrated value).
   std::optional<std::string> boundary_field_time_derivatives(
       gsl::not_null<Scalar<DataVector>*> dt_boundary_psi,
       const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
