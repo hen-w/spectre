@@ -21,8 +21,6 @@ DirichletCharacteristics<Dim>::DirichletCharacteristics(
     const DirichletCharacteristics& rhs)
     : BoundaryCondition<Dim>{dynamic_cast<const BoundaryCondition<Dim>&>(rhs)},
       analytic_prescription_(rhs.analytic_prescription_->get_clone()),
-      prescribe_zero_speed_modes_(rhs.prescribe_zero_speed_modes_),
-      copy_psi_from_interior_(rhs.copy_psi_from_interior_),
       zero_incoming_mode_(rhs.zero_incoming_mode_) {}
 
 template <size_t Dim>
@@ -32,8 +30,6 @@ DirichletCharacteristics<Dim>& DirichletCharacteristics<Dim>::operator=(
     return *this;
   }
   analytic_prescription_ = rhs.analytic_prescription_->get_clone();
-  prescribe_zero_speed_modes_ = rhs.prescribe_zero_speed_modes_;
-  copy_psi_from_interior_ = rhs.copy_psi_from_interior_;
   zero_incoming_mode_ = rhs.zero_incoming_mode_;
   return *this;
 }
@@ -46,20 +42,9 @@ DirichletCharacteristics<Dim>::DirichletCharacteristics(
 template <size_t Dim>
 DirichletCharacteristics<Dim>::DirichletCharacteristics(
     std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription,
-    const bool prescribe_zero_speed_modes, const bool copy_psi_from_interior,
     const bool zero_incoming_mode)
     : analytic_prescription_(std::move(analytic_prescription)),
-      prescribe_zero_speed_modes_(prescribe_zero_speed_modes),
-      copy_psi_from_interior_(copy_psi_from_interior),
-      zero_incoming_mode_(zero_incoming_mode) {
-  if (prescribe_zero_speed_modes_ and copy_psi_from_interior_) {
-    ERROR(
-        "DirichletCharacteristics: CopyPsiFromInterior and "
-        "PrescribeZeroSpeedModes cannot both be true. "
-        "CopyPsiFromInterior copies Psi from the interior evolved value, "
-        "while PrescribeZeroSpeedModes sets Psi from the analytic solution.");
-  }
-}
+      zero_incoming_mode_(zero_incoming_mode) {}
 
 template <size_t Dim>
 std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>
@@ -71,8 +56,6 @@ template <size_t Dim>
 void DirichletCharacteristics<Dim>::pup(PUP::er& p) {
   BoundaryCondition<Dim>::pup(p);
   p | analytic_prescription_;
-  p | prescribe_zero_speed_modes_;
-  p | copy_psi_from_interior_;
   p | zero_incoming_mode_;
 }
 
@@ -115,7 +98,6 @@ std::optional<std::string> DirichletCharacteristics<Dim>::dg_ghost(
         face_mesh_velocity,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
     const Scalar<DataVector>& boundary_psi_value,
-    const Scalar<DataVector>& interior_psi,
     const Scalar<DataVector>& interior_pi,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& interior_phi,
     const tnsr::I<DataVector, Dim, Frame::Inertial>& coords,
@@ -126,54 +108,29 @@ std::optional<std::string> DirichletCharacteristics<Dim>::dg_ghost(
   const auto interior_char_fields =
       characteristic_fields(interior_pi, interior_phi, normal_covector);
 
-  // The analytic data feeds the incoming v^- (unless ZeroIncomingMode), the
-  // zero-speed v^0 and the ghost Psi (if PrescribeZeroSpeedModes); when
-  // neither consumer is active, skip evaluating it entirely.
-  const bool need_analytic =
-      not zero_incoming_mode_ or prescribe_zero_speed_modes_;
-  std::optional<
-      Variables<tmpl::list<Tags::VZero<Dim>, Tags::VPlus, Tags::VMinus>>>
-      analytic_char_fields{};
-  Scalar<DataVector> analytic_psi{};
-  if (need_analytic) {
-    const auto boundary_values =
-        evaluate_analytic<Dim>(*analytic_prescription_, coords, time);
-    analytic_psi = get<Tags::Psi>(boundary_values);
-    analytic_char_fields = characteristic_fields(
-        get<Tags::Pi>(boundary_values), get<Tags::Phi<Dim>>(boundary_values),
-        normal_covector);
-  }
-
   // The characteristic speeds are constant (+1, -1, 0 for v^+, v^-, v^0), so
-  // the mode selection has no per-point branching: v^+ is always outgoing
-  // (interior), v^- always incoming (analytic or zero), and the zero-speed
-  // v^0 is chosen by the PrescribeZeroSpeedModes option.
+  // the mode selection has no per-point branching: v^+ and the zero-speed
+  // v^0 are always taken from the interior, v^- is always incoming (analytic
+  // or zero).
   const auto& v_plus_ext = get<Tags::VPlus>(interior_char_fields);
+  const auto& v_zero_ext = get<Tags::VZero<Dim>>(interior_char_fields);
   Scalar<DataVector> v_minus_ext{};
   if (zero_incoming_mode_) {
     get(v_minus_ext) = DataVector{get(interior_pi).size(), 0.0};
   } else {
-    v_minus_ext = get<Tags::VMinus>(*analytic_char_fields);
+    const auto boundary_values =
+        evaluate_analytic<Dim>(*analytic_prescription_, coords, time);
+    const auto analytic_char_fields = characteristic_fields(
+        get<Tags::Pi>(boundary_values), get<Tags::Phi<Dim>>(boundary_values),
+        normal_covector);
+    v_minus_ext = get<Tags::VMinus>(analytic_char_fields);
   }
-  const auto& v_zero_ext = prescribe_zero_speed_modes_
-                               ? get<Tags::VZero<Dim>>(*analytic_char_fields)
-                               : get<Tags::VZero<Dim>>(interior_char_fields);
 
   const auto evolved = fields_from_inverse_characteristic_transform(
       v_zero_ext, v_plus_ext, v_minus_ext, normal_covector);
 
-  // Ghost Psi selection:
-  //   CopyPsiFromInterior: use the interior evolved Psi directly
-  //   PrescribeZeroSpeedModes: use the analytic Psi (prescribed zero-speed
-  //     content)
-  //   Otherwise: use the time-integrated boundary-evolved value
-  if (copy_psi_from_interior_) {
-    *psi = interior_psi;
-  } else if (prescribe_zero_speed_modes_) {
-    *psi = analytic_psi;
-  } else {
-    *psi = boundary_psi_value;
-  }
+  // The ghost Psi is the time-integrated boundary-evolved value.
+  *psi = boundary_psi_value;
   *pi = get<Tags::Pi>(evolved);
   *phi = get<Tags::Phi<Dim>>(evolved);
 
@@ -194,11 +151,6 @@ DirichletCharacteristics<Dim>::boundary_field_time_derivatives(
     const double time) const {
   if (face_mesh_velocity.has_value()) {
     return moving_mesh_error;
-  }
-  if (copy_psi_from_interior_) {
-    // The boundary-evolved value is not used; its time derivative is zero.
-    get(*dt_boundary_psi) = 0.0;
-    return std::nullopt;
   }
   // Pi on the boundary from the mixed characteristic modes:
   //   Pi_boundary = 0.5 (v^+ + v^-),

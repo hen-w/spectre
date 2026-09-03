@@ -63,25 +63,18 @@ DomainCreator:
     BoundaryConditions:
       - DirichletCharacteristics:
           AnalyticPrescription: *InitialData
-          PrescribeZeroSpeedModes: false
           ZeroIncomingMode: false
-          CopyPsiFromInterior: false
       - DirichletCharacteristics:
           AnalyticPrescription: *InitialData
-          PrescribeZeroSpeedModes: false
           ZeroIncomingMode: false
-          CopyPsiFromInterior: false
       - DirichletCharacteristics:
           AnalyticPrescription: *InitialData
-          PrescribeZeroSpeedModes: false
           ZeroIncomingMode: false
-          CopyPsiFromInterior: false
 
 SpatialDiscretization:
   BoundaryCorrection:
     LaxFriedrichs:
-      Tau1: 1.0
-      Tau2: 0.0
+      Tau: 1.0
   DiscontinuousGalerkin:
     Formulation: StrongInertial
     Quadrature: GaussLobatto

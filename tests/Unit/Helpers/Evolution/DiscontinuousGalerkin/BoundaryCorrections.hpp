@@ -1116,13 +1116,9 @@ void test_auxiliary_boundary_correction_with_python(
       get_dg_auxiliary_package_field_tags_or_default_t<BoundaryCorrection,
                                                        tmpl::list<>>;
 
-  for (const auto use_moving_mesh : {
-           false  // , true
-       }) {
-    for (const auto dg_formulation : {
-             ::dg::Formulation::
-                 StrongInertial  // , ::dg::Formulation::WeakInertial
-         }) {
+  for (const auto use_moving_mesh : {false, true}) {
+    for (const auto dg_formulation :
+         {::dg::Formulation::StrongInertial, ::dg::Formulation::WeakInertial}) {
       detail::test_with_python<System, ConversionClassList, auxiliary_variables,
                                true>(
           generator, python_module, python_dg_package_data_function,

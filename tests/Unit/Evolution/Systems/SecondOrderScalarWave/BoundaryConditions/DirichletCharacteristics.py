@@ -18,17 +18,13 @@
 # constant and the branching has no per-point dependence):
 #   v^+ ghost = interior v^+   (outgoing, always from the interior)
 #   v^- ghost = analytic v^-   (incoming), or 0 if ZeroIncomingMode
-#   v^0 ghost = analytic v^0 if PrescribeZeroSpeedModes, else interior v^0
+#   v^0 ghost = interior v^0
 #
-# Ghost Psi:
-#   CopyPsiFromInterior:     interior Psi
-#   PrescribeZeroSpeedModes: analytic Psi
-#   otherwise:               the passed boundary_psi_value
+# Ghost Psi: the passed boundary_psi_value (the time-integrated
+# boundary-evolved value).
 #
 # dt of the boundary-evolved Psi:
-#   CopyPsiFromInterior: 0
-#   otherwise:           -0.5 (interior v^+ + (0 if ZeroIncomingMode
-#                                              else analytic v^-))
+#   -0.5 (interior v^+ + (0 if ZeroIncomingMode else analytic v^-))
 
 import numpy as np
 
@@ -83,22 +79,12 @@ def _1d_u(coords, time, dim):
     return result
 
 
-def _profile(u):
-    return _gauss_amplitude() * np.exp(
-        -((u - _gauss_center()) ** 2) / _gauss_width() ** 2
-    )
-
-
 def _first_deriv(u):
     return (
         (-2.0 * _gauss_amplitude() / _gauss_width() ** 2)
         * (u - _gauss_center())
         * np.exp(-((u - _gauss_center()) ** 2) / _gauss_width() ** 2)
     )
-
-
-def _analytic_psi(coords, time, dim):
-    return _profile(_1d_u(coords, time, dim))
 
 
 def _analytic_pi(coords, time, dim):
@@ -123,27 +109,24 @@ def _ghost_char_modes(
     coords,
     time,
     dim,
-    prescribe_zero,
     zero_incoming,
 ):
     """Return the ghost (v^0, v^+, v^-) after mode selection."""
     n = normal
 
-    an_pi = _analytic_pi(coords, time, dim)
-    an_phi = _analytic_phi(coords, time, dim)
-
     n_dot_phi_int = np.dot(n, interior_phi)
-    n_dot_phi_an = np.dot(n, an_phi)
 
     # v^+ ghost: always the interior outgoing mode.
     vplus_ext = interior_pi + n_dot_phi_int
     # v^- ghost: analytic incoming mode, or zero.
-    vminus_ext = 0.0 if zero_incoming else (an_pi - n_dot_phi_an)
-    # v^0 ghost: analytic if prescribing zero-speed modes, else interior.
-    if prescribe_zero:
-        vzero_ext = an_phi - n * n_dot_phi_an
+    if zero_incoming:
+        vminus_ext = 0.0
     else:
-        vzero_ext = interior_phi - n * n_dot_phi_int
+        an_pi = _analytic_pi(coords, time, dim)
+        an_phi = _analytic_phi(coords, time, dim)
+        vminus_ext = an_pi - np.dot(n, an_phi)
+    # v^0 ghost: always the interior zero-speed mode.
+    vzero_ext = interior_phi - n * n_dot_phi_int
 
     return vzero_ext, vplus_ext, vminus_ext
 
@@ -155,7 +138,6 @@ def _ghost_pi_phi(
     coords,
     time,
     dim,
-    prescribe_zero,
     zero_incoming,
 ):
     """Reconstruct the ghost (Pi, Phi_i) from the selected char modes."""
@@ -166,7 +148,6 @@ def _ghost_pi_phi(
         coords,
         time,
         dim,
-        prescribe_zero,
         zero_incoming,
     )
     pi_out = 0.5 * (vplus_ext + vminus_ext)
@@ -190,106 +171,13 @@ def _dt_boundary_psi(
 
 
 # =====================================================================
-# PrescribeZeroSpeedModes = true
-# =====================================================================
-
-
-def psi_prescribe_zero(
-    face_mesh_velocity,
-    outward_directed_normal_covector,
-    interior_psi,
-    interior_pi,
-    interior_phi,
-    boundary_psi_value,
-    coords,
-    time,
-    dim,
-):
-    # Ghost Psi = analytic Psi.
-    return np.asarray(_analytic_psi(coords, time, dim))
-
-
-def pi_prescribe_zero(
-    face_mesh_velocity,
-    outward_directed_normal_covector,
-    interior_psi,
-    interior_pi,
-    interior_phi,
-    boundary_psi_value,
-    coords,
-    time,
-    dim,
-):
-    pi_out, _ = _ghost_pi_phi(
-        outward_directed_normal_covector,
-        interior_pi,
-        interior_phi,
-        coords,
-        time,
-        dim,
-        True,
-        False,
-    )
-    return np.asarray(pi_out)
-
-
-def phi_prescribe_zero(
-    face_mesh_velocity,
-    outward_directed_normal_covector,
-    interior_psi,
-    interior_pi,
-    interior_phi,
-    boundary_psi_value,
-    coords,
-    time,
-    dim,
-):
-    _, phi_out = _ghost_pi_phi(
-        outward_directed_normal_covector,
-        interior_pi,
-        interior_phi,
-        coords,
-        time,
-        dim,
-        True,
-        False,
-    )
-    return phi_out
-
-
-def dt_boundary_psi_prescribe_zero(
-    face_mesh_velocity,
-    outward_directed_normal_covector,
-    interior_psi,
-    interior_pi,
-    interior_phi,
-    boundary_psi_value,
-    coords,
-    time,
-    dim,
-):
-    return np.asarray(
-        _dt_boundary_psi(
-            outward_directed_normal_covector,
-            interior_pi,
-            interior_phi,
-            coords,
-            time,
-            dim,
-            False,
-        )
-    )
-
-
-# =====================================================================
-# PrescribeZeroSpeedModes = false (ghost Psi = boundary-evolved value)
+# ZeroIncomingMode = false (ghost Psi = boundary-evolved value)
 # =====================================================================
 
 
 def psi_keep_zero(
     face_mesh_velocity,
     outward_directed_normal_covector,
-    interior_psi,
     interior_pi,
     interior_phi,
     boundary_psi_value,
@@ -303,7 +191,6 @@ def psi_keep_zero(
 def pi_keep_zero(
     face_mesh_velocity,
     outward_directed_normal_covector,
-    interior_psi,
     interior_pi,
     interior_phi,
     boundary_psi_value,
@@ -319,7 +206,6 @@ def pi_keep_zero(
         time,
         dim,
         False,
-        False,
     )
     return np.asarray(pi_out)
 
@@ -327,7 +213,6 @@ def pi_keep_zero(
 def phi_keep_zero(
     face_mesh_velocity,
     outward_directed_normal_covector,
-    interior_psi,
     interior_pi,
     interior_phi,
     boundary_psi_value,
@@ -343,7 +228,6 @@ def phi_keep_zero(
         time,
         dim,
         False,
-        False,
     )
     return phi_out
 
@@ -351,7 +235,6 @@ def phi_keep_zero(
 def dt_boundary_psi_keep_zero(
     face_mesh_velocity,
     outward_directed_normal_covector,
-    interior_psi,
     interior_pi,
     interior_phi,
     boundary_psi_value,
@@ -373,96 +256,13 @@ def dt_boundary_psi_keep_zero(
 
 
 # =====================================================================
-# CopyPsiFromInterior = true (ghost Psi = interior Psi, dt = 0)
-# =====================================================================
-
-
-def psi_copy_interior(
-    face_mesh_velocity,
-    outward_directed_normal_covector,
-    interior_psi,
-    interior_pi,
-    interior_phi,
-    boundary_psi_value,
-    coords,
-    time,
-    dim,
-):
-    return interior_psi
-
-
-def pi_copy_interior(
-    face_mesh_velocity,
-    outward_directed_normal_covector,
-    interior_psi,
-    interior_pi,
-    interior_phi,
-    boundary_psi_value,
-    coords,
-    time,
-    dim,
-):
-    pi_out, _ = _ghost_pi_phi(
-        outward_directed_normal_covector,
-        interior_pi,
-        interior_phi,
-        coords,
-        time,
-        dim,
-        False,
-        False,
-    )
-    return np.asarray(pi_out)
-
-
-def phi_copy_interior(
-    face_mesh_velocity,
-    outward_directed_normal_covector,
-    interior_psi,
-    interior_pi,
-    interior_phi,
-    boundary_psi_value,
-    coords,
-    time,
-    dim,
-):
-    _, phi_out = _ghost_pi_phi(
-        outward_directed_normal_covector,
-        interior_pi,
-        interior_phi,
-        coords,
-        time,
-        dim,
-        False,
-        False,
-    )
-    return phi_out
-
-
-def dt_boundary_psi_copy_interior(
-    face_mesh_velocity,
-    outward_directed_normal_covector,
-    interior_psi,
-    interior_pi,
-    interior_phi,
-    boundary_psi_value,
-    coords,
-    time,
-    dim,
-):
-    return 0.0 * np.asarray(interior_psi)
-
-
-# =====================================================================
-# ZeroIncomingMode = true (PrescribeZeroSpeedModes = false,
-#                          CopyPsiFromInterior = false)
+# ZeroIncomingMode = true
 # =====================================================================
 
 
 def psi_zero_incoming(
     face_mesh_velocity,
     outward_directed_normal_covector,
-    interior_psi,
     interior_pi,
     interior_phi,
     boundary_psi_value,
@@ -476,7 +276,6 @@ def psi_zero_incoming(
 def pi_zero_incoming(
     face_mesh_velocity,
     outward_directed_normal_covector,
-    interior_psi,
     interior_pi,
     interior_phi,
     boundary_psi_value,
@@ -491,7 +290,6 @@ def pi_zero_incoming(
         coords,
         time,
         dim,
-        False,
         True,
     )
     return np.asarray(pi_out)
@@ -500,7 +298,6 @@ def pi_zero_incoming(
 def phi_zero_incoming(
     face_mesh_velocity,
     outward_directed_normal_covector,
-    interior_psi,
     interior_pi,
     interior_phi,
     boundary_psi_value,
@@ -515,7 +312,6 @@ def phi_zero_incoming(
         coords,
         time,
         dim,
-        False,
         True,
     )
     return phi_out
@@ -524,7 +320,6 @@ def phi_zero_incoming(
 def dt_boundary_psi_zero_incoming(
     face_mesh_velocity,
     outward_directed_normal_covector,
-    interior_psi,
     interior_pi,
     interior_phi,
     boundary_psi_value,

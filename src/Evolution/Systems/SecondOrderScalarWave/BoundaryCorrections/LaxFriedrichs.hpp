@@ -44,7 +44,7 @@ namespace SecondOrderScalarWave::BoundaryCorrections {
  * Below, \f$n^i\f$ denotes the interior element's outward-directed unit face
  * normal. \f$\{\{\Psi\}\}\f$ denotes the central average of \f$\Psi\f$ across
  * the interface, and
- * \f$[[\Psi]]=n^\text{int}\Psi^\text{int}+n^\text{ext}\Psi^\text{ext}\f$
+ * \f$[[\Psi]]^i=n^i\left(\Psi^\text{int}-\Psi^\text{ext}\right)\f$
  * denotes the jump of \f$\Psi\f$ across the interface.
  *
  * ### Auxiliary pass
@@ -61,12 +61,9 @@ namespace SecondOrderScalarWave::BoundaryCorrections {
  *
  * \f{align*}{
  * \Psi^* = \{\{ \Psi \}\}
- *   - \frac{\tau_2}{2} [[ \Psi ]],
  * \f}
  *
- * \f$\Psi^*\f$ is generalized to more than 1D naively by interpreting
- * \f$\Psi^*n_i\f$ as the sum of a scalar-vector product from the central
- * average term and a dot product from the jump term.
+ * is the central flux.
  *
  * ### Physical pass
  *
@@ -85,33 +82,28 @@ namespace SecondOrderScalarWave::BoundaryCorrections {
  * \f}
  *
  * \f{align*}{
- * (f_\Phi^i)^* = \{\{ f_\Phi^i \}\} + \frac{\tau_1}{2} [[ \Pi ]]
+ * (f_\Phi^i)^* = \{\{ f_\Phi^i \}\} + \frac{\tau}{2} [[ \Pi ]]^i
  * \f}
  *
- * \f$\partial_t \Psi = -\Pi\f$ contains no spatial derivative and receives
+ * \f$\partial_t \Psi = -\Pi\f$ contains no spatial derivative so receives
  * no boundary correction.
  */
 template <size_t Dim>
 class LaxFriedrichs final : public evolution::BoundaryCorrection {
  public:
-  struct Tau1 {
+  struct Tau {
     using type = double;
     static constexpr Options::String help = {
-        "The penalty parameter tau1 for the physical numerical flux."};
-  };
-  struct Tau2 {
-    using type = double;
-    static constexpr Options::String help = {
-        "The penalty parameter tau2 for the auxiliary numerical flux"};
+        "The penalty parameter tau for the physical numerical flux."};
   };
 
-  using options = tmpl::list<Tau1, Tau2>;
+  using options = tmpl::list<Tau>;
   static constexpr Options::String help = {
       "Boundary correction to the LDG method using the LaxFriedrichs numerical "
       "flux."};
 
   LaxFriedrichs() = default;
-  explicit LaxFriedrichs(double tau1, double tau2);
+  explicit LaxFriedrichs(double tau);
   LaxFriedrichs(const LaxFriedrichs&) = default;
   LaxFriedrichs& operator=(const LaxFriedrichs&) = default;
   LaxFriedrichs(LaxFriedrichs&&) = default;
@@ -157,14 +149,12 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
 
       dg::Formulation /*dg_formulation*/) const;
 
-  using dg_auxiliary_package_field_tags =
-      tmpl::list<Tags::Psi, Tags::PsiTimesNormal<Dim>>;
+  using dg_auxiliary_package_field_tags = tmpl::list<Tags::PsiTimesNormal<Dim>>;
   using dg_auxiliary_package_data_temporary_tags = tmpl::list<>;
   using dg_auxiliary_package_data_volume_tags = tmpl::list<>;
   using dg_auxiliary_boundary_terms_volume_tags = tmpl::list<>;
 
   double dg_auxiliary_package_data(
-      gsl::not_null<Scalar<DataVector>*> packaged_psi,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
           psi_times_normal,
 
@@ -180,10 +170,8 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
           phi_boundary_correction,
 
-      const Scalar<DataVector>& psi_int,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& psi_times_normal_int,
 
-      const Scalar<DataVector>& psi_ext,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& psi_times_normal_ext,
 
       dg::Formulation /*dg_formulation*/) const;
@@ -194,8 +182,7 @@ class LaxFriedrichs final : public evolution::BoundaryCorrection {
   friend bool operator==(const LaxFriedrichs<LocalDim>& lhs,
                          const LaxFriedrichs<LocalDim>& rhs);
 
-  double tau1_ = std::numeric_limits<double>::signaling_NaN();
-  double tau2_ = std::numeric_limits<double>::signaling_NaN();
+  double tau_ = std::numeric_limits<double>::signaling_NaN();
 };
 
 template <size_t Dim>

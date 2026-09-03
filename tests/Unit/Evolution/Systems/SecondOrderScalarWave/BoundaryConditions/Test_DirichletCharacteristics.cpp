@@ -147,8 +147,7 @@ struct ConvertPlaneWave {
 };
 
 template <size_t Dim>
-std::string yaml_string(const bool prescribe_zero, const bool copy_psi,
-                        const bool zero_incoming) {
+std::string yaml_string(const bool zero_incoming) {
   return "DirichletCharacteristics:\n"
          "  AnalyticPrescription:\n"
          "    SecondOrderPlaneWave:\n"
@@ -165,17 +164,14 @@ std::string yaml_string(const bool prescribe_zero, const bool copy_psi,
          "          Amplitude: 0.9\n"
          "          Width: 0.6\n"
          "          Center: 0.0\n"
-         "  PrescribeZeroSpeedModes: " +
-         (prescribe_zero ? "true\n" : "false\n") +
-         "  CopyPsiFromInterior: " + (copy_psi ? "true\n" : "false\n") +
-         "  ZeroIncomingMode: " + (zero_incoming ? "true\n" : "false\n");
+         "  ZeroIncomingMode: " +
+         (zero_incoming ? "true\n" : "false\n");
 }
 
 // A random, unit-normalized covector plus the interior/boundary inputs,
 // matching the setup the generic helper builds.
 template <size_t Dim>
 struct FaceData {
-  Scalar<DataVector> interior_psi;
   Scalar<DataVector> interior_pi;
   tnsr::i<DataVector, Dim, Frame::Inertial> interior_phi;
   Scalar<DataVector> boundary_psi_value;
@@ -188,8 +184,6 @@ FaceData<Dim> make_face_data(const gsl::not_null<std::mt19937*> gen,
                              const size_t num_pts) {
   std::uniform_real_distribution<> dist(-1.0, 1.0);
   FaceData<Dim> data{};
-  data.interior_psi = make_with_random_values<Scalar<DataVector>>(
-      gen, make_not_null(&dist), num_pts);
   data.interior_pi = make_with_random_values<Scalar<DataVector>>(
       gen, make_not_null(&dist), num_pts);
   data.interior_phi =
@@ -216,11 +210,8 @@ constexpr char moving_mesh_error[] =
 
 template <size_t Dim>
 void test_dg_ghost(const gsl::not_null<std::mt19937*> gen,
-                   const bool prescribe_zero, const bool copy_psi,
                    const bool zero_incoming, const std::string& suffix) {
   CAPTURE(Dim);
-  CAPTURE(prescribe_zero);
-  CAPTURE(copy_psi);
   CAPTURE(zero_incoming);
   const size_t num_pts = Dim == 1 ? 1 : 5;
 
@@ -230,8 +221,7 @@ void test_dg_ghost(const gsl::not_null<std::mt19937*> gen,
       boundary_condition = TestHelpers::test_creation<
           std::unique_ptr<SecondOrderScalarWave::BoundaryConditions::
                               BoundaryCondition<Dim>>,
-          Metavariables<Dim>>(
-          yaml_string<Dim>(prescribe_zero, copy_psi, zero_incoming));
+          Metavariables<Dim>>(yaml_string<Dim>(zero_incoming));
 
   const auto data = make_face_data<Dim>(gen, num_pts);
   const auto solution = ConvertPlaneWave<Dim>::create_container();
@@ -247,29 +237,25 @@ void test_dg_ghost(const gsl::not_null<std::mt19937*> gen,
     const auto error = concrete.dg_ghost(
         make_not_null(&psi), make_not_null(&pi), make_not_null(&phi),
         no_mesh_vel, data.normal_covector, data.boundary_psi_value,
-        data.interior_psi, data.interior_pi, data.interior_phi, data.coords,
-        time);
+        data.interior_pi, data.interior_phi, data.coords, time);
     CHECK_FALSE(error.has_value());
 
     const auto expected_psi =
         pypp::call<Scalar<DataVector>, tmpl::list<ConvertPlaneWave<Dim>>>(
             "DirichletCharacteristics", "psi" + suffix, no_mesh_vel,
-            data.normal_covector, data.interior_psi, data.interior_pi,
-            data.interior_phi, data.boundary_psi_value, data.coords, time,
-            solution);
+            data.normal_covector, data.interior_pi, data.interior_phi,
+            data.boundary_psi_value, data.coords, time, solution);
     const auto expected_pi =
         pypp::call<Scalar<DataVector>, tmpl::list<ConvertPlaneWave<Dim>>>(
             "DirichletCharacteristics", "pi" + suffix, no_mesh_vel,
-            data.normal_covector, data.interior_psi, data.interior_pi,
-            data.interior_phi, data.boundary_psi_value, data.coords, time,
-            solution);
+            data.normal_covector, data.interior_pi, data.interior_phi,
+            data.boundary_psi_value, data.coords, time, solution);
     const auto expected_phi =
         pypp::call<tnsr::i<DataVector, Dim, Frame::Inertial>,
                    tmpl::list<ConvertPlaneWave<Dim>>>(
             "DirichletCharacteristics", "phi" + suffix, no_mesh_vel,
-            data.normal_covector, data.interior_psi, data.interior_pi,
-            data.interior_phi, data.boundary_psi_value, data.coords, time,
-            solution);
+            data.normal_covector, data.interior_pi, data.interior_phi,
+            data.boundary_psi_value, data.coords, time, solution);
     CHECK_ITERABLE_APPROX(psi, expected_psi);
     CHECK_ITERABLE_APPROX(pi, expected_pi);
     CHECK_ITERABLE_APPROX(phi, expected_phi);
@@ -284,8 +270,7 @@ void test_dg_ghost(const gsl::not_null<std::mt19937*> gen,
     const auto moving_error = concrete.dg_ghost(
         make_not_null(&psi), make_not_null(&pi), make_not_null(&phi),
         mesh_velocity, data.normal_covector, data.boundary_psi_value,
-        data.interior_psi, data.interior_pi, data.interior_phi, data.coords,
-        time);
+        data.interior_pi, data.interior_phi, data.coords, time);
     REQUIRE(moving_error.has_value());
     CHECK(moving_error.value() == moving_mesh_error);
   };
@@ -301,11 +286,9 @@ void test_dg_ghost(const gsl::not_null<std::mt19937*> gen,
 
 template <size_t Dim>
 void test_boundary_field_time_derivatives(
-    const gsl::not_null<std::mt19937*> gen, const bool prescribe_zero,
-    const bool copy_psi, const bool zero_incoming, const std::string& suffix) {
+    const gsl::not_null<std::mt19937*> gen, const bool zero_incoming,
+    const std::string& suffix) {
   CAPTURE(Dim);
-  CAPTURE(prescribe_zero);
-  CAPTURE(copy_psi);
   CAPTURE(zero_incoming);
   const size_t num_pts = Dim == 1 ? 1 : 5;
 
@@ -313,8 +296,7 @@ void test_boundary_field_time_derivatives(
       boundary_condition = TestHelpers::test_creation<
           std::unique_ptr<SecondOrderScalarWave::BoundaryConditions::
                               BoundaryCondition<Dim>>,
-          Metavariables<Dim>>(
-          yaml_string<Dim>(prescribe_zero, copy_psi, zero_incoming));
+          Metavariables<Dim>>(yaml_string<Dim>(zero_incoming));
 
   const auto data = make_face_data<Dim>(gen, num_pts);
   const auto solution = ConvertPlaneWave<Dim>::create_container();
@@ -331,14 +313,12 @@ void test_boundary_field_time_derivatives(
         data.coords, time);
     CHECK_FALSE(error.has_value());
 
-    // dt = 0 when Psi is copied from the interior, otherwise
-    // -0.5 (interior v^+ + analytic v^- [or 0 with ZeroIncomingMode]).
+    // dt = -0.5 (interior v^+ + analytic v^- [or 0 with ZeroIncomingMode]).
     const auto expected_dt =
         pypp::call<Scalar<DataVector>, tmpl::list<ConvertPlaneWave<Dim>>>(
             "DirichletCharacteristics", "dt_boundary_psi" + suffix, no_mesh_vel,
-            data.normal_covector, data.interior_psi, data.interior_pi,
-            data.interior_phi, data.boundary_psi_value, data.coords, time,
-            solution);
+            data.normal_covector, data.interior_pi, data.interior_phi,
+            data.boundary_psi_value, data.coords, time, solution);
     CHECK_ITERABLE_APPROX(dt_boundary_psi, expected_dt);
 
     // A moving mesh is not supported: the method must return the error.
@@ -388,30 +368,21 @@ SPECTRE_TEST_CASE(
   register_classes_with_charm(
       MathFunctions::all_math_functions<1, Frame::Inertial>{});
 
-  const auto test_all_dims = [&gen](const bool prescribe_zero,
-                                    const bool copy_psi,
-                                    const bool zero_incoming,
+  const auto test_all_dims = [&gen](const bool zero_incoming,
                                     const std::string& suffix) {
-    test_dg_ghost<1>(make_not_null(&gen), prescribe_zero, copy_psi,
-                     zero_incoming, suffix);
-    test_dg_ghost<2>(make_not_null(&gen), prescribe_zero, copy_psi,
-                     zero_incoming, suffix);
-    test_dg_ghost<3>(make_not_null(&gen), prescribe_zero, copy_psi,
-                     zero_incoming, suffix);
-    test_boundary_field_time_derivatives<1>(make_not_null(&gen), prescribe_zero,
-                                            copy_psi, zero_incoming, suffix);
-    test_boundary_field_time_derivatives<2>(make_not_null(&gen), prescribe_zero,
-                                            copy_psi, zero_incoming, suffix);
-    test_boundary_field_time_derivatives<3>(make_not_null(&gen), prescribe_zero,
-                                            copy_psi, zero_incoming, suffix);
+    test_dg_ghost<1>(make_not_null(&gen), zero_incoming, suffix);
+    test_dg_ghost<2>(make_not_null(&gen), zero_incoming, suffix);
+    test_dg_ghost<3>(make_not_null(&gen), zero_incoming, suffix);
+    test_boundary_field_time_derivatives<1>(make_not_null(&gen), zero_incoming,
+                                            suffix);
+    test_boundary_field_time_derivatives<2>(make_not_null(&gen), zero_incoming,
+                                            suffix);
+    test_boundary_field_time_derivatives<3>(make_not_null(&gen), zero_incoming,
+                                            suffix);
   };
 
-  // PrescribeZeroSpeedModes = true (ghost Psi = analytic Psi)
-  test_all_dims(true, false, false, "_prescribe_zero");
-  // PrescribeZeroSpeedModes = false (ghost Psi = the boundary-evolved value)
-  test_all_dims(false, false, false, "_keep_zero");
-  // CopyPsiFromInterior = true (ghost Psi = interior Psi, dt = 0)
-  test_all_dims(false, true, false, "_copy_interior");
-  // ZeroIncomingMode = true
-  test_all_dims(false, false, true, "_zero_incoming");
+  // ZeroIncomingMode = false (incoming v^- from the analytic data)
+  test_all_dims(false, "_keep_zero");
+  // ZeroIncomingMode = true (incoming v^- set to zero)
+  test_all_dims(true, "_zero_incoming");
 }

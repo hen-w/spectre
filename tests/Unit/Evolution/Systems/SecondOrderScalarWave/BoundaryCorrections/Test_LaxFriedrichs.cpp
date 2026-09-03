@@ -41,10 +41,9 @@ void test(const gsl::not_null<std::mt19937*> gen) {
   PUPable_reg(SecondOrderScalarWave::BoundaryCorrections::LaxFriedrichs<Dim>);
 
   std::uniform_real_distribution<> dist(0.0, 2.0);
-  const double tau1 = dist(*gen);
-  const double tau2 = dist(*gen);
+  const double tau = dist(*gen);
   const SecondOrderScalarWave::BoundaryCorrections::LaxFriedrichs<Dim>
-      correction{tau1, tau2};
+      correction{tau};
 
   const auto mesh = face_mesh<Dim>();
 
@@ -64,26 +63,24 @@ void test(const gsl::not_null<std::mt19937*> gen) {
   TestHelpers::evolution::dg::test_boundary_correction_with_python<
       SecondOrderScalarWave::System<Dim>>(
       gen, "LaxFriedrichs", "dg_package_data", "dg_boundary_terms", correction,
-      mesh, {}, {}, eps, std::make_tuple(tau1, tau2));
+      mesh, {}, {}, eps, std::make_tuple(tau));
   TestHelpers::evolution::dg::test_auxiliary_boundary_correction_with_python<
       SecondOrderScalarWave::System<Dim>>(
       gen, "LaxFriedrichs", "dg_auxiliary_package_data",
       "dg_auxiliary_boundary_terms", correction, mesh, {}, {}, eps,
-      std::make_tuple(tau1, tau2));
+      std::make_tuple(tau));
 
   // Factory creation round-trips the options into an equal object.
   const auto created = TestHelpers::test_factory_creation<
       evolution::BoundaryCorrection,
       SecondOrderScalarWave::BoundaryCorrections::LaxFriedrichs<Dim>>(
       "LaxFriedrichs:\n"
-      "  Tau1: 1.5\n"
-      "  Tau2: 0.5\n");
+      "  Tau: 1.5\n");
   const auto& downcast = dynamic_cast<
       const SecondOrderScalarWave::BoundaryCorrections::LaxFriedrichs<Dim>&>(
       *created);
-  CHECK(
-      downcast ==
-      SecondOrderScalarWave::BoundaryCorrections::LaxFriedrichs<Dim>{1.5, 0.5});
+  CHECK(downcast ==
+        SecondOrderScalarWave::BoundaryCorrections::LaxFriedrichs<Dim>{1.5});
 
   // Pin the return values of the two package-data functions: the physical pass
   // returns the unit wave speed, the auxiliary pass returns a signaling NaN.
@@ -101,13 +98,14 @@ void test(const gsl::not_null<std::mt19937*> gen) {
       pi, phi, normal_covector, std::nullopt, std::nullopt);
   CHECK(max_char_speed == 1.0);
 
-  Scalar<DataVector> packaged_psi{num_pts};
   tnsr::i<DataVector, Dim, Frame::Inertial> psi_times_normal{num_pts};
-  const ScopedFpeState disable_fpes(false);
   const double auxiliary_speed = correction.dg_auxiliary_package_data(
-      make_not_null(&packaged_psi), make_not_null(&psi_times_normal), psi, pi,
-      normal_covector, std::nullopt, std::nullopt);
-  CHECK(std::isnan(auxiliary_speed));
+      make_not_null(&psi_times_normal), psi, pi, normal_covector, std::nullopt,
+      std::nullopt);
+  {
+    const ScopedFpeState disable_fpes(false);
+    CHECK(std::isnan(auxiliary_speed));
+  }
 }
 }  // namespace
 

@@ -44,20 +44,15 @@ namespace SecondOrderScalarWave::BoundaryConditions {
  *   the interior)
  * - \f$v^- = \Pi - n^i\Phi_i\f$: speed \f$-1\f$ (always incoming, taken from
  *   the analytic data, or set to zero if `ZeroIncomingMode` is true)
- * - \f$v^0_i\f$: speed \f$0\f$ (taken from the analytic data if
- *   `PrescribeZeroSpeedModes` is true, from the interior otherwise)
+ * - \f$v^0_i\f$: speed \f$0\f$ (taken from the interior)
  *
  * \f$\Psi\f$ has no characteristic field in the second-order system. The
- * ghost \f$\Psi\f$ is, by default, the boundary-evolved
+ * ghost \f$\Psi\f$ is the boundary-evolved
  * `evolution::dg::Tags::BoundaryValue<Tags::Psi>`, integrated per face from
  * the time derivative this class produces in
  * `boundary_field_time_derivatives`:
  * \f$\partial_t\Psi_b = -\Pi_b = -\tfrac{1}{2}(v^+ + v^-)\f$ evaluated from
- * the mixed characteristic modes. `CopyPsiFromInterior` instead copies the
- * ghost \f$\Psi\f$ from the interior (and the boundary-evolved value is
- * unused, so its time derivative is set to zero);
- * `PrescribeZeroSpeedModes` instead sets the ghost \f$\Psi\f$ from the
- * analytic data (its zero-speed content is prescribed like \f$v^0_i\f$).
+ * the mixed characteristic modes.
  *
  * Moving meshes are not supported: the characteristic speeds are defined
  * without a mesh velocity, so both member functions error if a face mesh
@@ -73,27 +68,6 @@ class DirichletCharacteristics final : public BoundaryCondition<Dim> {
     using type = std::unique_ptr<evolution::initial_data::InitialData>;
   };
 
-  /// \brief Whether to prescribe zero-speed characteristic modes from the
-  /// analytic solution (true) or leave them as interior values (false).
-  struct PrescribeZeroSpeedModes {
-    static constexpr Options::String help =
-        "If true, the zero-speed content (v^0 and the ghost Psi) is set from "
-        "the analytic data. If false, v^0 is taken from the interior and the "
-        "ghost Psi from the boundary-evolved value.";
-    using type = bool;
-  };
-
-  /// \brief If true, the ghost Psi is copied directly from the interior
-  /// evolved Psi, ignoring the boundary-evolved value. Cannot be combined
-  /// with `PrescribeZeroSpeedModes=true`.
-  struct CopyPsiFromInterior {
-    static constexpr Options::String help =
-        "If true, ghost Psi is copied from the interior Psi, ignoring the "
-        "boundary-evolved value. Cannot be true when PrescribeZeroSpeedModes "
-        "is also true.";
-    using type = bool;
-  };
-
   /// \brief If true, the incoming characteristic mode \f$v^-\f$ is set to
   /// zero instead of analytic data.
   struct ZeroIncomingMode {
@@ -103,13 +77,12 @@ class DirichletCharacteristics final : public BoundaryCondition<Dim> {
     using type = bool;
   };
 
-  using options = tmpl::list<AnalyticPrescription, PrescribeZeroSpeedModes,
-                             CopyPsiFromInterior, ZeroIncomingMode>;
+  using options = tmpl::list<AnalyticPrescription, ZeroIncomingMode>;
 
   static constexpr Options::String help{
       "Boundary condition using the characteristic decomposition. Incoming "
       "modes are set from analytic data, outgoing modes from the interior; "
-      "the ghost Psi is the boundary-evolved value by default."};
+      "the ghost Psi is the boundary-evolved value."};
 
   DirichletCharacteristics() = default;
   DirichletCharacteristics(DirichletCharacteristics&&) = default;
@@ -120,8 +93,6 @@ class DirichletCharacteristics final : public BoundaryCondition<Dim> {
 
   DirichletCharacteristics(std::unique_ptr<evolution::initial_data::InitialData>
                                analytic_prescription,
-                           bool prescribe_zero_speed_modes,
-                           bool copy_psi_from_interior,
                            bool zero_incoming_mode);
 
   explicit DirichletCharacteristics(CkMigrateMessage* msg);
@@ -144,7 +115,7 @@ class DirichletCharacteristics final : public BoundaryCondition<Dim> {
   static constexpr bool evolves_boundary_variables = true;
 
   using dg_interior_evolved_variables_tags =
-      tmpl::list<Tags::Psi, Tags::Pi, Tags::Phi<Dim>>;
+      tmpl::list<Tags::Pi, Tags::Phi<Dim>>;
   using dg_interior_temporary_tags =
       tmpl::list<domain::Tags::Coordinates<Dim, Frame::Inertial>>;
   using dg_interior_dt_vars_tags = tmpl::list<>;
@@ -171,7 +142,6 @@ class DirichletCharacteristics final : public BoundaryCondition<Dim> {
           face_mesh_velocity,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
       const Scalar<DataVector>& boundary_psi_value,
-      const Scalar<DataVector>& interior_psi,
       const Scalar<DataVector>& interior_pi,
       const tnsr::i<DataVector, Dim, Frame::Inertial>& interior_phi,
       const tnsr::I<DataVector, Dim, Frame::Inertial>& coords,
@@ -194,8 +164,6 @@ class DirichletCharacteristics final : public BoundaryCondition<Dim> {
 
  private:
   std::unique_ptr<evolution::initial_data::InitialData> analytic_prescription_;
-  bool prescribe_zero_speed_modes_{false};
-  bool copy_psi_from_interior_{false};
   bool zero_incoming_mode_{false};
 };
 }  // namespace SecondOrderScalarWave::BoundaryConditions

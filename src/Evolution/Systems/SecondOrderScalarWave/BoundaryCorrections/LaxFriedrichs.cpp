@@ -22,8 +22,7 @@ LaxFriedrichs<Dim>::LaxFriedrichs(CkMigrateMessage* msg)
     : BoundaryCorrection(msg) {}
 
 template <size_t Dim>
-LaxFriedrichs<Dim>::LaxFriedrichs(const double tau1, const double tau2)
-    : tau1_(tau1), tau2_(tau2) {}
+LaxFriedrichs<Dim>::LaxFriedrichs(const double tau) : tau_(tau) {}
 
 template <size_t Dim>
 std::unique_ptr<evolution::BoundaryCorrection> LaxFriedrichs<Dim>::get_clone()
@@ -34,8 +33,7 @@ std::unique_ptr<evolution::BoundaryCorrection> LaxFriedrichs<Dim>::get_clone()
 template <size_t Dim>
 void LaxFriedrichs<Dim>::pup(PUP::er& p) {
   BoundaryCorrection::pup(p);
-  p | tau1_;
-  p | tau2_;
+  p | tau_;
 }
 
 template <size_t Dim>
@@ -75,12 +73,11 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
   get(*psi_boundary_correction) = 0.0;
   get(*pi_boundary_correction) =
       -0.5 * (get(normal_dot_phi_int) + get(normal_dot_phi_ext)) -
-      tau1_ * 0.5 * (get(pi_ext) - get(pi_int));
+      tau_ * 0.5 * (get(pi_ext) - get(pi_int));
 }
 
 template <size_t Dim>
 double LaxFriedrichs<Dim>::dg_auxiliary_package_data(
-    const gsl::not_null<Scalar<DataVector>*> packaged_psi,
     const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
         psi_times_normal,
 
@@ -91,7 +88,6 @@ double LaxFriedrichs<Dim>::dg_auxiliary_package_data(
         tnsr::I<DataVector, Dim, Frame::Inertial>>& /*mesh_velocity*/,
     const std::optional<Scalar<DataVector>>& /*normal_dot_mesh_velocity*/)
     const {
-  get(*packaged_psi) = get(psi);
   for (size_t d = 0; d < Dim; ++d) {
     psi_times_normal->get(d) = get(psi) * normal_covector.get(d);
   }
@@ -104,24 +100,21 @@ void LaxFriedrichs<Dim>::dg_auxiliary_boundary_terms(
     const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>
         phi_boundary_correction,
 
-    const Scalar<DataVector>& psi_int,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& psi_times_normal_int,
 
-    const Scalar<DataVector>& psi_ext,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& psi_times_normal_ext,
 
     dg::Formulation /*dg_formulation*/) const {
   for (size_t d = 0; d < Dim; ++d) {
     phi_boundary_correction->get(d) =
-        0.5 * (psi_times_normal_int.get(d) + psi_times_normal_ext.get(d)) -
-        0.5 * tau2_ * (get(psi_ext) - get(psi_int));
+        0.5 * (psi_times_normal_int.get(d) + psi_times_normal_ext.get(d));
   }
 }
 
 template <size_t LocalDim>
 bool operator==(const LaxFriedrichs<LocalDim>& lhs,
                 const LaxFriedrichs<LocalDim>& rhs) {
-  return lhs.tau1_ == rhs.tau1_ and lhs.tau2_ == rhs.tau2_;
+  return lhs.tau_ == rhs.tau_;
 }
 
 template <size_t Dim>
