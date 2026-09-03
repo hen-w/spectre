@@ -61,6 +61,6 @@ struct System {
   using compute_volume_time_derivative_terms = TimeDerivative<Dim>;
 
   using compute_largest_characteristic_speed =
-      Tags::ComputeLargestCharacteristicSpeed;
+      Tags::ComputeLargestCharacteristicSpeed<Dim>;
 };
 }  // namespace SecondOrderScalarWave

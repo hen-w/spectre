@@ -5,11 +5,13 @@
 
 #include <array>
 #include <cstddef>
+#include <optional>
 
 #include "DataStructures/DataBox/Tag.hpp"
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "Domain/FaceNormal.hpp"
+#include "Domain/TagsTimeDependent.hpp"
 #include "Evolution/Systems/SecondOrderScalarWave/Tags.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/MakeWithValue.hpp"
@@ -34,15 +36,30 @@ namespace SecondOrderScalarWave {
  * The characteristic fields are, in order, \f$v^0_i\f$ (`Tags::VZero`),
  * \f$v^+\f$ (`Tags::VPlus`), and \f$v^-\f$ (`Tags::VMinus`). Their
  * characteristic speeds are 0, +1, and -1, respectively.
+ *
+ * When a mesh velocity \f$v^i\f$ is supplied, the speeds are the grid-frame
+ * ones obtained by subtracting \f$n_i v^i\f$ from each inertial-frame speed:
+ *
+ * \f{align*}
+ * \lambda^0 =& -n_i v^i, \\
+ * \lambda^\pm =& \pm 1 - n_i v^i,
+ * \f}
+ *
+ * where \f$n_i\f$ is the unit normal along which the characteristic fields are
+ * defined.
  */
 template <size_t Dim>
 std::array<DataVector, 3> characteristic_speeds(
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& unit_normal_one_form);
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& unit_normal_one_form,
+    const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+        mesh_velocity);
 
 template <size_t Dim>
 void characteristic_speeds(
     gsl::not_null<std::array<DataVector, 3>*> char_speeds,
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& unit_normal_one_form);
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& unit_normal_one_form,
+    const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+        mesh_velocity);
 
 namespace Tags {
 template <size_t Dim>
@@ -51,12 +68,15 @@ struct CharacteristicSpeedsCompute : Tags::CharacteristicSpeeds<Dim>,
   using base = Tags::CharacteristicSpeeds<Dim>;
   using return_type = typename base::type;
   using argument_tags =
-      tmpl::list<::Tags::Normalized<domain::Tags::UnnormalizedFaceNormal<Dim>>>;
+      tmpl::list<::Tags::Normalized<domain::Tags::UnnormalizedFaceNormal<Dim>>,
+                 domain::Tags::MeshVelocity<Dim, Frame::Inertial>>;
 
   static void function(
       gsl::not_null<return_type*> char_speeds,
-      const tnsr::i<DataVector, Dim, Frame::Inertial>& unit_normal_one_form) {
-    characteristic_speeds(char_speeds, unit_normal_one_form);
+      const tnsr::i<DataVector, Dim, Frame::Inertial>& unit_normal_one_form,
+      const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+          mesh_velocity) {
+    characteristic_speeds(char_speeds, unit_normal_one_form, mesh_velocity);
   }
 };
 }  // namespace Tags
@@ -178,16 +198,24 @@ struct LargestCharacteristicSpeed : db::SimpleTag {
   using type = double;
 };
 
-/// Compute the maximum magnitude of the characteristic speeds.
+/*!
+ * \brief Compute the maximum magnitude of the characteristic speeds.
+ *
+ * On a static mesh the bound is \f$1\f$. On a moving mesh the grid-frame
+ * speeds are \f$\pm 1 - n_i v^i\f$, whose magnitude is bounded by
+ * \f$1 + \max|v|\f$; that honest bound is returned.
+ */
+template <size_t Dim>
 struct ComputeLargestCharacteristicSpeed : LargestCharacteristicSpeed,
                                            db::ComputeTag {
-  using argument_tags = tmpl::list<>;
+  using argument_tags =
+      tmpl::list<domain::Tags::MeshVelocity<Dim, Frame::Inertial>>;
   using return_type = double;
   using base = LargestCharacteristicSpeed;
-  SPECTRE_ALWAYS_INLINE static constexpr void function(
-      const gsl::not_null<double*> speed) {
-    *speed = 1.0;
-  }
+  static void function(
+      gsl::not_null<double*> speed,
+      const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+          mesh_velocity);
 };
 }  // namespace Tags
 /// @}

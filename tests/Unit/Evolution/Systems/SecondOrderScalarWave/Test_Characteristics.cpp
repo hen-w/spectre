@@ -7,7 +7,9 @@
 #include <cstddef>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <pup.h>
+#include <random>
 
 #include "DataStructures/DataBox/Prefixes.hpp"
 #include "DataStructures/DataVector.hpp"
@@ -21,6 +23,7 @@
 #include "Domain/CoordinateMaps/CoordinateMap.tpp"
 #include "Domain/CoordinateMaps/ProductMaps.hpp"
 #include "Domain/CoordinateMaps/ProductMaps.tpp"
+#include "Domain/TagsTimeDependent.hpp"
 #include "Evolution/Systems/SecondOrderScalarWave/Characteristics.hpp"
 #include "Evolution/Systems/SecondOrderScalarWave/Tags.hpp"
 #include "Framework/CheckWithRandomValues.hpp"
@@ -35,14 +38,19 @@
 #include "PointwiseFunctions/AnalyticSolutions/WaveEquation/SecondOrderWrapper.hpp"
 #include "PointwiseFunctions/MathFunctions/MathFunction.hpp"
 #include "PointwiseFunctions/MathFunctions/PowX.hpp"
+#include "Utilities/Gsl.hpp"
 #include "Utilities/MakeWithValue.hpp"
+#include "Utilities/TMPL.hpp"
 
 namespace {
 template <size_t Index, size_t Dim>
 Scalar<DataVector> speed_with_index(
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal) {
-  return Scalar<DataVector>{
-      SecondOrderScalarWave::characteristic_speeds<Dim>(normal)[Index]};
+  // The static (no-mesh-velocity) speeds are recovered by passing an unset
+  // optional mesh velocity. These are checked against the python reference,
+  // which returns the exact constants 0, +1, -1.
+  return Scalar<DataVector>{SecondOrderScalarWave::characteristic_speeds<Dim>(
+      normal, std::nullopt)[Index]};
 }
 
 template <size_t Dim>
@@ -73,10 +81,185 @@ void test_characteristic_speeds_constant() {
 
   std::array<DataVector, 3> char_speeds{};
   SecondOrderScalarWave::Tags::CharacteristicSpeedsCompute<Dim>::function(
-      &char_speeds, unit_normal_one_form);
+      &char_speeds, unit_normal_one_form, std::nullopt);
   CHECK(char_speeds[0] == DataVector(n_pts, 0.));   // VZero
   CHECK(char_speeds[1] == DataVector(n_pts, 1.));   // VPlus
   CHECK(char_speeds[2] == DataVector(n_pts, -1.));  // VMinus
+}
+
+// (a) Static speeds via the free function with an unset mesh velocity: the
+// speeds are the exact set constants {0, +1, -1} at every point, so exact
+// comparison is appropriate.
+template <size_t Dim>
+void test_characteristic_speeds_static() {
+  const size_t n_pts = 5;
+  const tnsr::i<DataVector, Dim, Frame::Inertial> unit_normal_one_form{
+      DataVector(n_pts, 1. / sqrt(Dim))};
+  const auto speeds = SecondOrderScalarWave::characteristic_speeds<Dim>(
+      unit_normal_one_form, std::nullopt);
+  CHECK(speeds[0] == DataVector(n_pts, 0.));   // VZero
+  CHECK(speeds[1] == DataVector(n_pts, 1.));   // VPlus
+  CHECK(speeds[2] == DataVector(n_pts, -1.));  // VMinus
+}
+
+// Build a random per-point unit normal one-form (Euclidean normalized) and a
+// random per-point mesh velocity with components uniform in [-2, 2] (so that
+// |n.v| > 1 occurs at some points).
+template <size_t Dim>
+void make_random_normal_and_velocity(
+    const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*> normal,
+    const gsl::not_null<tnsr::I<DataVector, Dim, Frame::Inertial>*> velocity,
+    const gsl::not_null<std::mt19937*> gen) {
+  std::uniform_real_distribution<> normal_dist(-10., 10.);
+  std::uniform_real_distribution<> velocity_dist(-2., 2.);
+  fill_with_random_values(normal, gen, make_not_null(&normal_dist));
+  const auto mag = magnitude(*normal);
+  for (size_t i = 0; i < Dim; ++i) {
+    normal->get(i) /= get(mag);
+  }
+  fill_with_random_values(velocity, gen, make_not_null(&velocity_dist));
+}
+
+// (b) Shift identities that must hold for the mesh-velocity-aware speeds, plus
+// (c) a hand-computed pin and (e)(f) direct compute-tag/free-function checks.
+template <size_t Dim>
+void test_characteristic_speeds_moving_mesh() {
+  CAPTURE(Dim);
+  MAKE_GENERATOR(gen);
+  const size_t n_pts = 5;
+
+  auto normal = make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(
+      DataVector(n_pts), 0.);
+  auto velocity = make_with_value<tnsr::I<DataVector, Dim, Frame::Inertial>>(
+      DataVector(n_pts), 0.);
+  make_random_normal_and_velocity<Dim>(
+      make_not_null(&normal), make_not_null(&velocity), make_not_null(&gen));
+
+  const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>> mesh_velocity{
+      velocity};
+  const auto speeds =
+      SecondOrderScalarWave::characteristic_speeds<Dim>(normal, mesh_velocity);
+  const auto& lambda_zero = speeds[0];
+  const auto& lambda_plus = speeds[1];
+  const auto& lambda_minus = speeds[2];
+
+  // (b) lambda_plus - lambda_minus == 2 exactly (independent of v).
+  const DataVector plus_minus_difference = lambda_plus - lambda_minus;
+  CHECK_ITERABLE_APPROX(plus_minus_difference, DataVector(n_pts, 2.));
+  // (b) lambda_plus + lambda_minus == 2 * lambda_zero.
+  const DataVector plus_minus_sum = lambda_plus + lambda_minus;
+  const DataVector twice_lambda_zero = 2. * lambda_zero;
+  CHECK_ITERABLE_APPROX(plus_minus_sum, twice_lambda_zero);
+  // (b) lambda_zero == -n.v (this is the definition; the hand pin below is the
+  // independent cross-check).
+  const DataVector minus_normal_dot_velocity =
+      -get(dot_product(normal, velocity));
+  CHECK_ITERABLE_APPROX(lambda_zero, minus_normal_dot_velocity);
+
+  // (e) Compute-tag ::function reproduces the free function.
+  {
+    std::array<DataVector, 3> tag_speeds{};
+    SecondOrderScalarWave::Tags::CharacteristicSpeedsCompute<Dim>::function(
+        &tag_speeds, normal, mesh_velocity);
+    CHECK_ITERABLE_APPROX(tag_speeds[0], lambda_zero);
+    CHECK_ITERABLE_APPROX(tag_speeds[1], lambda_plus);
+    CHECK_ITERABLE_APPROX(tag_speeds[2], lambda_minus);
+
+    // Also with an unset mesh velocity (matches the free function nullopt
+    // call).
+    std::array<DataVector, 3> tag_speeds_static{};
+    SecondOrderScalarWave::Tags::CharacteristicSpeedsCompute<Dim>::function(
+        &tag_speeds_static, normal, std::nullopt);
+    const auto static_speeds =
+        SecondOrderScalarWave::characteristic_speeds<Dim>(normal, std::nullopt);
+    CHECK_ITERABLE_APPROX(tag_speeds_static[0], static_speeds[0]);
+    CHECK_ITERABLE_APPROX(tag_speeds_static[1], static_speeds[1]);
+    CHECK_ITERABLE_APPROX(tag_speeds_static[2], static_speeds[2]);
+  }
+
+  // (e) The compute tag's argument_tags must end with the mesh velocity tag.
+  static_assert(
+      tmpl::list_contains_v<typename SecondOrderScalarWave::Tags::
+                                CharacteristicSpeedsCompute<Dim>::argument_tags,
+                            domain::Tags::MeshVelocity<Dim, Frame::Inertial>>,
+      "CharacteristicSpeedsCompute::argument_tags must contain MeshVelocity");
+}
+
+// (c) Hand-computed pin for the mesh-velocity speeds at a single point in 2D:
+// n = (1, 0), v = (0.3, -0.2) -> n.v = 0.3, so
+// lambda = {-n.v, 1 - n.v, -1 - n.v} = {-0.3, 0.7, -1.3}.
+void test_characteristic_speeds_hand_pin() {
+  const size_t n_pts = 1;
+  tnsr::i<DataVector, 2, Frame::Inertial> normal{DataVector(n_pts, 0.)};
+  get<0>(normal) = DataVector(n_pts, 1.);
+  get<1>(normal) = DataVector(n_pts, 0.);
+  tnsr::I<DataVector, 2, Frame::Inertial> velocity{DataVector(n_pts, 0.)};
+  get<0>(velocity) = DataVector(n_pts, 0.3);
+  get<1>(velocity) = DataVector(n_pts, -0.2);
+
+  const std::optional<tnsr::I<DataVector, 2, Frame::Inertial>> mesh_velocity{
+      velocity};
+  const auto speeds =
+      SecondOrderScalarWave::characteristic_speeds<2>(normal, mesh_velocity);
+  CHECK_ITERABLE_APPROX(speeds[0], DataVector(n_pts, -0.3));  // VZero
+  CHECK_ITERABLE_APPROX(speeds[1], DataVector(n_pts, 0.7));   // VPlus
+  CHECK_ITERABLE_APPROX(speeds[2], DataVector(n_pts, -1.3));  // VMinus
+}
+
+// (d) An engaged (present) mesh velocity that is identically zero must
+// reproduce the unset-optional (static) result for all three speeds.
+template <size_t Dim>
+void test_characteristic_speeds_zero_velocity_reduction() {
+  CAPTURE(Dim);
+  MAKE_GENERATOR(gen);
+  const size_t n_pts = 5;
+
+  auto normal = make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(
+      DataVector(n_pts), 0.);
+  std::uniform_real_distribution<> normal_dist(-10., 10.);
+  fill_with_random_values(make_not_null(&normal), make_not_null(&gen),
+                          make_not_null(&normal_dist));
+  const auto mag = magnitude(normal);
+  for (size_t i = 0; i < Dim; ++i) {
+    normal.get(i) /= get(mag);
+  }
+
+  const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>> zero_velocity{
+      make_with_value<tnsr::I<DataVector, Dim, Frame::Inertial>>(
+          DataVector(n_pts), 0.)};
+  const auto engaged =
+      SecondOrderScalarWave::characteristic_speeds<Dim>(normal, zero_velocity);
+  const auto unset =
+      SecondOrderScalarWave::characteristic_speeds<Dim>(normal, std::nullopt);
+  CHECK_ITERABLE_APPROX(engaged[0], unset[0]);
+  CHECK_ITERABLE_APPROX(engaged[1], unset[1]);
+  CHECK_ITERABLE_APPROX(engaged[2], unset[2]);
+}
+
+// (f) ComputeLargestCharacteristicSpeed<Dim>: direct ::function calls.
+template <size_t Dim>
+void test_largest_characteristic_speed() {
+  // Unset mesh velocity -> exactly 1.0.
+  double speed = std::numeric_limits<double>::signaling_NaN();
+  SecondOrderScalarWave::Tags::ComputeLargestCharacteristicSpeed<Dim>::function(
+      make_not_null(&speed), std::nullopt);
+  CHECK(speed == 1.0);
+}
+
+// (f) 2D hand pin for the largest characteristic speed: point0 v = (0.3, -0.4)
+// (|v| = 0.5), point1 v = (-1.2, 0.9) (|v| = 1.5) -> 1 + max(|v|) = 2.5.
+void test_largest_characteristic_speed_hand_pin() {
+  const size_t n_pts = 2;
+  tnsr::I<DataVector, 2, Frame::Inertial> velocity{DataVector(n_pts, 0.)};
+  get<0>(velocity) = DataVector{0.3, -1.2};
+  get<1>(velocity) = DataVector{-0.4, 0.9};
+  const std::optional<tnsr::I<DataVector, 2, Frame::Inertial>> mesh_velocity{
+      velocity};
+
+  double speed = std::numeric_limits<double>::signaling_NaN();
+  SecondOrderScalarWave::Tags::ComputeLargestCharacteristicSpeed<2>::function(
+      make_not_null(&speed), mesh_velocity);
+  CHECK(approx(speed) == 2.5);
 }
 
 template <typename Tag, size_t Dim>
@@ -122,7 +305,7 @@ void test_characteristic_fields_analytic(
     const std::array<double, Dim>& upper_bound) {
   // Set up grid
   const Mesh<Dim> mesh{grid_size_each_dimension, Spectral::Basis::Legendre,
-                 Spectral::Quadrature::GaussLobatto};
+                       Spectral::Quadrature::GaussLobatto};
 
   using Affine = domain::CoordinateMaps::Affine;
   using Affine3D =
@@ -225,7 +408,7 @@ void test_fields_from_inverse_characteristic_transform_analytic(
     const std::array<double, Dim>& upper_bound) {
   // Set up grid
   const Mesh<Dim> mesh{grid_size_each_dimension, Spectral::Basis::Legendre,
-                 Spectral::Quadrature::GaussLobatto};
+                       Spectral::Quadrature::GaussLobatto};
 
   using Affine = domain::CoordinateMaps::Affine;
   using Affine3D =
@@ -371,6 +554,26 @@ SPECTRE_TEST_CASE(
   test_characteristic_speeds_constant<2>();
   test_characteristic_speeds_constant<3>();
 
+  // Moving-mesh characteristic-speed coverage.
+  test_characteristic_speeds_static<1>();
+  test_characteristic_speeds_static<2>();
+  test_characteristic_speeds_static<3>();
+
+  test_characteristic_speeds_moving_mesh<1>();
+  test_characteristic_speeds_moving_mesh<2>();
+  test_characteristic_speeds_moving_mesh<3>();
+
+  test_characteristic_speeds_hand_pin();
+
+  test_characteristic_speeds_zero_velocity_reduction<1>();
+  test_characteristic_speeds_zero_velocity_reduction<2>();
+  test_characteristic_speeds_zero_velocity_reduction<3>();
+
+  test_largest_characteristic_speed<1>();
+  test_largest_characteristic_speed<2>();
+  test_largest_characteristic_speed<3>();
+  test_largest_characteristic_speed_hand_pin();
+
   // Test characteristics against 3D plane wave
   const size_t grid_size = 8;
   const std::array<double, 3> lower_bound{{0.82, 1.22, 1.32}};
@@ -391,10 +594,4 @@ SPECTRE_TEST_CASE(
                                          lower_bound, upper_bound);
   test_fields_from_inverse_characteristic_transform_analytic<3>(
       plane_wave_solution, grid_size, lower_bound, upper_bound);
-
-  double largest_characteristic_speed =
-      std::numeric_limits<double>::signaling_NaN();
-  SecondOrderScalarWave::Tags::ComputeLargestCharacteristicSpeed::function(
-      make_not_null(&largest_characteristic_speed));
-  CHECK(largest_characteristic_speed == 1.0);
 }

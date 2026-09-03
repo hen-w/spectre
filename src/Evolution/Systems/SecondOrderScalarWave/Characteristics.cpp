@@ -3,9 +3,12 @@
 
 #include "Evolution/Systems/SecondOrderScalarWave/Characteristics.hpp"
 
+#include <algorithm>
 #include <array>
+#include <optional>
 
 #include "DataStructures/Tensor/EagerMath/DotProduct.hpp"
+#include "DataStructures/Tensor/EagerMath/Magnitude.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
 #include "Utilities/ContainerHelpers.hpp"
@@ -18,19 +21,31 @@ namespace SecondOrderScalarWave {
 template <size_t Dim>
 void characteristic_speeds(
     const gsl::not_null<std::array<DataVector, 3>*> char_speeds,
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& unit_normal_one_form) {
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& unit_normal_one_form,
+    const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+        mesh_velocity) {
   set_number_of_grid_points(char_speeds, unit_normal_one_form);
   (*char_speeds)[0] = 0.;   // VZero
   (*char_speeds)[1] = 1.;   // VPlus
   (*char_speeds)[2] = -1.;  // VMinus
+  if (mesh_velocity.has_value()) {
+    const auto normal_dot_mesh_velocity =
+        dot_product(*mesh_velocity, unit_normal_one_form);
+    (*char_speeds)[0] -= get(normal_dot_mesh_velocity);
+    (*char_speeds)[1] -= get(normal_dot_mesh_velocity);
+    (*char_speeds)[2] -= get(normal_dot_mesh_velocity);
+  }
 }
 
 template <size_t Dim>
 std::array<DataVector, 3> characteristic_speeds(
-    const tnsr::i<DataVector, Dim, Frame::Inertial>& unit_normal_one_form) {
+    const tnsr::i<DataVector, Dim, Frame::Inertial>& unit_normal_one_form,
+    const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+        mesh_velocity) {
   auto char_speeds = make_with_value<std::array<DataVector, 3>>(
       get<0>(unit_normal_one_form), 0.);
-  characteristic_speeds(make_not_null(&char_speeds), unit_normal_one_form);
+  characteristic_speeds(make_not_null(&char_speeds), unit_normal_one_form,
+                        mesh_velocity);
   return char_speeds;
 }
 
@@ -100,6 +115,18 @@ fields_from_inverse_characteristic_transform(
                                                unit_normal_one_form);
   return evolved_fields;
 }
+
+template <size_t Dim>
+void Tags::ComputeLargestCharacteristicSpeed<Dim>::function(
+    const gsl::not_null<double*> speed,
+    const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
+        mesh_velocity) {
+  if (mesh_velocity.has_value()) {
+    *speed = 1.0 + max(get(magnitude(*mesh_velocity)));
+  } else {
+    *speed = 1.0;
+  }
+}
 }  // namespace SecondOrderScalarWave
 
 #define DIM(data) BOOST_PP_TUPLE_ELEM(0, data)
@@ -108,13 +135,19 @@ fields_from_inverse_characteristic_transform(
   template void SecondOrderScalarWave::characteristic_speeds(                  \
       const gsl::not_null<std::array<DataVector, 3>*> char_speeds,             \
       const tnsr::i<DataVector, DIM(data), Frame::Inertial>&                   \
-          unit_normal_one_form);                                               \
+          unit_normal_one_form,                                                \
+      const std::optional<tnsr::I<DataVector, DIM(data), Frame::Inertial>>&    \
+          mesh_velocity);                                                      \
   template std::array<DataVector, 3>                                           \
   SecondOrderScalarWave::characteristic_speeds(                                \
       const tnsr::i<DataVector, DIM(data), Frame::Inertial>&                   \
-          unit_normal_one_form);                                               \
+          unit_normal_one_form,                                                \
+      const std::optional<tnsr::I<DataVector, DIM(data), Frame::Inertial>>&    \
+          mesh_velocity);                                                      \
   template struct SecondOrderScalarWave::Tags::CharacteristicSpeedsCompute<    \
       DIM(data)>;                                                              \
+  template struct SecondOrderScalarWave::Tags::                                \
+      ComputeLargestCharacteristicSpeed<DIM(data)>;                            \
   template void SecondOrderScalarWave::characteristic_fields(                  \
       const gsl::not_null<                                                     \
           Variables<tmpl::list<SecondOrderScalarWave::Tags::VZero<DIM(data)>,  \
