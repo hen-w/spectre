@@ -47,6 +47,12 @@ struct NormalDotPhi : db::SimpleTag {
   using type = Scalar<DataVector>;
 };
 
+/// The mesh velocity projected onto the face normal, \f$n_i v^i\f$; zero on
+/// a static mesh.
+struct NormalDotMeshVelocity : db::SimpleTag {
+  using type = Scalar<DataVector>;
+};
+
 /// The scalar field multiplied by the face normal, \f$\Psi n_i\f$.
 template <size_t Dim>
 struct PsiTimesNormal : db::SimpleTag {

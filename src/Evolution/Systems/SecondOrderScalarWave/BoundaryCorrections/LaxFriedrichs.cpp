@@ -40,21 +40,27 @@ template <size_t Dim>
 double LaxFriedrichs<Dim>::dg_package_data(
     const gsl::not_null<Scalar<DataVector>*> packaged_pi,
     const gsl::not_null<Scalar<DataVector>*> packaged_normal_dot_phi,
+    const gsl::not_null<Scalar<DataVector>*> packaged_psi,
+    const gsl::not_null<Scalar<DataVector>*> packaged_normal_dot_mesh_velocity,
 
-    const Scalar<DataVector>& /*psi*/, const Scalar<DataVector>& pi,
+    const Scalar<DataVector>& psi, const Scalar<DataVector>& pi,
     const tnsr::i<DataVector, Dim, Frame::Inertial>& phi,
 
     const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
     const std::optional<tnsr::I<DataVector, Dim, Frame::Inertial>>&
     /*mesh_velocity*/,
-    const std::optional<Scalar<DataVector>>& /*normal_dot_mesh_velocity*/)
-    const {
+    const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity) const {
   get(*packaged_pi) = get(pi);
   get(*packaged_normal_dot_phi) = 0.0;
   for (size_t d = 0; d < Dim; ++d) {
     get(*packaged_normal_dot_phi) += normal_covector.get(d) * phi.get(d);
   }
-
+  get(*packaged_psi) = get(psi);
+  if (normal_dot_mesh_velocity.has_value()) {
+    get(*packaged_normal_dot_mesh_velocity) = get(*normal_dot_mesh_velocity);
+    return 1.0 + max(abs(get(*normal_dot_mesh_velocity)));
+  }
+  get(*packaged_normal_dot_mesh_velocity) = 0.0;
   return 1.0;
 }
 
@@ -65,15 +71,38 @@ void LaxFriedrichs<Dim>::dg_boundary_terms(
 
     const Scalar<DataVector>& pi_int,
     const Scalar<DataVector>& normal_dot_phi_int,
+    const Scalar<DataVector>& psi_int,
+    const Scalar<DataVector>& normal_dot_mesh_velocity_int,
 
     const Scalar<DataVector>& pi_ext,
     const Scalar<DataVector>& normal_dot_phi_ext,
+    const Scalar<DataVector>& psi_ext,
+    const Scalar<DataVector>& normal_dot_mesh_velocity_ext,
 
     dg::Formulation /*dg_formulation*/) const {
-  get(*psi_boundary_correction) = 0.0;
+  // The advection-consistency terms: v^i contracted with the central-flux
+  // correction that upgrades the raw spectral derivative to the
+  // LDG-corrected one, applied to BOTH advected fields. For Psi the lift
+  // converts the volume v^i d_i Psi term into v^i Phi_i; for Pi it
+  // likewise replaces the raw d_i Pi in the volume advection term by its
+  // centrally-corrected counterpart. Both terms are zero on a static mesh
+  // (both packaged n.v vanish) and on continuous data
+  // (n.v_ext = -n.v_int, field_ext = field_int).
+  //
+  // The penalty coefficient is tau times the largest characteristic-speed
+  // magnitude over the modes and both sides of the interface. The grid-frame
+  // speeds along a normal n are {-n.v, 1 - n.v, -1 - n.v}, so the largest
+  // magnitude on a side is 1 + |n.v|; the mesh velocity is continuous across
+  // the interface, so the interior value covers both sides.
+  get(*psi_boundary_correction) =
+      0.5 * (get(normal_dot_mesh_velocity_int) * get(psi_int) +
+             get(normal_dot_mesh_velocity_ext) * get(psi_ext));
   get(*pi_boundary_correction) =
-      -0.5 * (get(normal_dot_phi_int) + get(normal_dot_phi_ext)) -
-      tau_ * 0.5 * (get(pi_ext) - get(pi_int));
+      -0.5 * (get(normal_dot_phi_int) + get(normal_dot_phi_ext)) +
+      0.5 * (get(normal_dot_mesh_velocity_int) * get(pi_int) +
+             get(normal_dot_mesh_velocity_ext) * get(pi_ext)) -
+      tau_ * 0.5 * (1.0 + abs(get(normal_dot_mesh_velocity_int))) *
+          (get(pi_ext) - get(pi_int));
 }
 
 template <size_t Dim>
