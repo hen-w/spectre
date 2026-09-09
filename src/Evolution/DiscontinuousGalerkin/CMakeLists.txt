@@ -13,6 +13,7 @@ spectre_target_headers(
   InboxBoundaryData.hpp
   InboxTags.hpp
   InterfaceDataPolicy.hpp
+  InterfaceOrientation.hpp
   InterpolatedBoundaryData.hpp
   MortarData.hpp
   MortarDataHolder.hpp
@@ -34,6 +35,7 @@ spectre_target_sources(
   InboxTags.cpp
   InstantiateBoundaryHistory.cpp
   InterfaceDataPolicy.cpp
+  InterfaceOrientation.cpp
   InterpolatedBoundaryData.cpp
   MortarData.cpp
   MortarDataHolder.cpp

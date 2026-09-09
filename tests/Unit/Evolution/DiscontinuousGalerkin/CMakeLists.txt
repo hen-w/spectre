@@ -21,6 +21,7 @@ set(LIBRARY_SOURCES
   Test_CleanMortarHistory.cpp
   Test_InboxTags.cpp
   Test_InterfaceDataPolicy.cpp
+  Test_InterfaceOrientation.cpp
   Test_InterpolatedBoundaryData.cpp
   Test_MortarData.cpp
   Test_MortarDataHolder.cpp
