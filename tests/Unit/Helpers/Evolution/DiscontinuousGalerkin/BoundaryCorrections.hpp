@@ -12,7 +12,6 @@
 #include <type_traits>
 
 #include "DataStructures/DataBox/PrefixHelpers.hpp"
-#include "Domain/Structure/Direction.hpp"
 #include "DataStructures/DataBox/Prefixes.hpp"
 #include "DataStructures/DataBox/TagName.hpp"
 #include "DataStructures/DataVector.hpp"
@@ -21,6 +20,8 @@
 #include "DataStructures/Tensor/EagerMath/Magnitude.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
+#include "Domain/Structure/Direction.hpp"
+#include "Evolution/DiscontinuousGalerkin/InterfaceOrientation.hpp"
 #include "Framework/Pypp.hpp"
 #include "Framework/TestHelpers.hpp"
 #include "Helpers/DataStructures/MakeWithRandomValues.hpp"
@@ -141,13 +142,101 @@ void call_dg_boundary_terms(
     const tuples::TaggedTuple<VolumeTags...>& volume_data,
     const Variables<tmpl::list<PackageTags...>>& interior_package_data,
     const Variables<tmpl::list<PackageTags...>>& exterior_package_data,
+    const ::evolution::dg::InterfaceOrientation interface_orientation,
     const ::dg::Formulation dg_formulation,
     tmpl::list<VolumeTagsToForward...> /*meta*/) {
-  correction.template dg_boundary_terms<false>(
-      make_not_null(&get<BoundaryCorrectionTags>(*boundary_corrections))...,
-      get<PackageTags>(interior_package_data)...,
-      get<PackageTags>(exterior_package_data)..., dg_formulation,
-      StdHelpers::retrieve(get<VolumeTagsToForward>(volume_data))...);
+  if constexpr (requires {
+                  correction.template dg_boundary_terms<false>(
+                      make_not_null(&get<BoundaryCorrectionTags>(
+                          *boundary_corrections))...,
+                      get<PackageTags>(interior_package_data)...,
+                      get<PackageTags>(exterior_package_data)...,
+                      interface_orientation, dg_formulation,
+                      StdHelpers::retrieve(
+                          get<VolumeTagsToForward>(volume_data))...);
+                }) {
+    correction.template dg_boundary_terms<false>(
+        make_not_null(&get<BoundaryCorrectionTags>(*boundary_corrections))...,
+        get<PackageTags>(interior_package_data)...,
+        get<PackageTags>(exterior_package_data)..., interface_orientation,
+        dg_formulation,
+        StdHelpers::retrieve(get<VolumeTagsToForward>(volume_data))...);
+  } else {
+    correction.template dg_boundary_terms<false>(
+        make_not_null(&get<BoundaryCorrectionTags>(*boundary_corrections))...,
+        get<PackageTags>(interior_package_data)...,
+        get<PackageTags>(exterior_package_data)..., dg_formulation,
+        StdHelpers::retrieve(get<VolumeTagsToForward>(volume_data))...);
+  }
+}
+
+// Whether `correction` declares a boundary-terms function that accepts an
+// `InterfaceOrientation` immediately before the `dg::Formulation`, given the
+// boundary-correction, package, and volume tag lists that its arguments are
+// built from.
+template <bool IsAuxiliary, typename BoundaryCorrection,
+          typename... BoundaryCorrectionTags, typename... PackageTags,
+          typename... VolumeTags, typename... VolumeTagsToForward>
+constexpr bool consumes_interface_orientation(
+    tmpl::list<BoundaryCorrectionTags...> /*meta*/,
+    tmpl::list<PackageTags...> /*meta*/, tmpl::list<VolumeTags...> /*meta*/,
+    tmpl::list<VolumeTagsToForward...> /*meta*/) {
+  if constexpr (IsAuxiliary) {
+    return requires(
+        const BoundaryCorrection& correction,
+        Variables<tmpl::list<BoundaryCorrectionTags...>>& boundary_corrections,
+        const Variables<tmpl::list<PackageTags...>>& package_data,
+        const tuples::TaggedTuple<VolumeTags...>& volume_data) {
+      correction.dg_auxiliary_boundary_terms(
+          make_not_null(&get<BoundaryCorrectionTags>(boundary_corrections))...,
+          get<PackageTags>(package_data)..., get<PackageTags>(package_data)...,
+          ::evolution::dg::InterfaceOrientation::ExternalBoundary,
+          ::dg::Formulation::StrongInertial,
+          StdHelpers::retrieve(get<VolumeTagsToForward>(volume_data))...);
+    };
+  } else {
+    return requires(
+        const BoundaryCorrection& correction,
+        Variables<tmpl::list<BoundaryCorrectionTags...>>& boundary_corrections,
+        const Variables<tmpl::list<PackageTags...>>& package_data,
+        const tuples::TaggedTuple<VolumeTags...>& volume_data) {
+      correction.template dg_boundary_terms<false>(
+          make_not_null(&get<BoundaryCorrectionTags>(boundary_corrections))...,
+          get<PackageTags>(package_data)..., get<PackageTags>(package_data)...,
+          ::evolution::dg::InterfaceOrientation::ExternalBoundary,
+          ::dg::Formulation::StrongInertial,
+          StdHelpers::retrieve(get<VolumeTagsToForward>(volume_data))...);
+    };
+  }
+}
+
+// The orientation seen by the neighbor element of an interior interface, i.e.
+// the value the neighbor computes for the same mortar.
+inline ::evolution::dg::InterfaceOrientation flip_orientation(
+    const ::evolution::dg::InterfaceOrientation orientation) {
+  switch (orientation) {
+    case ::evolution::dg::InterfaceOrientation::InteriorIsUpper:
+      return ::evolution::dg::InterfaceOrientation::InteriorIsLower;
+    case ::evolution::dg::InterfaceOrientation::InteriorIsLower:
+      return ::evolution::dg::InterfaceOrientation::InteriorIsUpper;
+    default:
+      return ::evolution::dg::InterfaceOrientation::ExternalBoundary;
+  }
+}
+
+// Numeric encoding of the orientation passed to the python boundary-terms
+// functions: +1.0 for InteriorIsUpper, -1.0 for InteriorIsLower, 0.0 for
+// ExternalBoundary.
+inline double orientation_as_double(
+    const ::evolution::dg::InterfaceOrientation orientation) {
+  switch (orientation) {
+    case ::evolution::dg::InterfaceOrientation::InteriorIsUpper:
+      return 1.0;
+    case ::evolution::dg::InterfaceOrientation::InteriorIsLower:
+      return -1.0;
+    default:
+      return 0.0;
+  }
 }
 
 template <typename System, typename BoundaryCorrection, size_t FaceDim,
@@ -158,9 +247,12 @@ void test_boundary_correction_conservation_impl(
     const tuples::TaggedTuple<VolumeTags...>& volume_data,
     const tuples::TaggedTuple<Tags::Range<RangeTags>...>& ranges,
     const bool use_moving_mesh, const ::dg::Formulation dg_formulation,
-    const ZeroOnSmoothSolution zero_on_smooth_solution, const double eps) {
+    const ZeroOnSmoothSolution zero_on_smooth_solution, const double eps,
+    const ::evolution::dg::InterfaceOrientation interface_orientation =
+        ::evolution::dg::InterfaceOrientation::ExternalBoundary) {
   CAPTURE(use_moving_mesh);
   CAPTURE(dg_formulation);
+  CAPTURE(interface_orientation);
   CAPTURE(FaceDim);
   constexpr bool curved_background =
       detail::has_inverse_spatial_metric_tag_v<System>;
@@ -374,8 +466,8 @@ void test_boundary_correction_conservation_impl(
       face_mesh.number_of_grid_points()};
   call_dg_boundary_terms(make_not_null(&boundary_corrections), correction,
                          volume_data, interior_package_data,
-                         exterior_package_data, dg_formulation,
-                         dg_boundary_terms_volume_tags{});
+                         exterior_package_data, interface_orientation,
+                         dg_formulation, dg_boundary_terms_volume_tags{});
 
   if (dg_formulation == ::dg::Formulation::StrongInertial) {
     // The strong form should be (WeakForm - (n_i F^i)_{interior}).
@@ -408,7 +500,7 @@ void test_boundary_correction_conservation_impl(
         face_mesh.number_of_grid_points()};
     call_dg_boundary_terms(
         make_not_null(&expected_boundary_corrections), correction, volume_data,
-        interior_package_data, exterior_package_data,
+        interior_package_data, exterior_package_data, interface_orientation,
         ::dg::Formulation::WeakInertial, dg_boundary_terms_volume_tags{});
 
     tmpl::for_each<flux_variables>([&interior_package_data,
@@ -464,7 +556,8 @@ void test_boundary_correction_conservation_impl(
       call_dg_boundary_terms(
           make_not_null(&zero_boundary_correction), correction, volume_data,
           interior_package_data, interior_package_data_opposite_signs,
-          ::dg::Formulation::StrongInertial, dg_boundary_terms_volume_tags{});
+          interface_orientation, ::dg::Formulation::StrongInertial,
+          dg_boundary_terms_volume_tags{});
       Variables<dt_variables_tags> expected_zero_boundary_correction{
           face_mesh.number_of_grid_points(), 0.0};
       tmpl::for_each<dt_variables_tags>([&custom_approx,
@@ -488,8 +581,9 @@ void test_boundary_correction_conservation_impl(
         face_mesh.number_of_grid_points()};
     call_dg_boundary_terms(make_not_null(&reverse_side_boundary_corrections),
                            correction, volume_data, exterior_package_data,
-                           interior_package_data, dg_formulation,
-                           dg_boundary_terms_volume_tags{});
+                           interior_package_data,
+                           flip_orientation(interface_orientation),
+                           dg_formulation, dg_boundary_terms_volume_tags{});
     // Check that the flux leaving one element equals the flux entering its
     // neighbor, i.e., F*(interior, exterior) == -F*(exterior, interior)
     reverse_side_boundary_corrections *= -1.0;
@@ -534,13 +628,40 @@ void test_boundary_correction_conservation(
     const ZeroOnSmoothSolution zero_on_smooth_solution =
         ZeroOnSmoothSolution::Yes,
     const double eps = 1.0e-12) {
-  for (const auto use_moving_mesh : {true, false}) {
-    for (const auto& dg_formulation :
-         {::dg::Formulation::StrongInertial, ::dg::Formulation::WeakInertial}) {
-      detail::test_boundary_correction_conservation_impl<System>(
-          generator, correction, face_mesh, volume_data, ranges,
-          use_moving_mesh, dg_formulation, zero_on_smooth_solution, eps);
-    }
+  using variables_tags = typename tmpl::conditional_t<
+      tt::is_a_v<tmpl::list, typename System::variables_tag>,
+      tmpl::front<typename System::variables_tag>,
+      typename System::variables_tag>::tags_list;
+  using boundary_correction_tags = db::wrap_tags_in<::Tags::dt, variables_tags>;
+  constexpr bool consumes_orientation =
+      detail::consumes_interface_orientation<false, BoundaryCorrection>(
+          boundary_correction_tags{},
+          typename BoundaryCorrection::dg_package_field_tags{},
+          tmpl::list<VolumeTags...>{},
+          typename BoundaryCorrection::dg_boundary_terms_volume_tags{});
+  const auto run =
+      [&](const ::evolution::dg::InterfaceOrientation interface_orientation,
+          const bool conservation) {
+        for (const auto use_moving_mesh : {true, false}) {
+          const auto run_formulation =
+              [&](const ::dg::Formulation dg_formulation) {
+                detail::test_boundary_correction_conservation_impl<System>(
+                    generator, correction, face_mesh, volume_data, ranges,
+                    use_moving_mesh, dg_formulation, zero_on_smooth_solution,
+                    eps, interface_orientation);
+              };
+          run_formulation(::dg::Formulation::StrongInertial);
+          if (conservation) {
+            run_formulation(::dg::Formulation::WeakInertial);
+          }
+        }
+      };
+  if constexpr (consumes_orientation) {
+    run(::evolution::dg::InterfaceOrientation::InteriorIsUpper, true);
+    run(::evolution::dg::InterfaceOrientation::InteriorIsLower, true);
+    run(::evolution::dg::InterfaceOrientation::ExternalBoundary, false);
+  } else {
+    run(::evolution::dg::InterfaceOrientation::ExternalBoundary, true);
   }
 }
 
@@ -559,10 +680,13 @@ void test_with_python(
     const tuples::TaggedTuple<Tags::Range<RangeTags>...>& ranges,
     const bool use_moving_mesh, const ::dg::Formulation dg_formulation,
     const double epsilon, tmpl::list<FaceTags...> /*meta*/,
-    tmpl::list<DgPackageDataTags...> /*meta*/) {
+    tmpl::list<DgPackageDataTags...> /*meta*/,
+    const ::evolution::dg::InterfaceOrientation interface_orientation =
+        ::evolution::dg::InterfaceOrientation::ExternalBoundary) {
   CAPTURE(face_mesh);
   CAPTURE(dg_formulation);
   CAPTURE(use_moving_mesh);
+  CAPTURE(interface_orientation);
   REQUIRE(face_mesh.number_of_grid_points() >= 1);
   constexpr bool curved_background =
       detail::has_inverse_spatial_metric_tag_v<System>;
@@ -799,8 +923,13 @@ void test_with_python(
   // Call C++ implementation of dg_boundary_terms
   call_dg_boundary_terms(make_not_null(&boundary_corrections), correction,
                          volume_data, interior_package_data,
-                         exterior_package_data, dg_formulation,
-                         dg_boundary_terms_volume_tags{});
+                         exterior_package_data, interface_orientation,
+                         dg_formulation, dg_boundary_terms_volume_tags{});
+
+  constexpr bool consumes_orientation =
+      consumes_interface_orientation<false, BoundaryCorrection>(
+          VariablesTags{}, dg_package_field_tags{}, tmpl::list<VolumeTags...>{},
+          dg_boundary_terms_volume_tags{});
 
   // Call python implementation of dg_boundary_terms
   try {
@@ -810,11 +939,22 @@ void test_with_python(
     CAPTURE(python_module);
     const std::string& python_function = python_dg_boundary_terms_function;
     CAPTURE(python_function);
-    const ResultType python_result = pypp::call<ResultType>(
-        python_module, python_function,
-        get<DgPackageDataTags>(interior_package_data)...,
-        get<DgPackageDataTags>(exterior_package_data)...,
-        dg_formulation == ::dg::Formulation::StrongInertial);
+    const ResultType python_result = [&]() {
+      if constexpr (consumes_orientation) {
+        return pypp::call<ResultType>(
+            python_module, python_function,
+            get<DgPackageDataTags>(interior_package_data)...,
+            get<DgPackageDataTags>(exterior_package_data)...,
+            dg_formulation == ::dg::Formulation::StrongInertial,
+            orientation_as_double(interface_orientation));
+      } else {
+        return pypp::call<ResultType>(
+            python_module, python_function,
+            get<DgPackageDataTags>(interior_package_data)...,
+            get<DgPackageDataTags>(exterior_package_data)...,
+            dg_formulation == ::dg::Formulation::StrongInertial);
+      }
+    }();
     tmpl::for_each<VariablesTags>([&python_result, epsilon,
                                    &boundary_corrections](
                                       auto boundary_correction_tag_v) {
@@ -866,6 +1006,13 @@ void test_with_python(
  * - The arguments to the python functions for computing the boundary
  *   corrections are the same as the arguments for the C++ `dg_boundary_terms`
  *   function, excluding the `gsl::not_null` arguments.
+ * - If the boundary correction declares a `dg_boundary_terms` that accepts an
+ *   `evolution::dg::InterfaceOrientation` immediately before the
+ *   `dg::Formulation`, the correction is tested for all three orientation
+ *   values, and the orientation is appended as a final `double` argument to
+ *   the python boundary-terms function: `+1.0` for `InteriorIsUpper`, `-1.0`
+ *   for `InteriorIsLower`, and `0.0` for `ExternalBoundary`. Corrections
+ *   without such a parameter are tested exactly as before.
  * - By default, each input tensor for `dg_package_data` is randomly generated
  *   from the interval `[-1,1)` (except the metric, which for systems with a
  *   metric is generated to be close to flat space). The argument `ranges` is a
@@ -897,22 +1044,39 @@ void test_boundary_correction_with_python(
   using flux_tags =
       db::wrap_tags_in<::Tags::Flux, flux_variables, tmpl::size_t<FaceDim + 1>,
                        Frame::Inertial>;
+  constexpr bool consumes_orientation =
+      detail::consumes_interface_orientation<false, BoundaryCorrection>(
+          variables_tags{},
+          typename BoundaryCorrection::dg_package_field_tags{},
+          tmpl::list<VolumeTags...>{},
+          typename BoundaryCorrection::dg_boundary_terms_volume_tags{});
 
-  for (const auto use_moving_mesh : {
-           false  // , true
-       }) {
-    for (const auto dg_formulation : {
-             ::dg::Formulation::
-                 StrongInertial  // , ::dg::Formulation::WeakInertial
+  const auto run = [&](const ::evolution::dg::InterfaceOrientation
+                           interface_orientation) {
+    for (const auto use_moving_mesh : {
+             false  // , true
          }) {
-      detail::test_with_python<System, ConversionClassList, variables_tags>(
-          generator, python_module, python_dg_package_data_function,
-          python_dg_boundary_terms_function, correction, face_mesh, volume_data,
-          ranges, use_moving_mesh, dg_formulation, epsilon,
-          tmpl::append<variables_tags, flux_tags, package_temporary_tags,
-                       package_primitive_tags>{},
-          typename BoundaryCorrection::dg_package_field_tags{});
+      for (const auto dg_formulation : {
+               ::dg::Formulation::
+                   StrongInertial  // , ::dg::Formulation::WeakInertial
+           }) {
+        detail::test_with_python<System, ConversionClassList, variables_tags>(
+            generator, python_module, python_dg_package_data_function,
+            python_dg_boundary_terms_function, correction, face_mesh,
+            volume_data, ranges, use_moving_mesh, dg_formulation, epsilon,
+            tmpl::append<variables_tags, flux_tags, package_temporary_tags,
+                         package_primitive_tags>{},
+            typename BoundaryCorrection::dg_package_field_tags{},
+            interface_orientation);
+      }
     }
+  };
+  if constexpr (consumes_orientation) {
+    run(::evolution::dg::InterfaceOrientation::InteriorIsUpper);
+    run(::evolution::dg::InterfaceOrientation::InteriorIsLower);
+    run(::evolution::dg::InterfaceOrientation::ExternalBoundary);
+  } else {
+    run(::evolution::dg::InterfaceOrientation::ExternalBoundary);
   }
 }
 }  // namespace TestHelpers::evolution::dg

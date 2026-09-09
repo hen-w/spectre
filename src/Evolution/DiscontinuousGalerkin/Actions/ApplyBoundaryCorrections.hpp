@@ -34,6 +34,7 @@
 #include "Evolution/DiscontinuousGalerkin/BoundaryData.hpp"
 #include "Evolution/DiscontinuousGalerkin/InboxTags.hpp"
 #include "Evolution/DiscontinuousGalerkin/InterfaceDataPolicy.hpp"
+#include "Evolution/DiscontinuousGalerkin/InterfaceOrientation.hpp"
 #include "Evolution/DiscontinuousGalerkin/MortarData.hpp"
 #include "Evolution/DiscontinuousGalerkin/MortarDataHolder.hpp"
 #include "Evolution/DiscontinuousGalerkin/MortarTags.hpp"
@@ -1302,15 +1303,20 @@ struct ApplyBoundaryCorrections {
               cached_face_jac_direction = direction;
             }
 
+            const evolution::dg::InterfaceOrientation interface_orientation =
+                evolution::dg::interface_orientation(
+                    element.id(), direction, element.neighbors().at(direction),
+                    mortar_id.id());
+
             const auto compute_correction_coupling =
                 [&typed_boundary_correction, boundary_filter_active, &direction,
                  dg_formulation, &dt_boundary_correction_on_mortar,
                  &face_det_jacobian, &face_inv_jac_grid_to_inertial,
                  &face_jac_grid_to_inertial, &face_mesh,
                  &face_normal_covector_and_magnitude, filter_ptr,
-                 &local_data_on_mortar, &mortar_id, &mortar_meshes,
-                 &mortar_infos, &neighbor_data_on_mortar, using_points_on_face,
-                 &volume_args_tuple, &volume_det_jacobian,
+                 interface_orientation, &local_data_on_mortar, &mortar_id,
+                 &mortar_meshes, &mortar_infos, &neighbor_data_on_mortar,
+                 using_points_on_face, &volume_args_tuple, &volume_det_jacobian,
                  &volume_det_inv_jacobian, &volume_dt_correction, &volume_mesh,
                  &element](const MortarData<volume_dim>& local_mortar_data,
                            const MortarData<volume_dim>& neighbor_mortar_data)
@@ -1373,15 +1379,15 @@ struct ApplyBoundaryCorrections {
                 call_auxiliary_boundary_correction(
                     make_not_null(&dt_boundary_correction_on_mortar),
                     local_data_on_mortar, neighbor_data_on_mortar,
-                    *typed_boundary_correction, dg_formulation,
-                    volume_args_tuple,
+                    *typed_boundary_correction, interface_orientation,
+                    dg_formulation, volume_args_tuple,
                     typename BcType::dg_auxiliary_boundary_terms_volume_tags{});
               } else {
                 call_boundary_correction(
                     make_not_null(&dt_boundary_correction_on_mortar),
                     local_data_on_mortar, neighbor_data_on_mortar,
-                    *typed_boundary_correction, dg_formulation,
-                    volume_args_tuple,
+                    *typed_boundary_correction, interface_orientation,
+                    dg_formulation, volume_args_tuple,
                     typename BcType::dg_boundary_terms_volume_tags{});
               }
 
@@ -1581,17 +1587,38 @@ struct ApplyBoundaryCorrections {
       const Variables<tmpl::list<Tags...>>& local_boundary_data,
       const Variables<tmpl::list<Tags...>>& neighbor_boundary_data,
       const BoundaryCorrection& boundary_correction,
+      const evolution::dg::InterfaceOrientation interface_orientation,
       const ::dg::Formulation dg_formulation,
       const tuples::TaggedTuple<detail::TemporaryReference<AllVolumeArgs>...>&
           volume_args_tuple,
       tmpl::list<VolumeTagsForCorrection...> /*meta*/) {
-    boundary_correction.template dg_boundary_terms<false>(
-        make_not_null(
-            &get<BoundaryCorrectionTags>(*boundary_corrections_on_mortar))...,
-        get<Tags>(local_boundary_data)..., get<Tags>(neighbor_boundary_data)...,
-        dg_formulation,
-        tuples::get<detail::TemporaryReference<VolumeTagsForCorrection>>(
-            volume_args_tuple)...);
+    if constexpr (requires {
+                    boundary_correction.template dg_boundary_terms<false>(
+                        make_not_null(&get<BoundaryCorrectionTags>(
+                            *boundary_corrections_on_mortar))...,
+                        get<Tags>(local_boundary_data)...,
+                        get<Tags>(neighbor_boundary_data)...,
+                        interface_orientation, dg_formulation,
+                        tuples::get<detail::TemporaryReference<
+                            VolumeTagsForCorrection>>(volume_args_tuple)...);
+                  }) {
+      boundary_correction.template dg_boundary_terms<false>(
+          make_not_null(
+              &get<BoundaryCorrectionTags>(*boundary_corrections_on_mortar))...,
+          get<Tags>(local_boundary_data)...,
+          get<Tags>(neighbor_boundary_data)..., interface_orientation,
+          dg_formulation,
+          tuples::get<detail::TemporaryReference<VolumeTagsForCorrection>>(
+              volume_args_tuple)...);
+    } else {
+      boundary_correction.template dg_boundary_terms<false>(
+          make_not_null(
+              &get<BoundaryCorrectionTags>(*boundary_corrections_on_mortar))...,
+          get<Tags>(local_boundary_data)...,
+          get<Tags>(neighbor_boundary_data)..., dg_formulation,
+          tuples::get<detail::TemporaryReference<VolumeTagsForCorrection>>(
+              volume_args_tuple)...);
+    }
   }
 
   template <typename... BoundaryCorrectionTags, typename... Tags,
@@ -1603,17 +1630,38 @@ struct ApplyBoundaryCorrections {
       const Variables<tmpl::list<Tags...>>& local_boundary_data,
       const Variables<tmpl::list<Tags...>>& neighbor_boundary_data,
       const BoundaryCorrection& boundary_correction,
+      const evolution::dg::InterfaceOrientation interface_orientation,
       const ::dg::Formulation dg_formulation,
       const tuples::TaggedTuple<detail::TemporaryReference<AllVolumeArgs>...>&
           volume_args_tuple,
       tmpl::list<VolumeTagsForCorrection...> /*meta*/) {
-    boundary_correction.dg_auxiliary_boundary_terms(
-        make_not_null(
-            &get<BoundaryCorrectionTags>(*boundary_corrections_on_mortar))...,
-        get<Tags>(local_boundary_data)..., get<Tags>(neighbor_boundary_data)...,
-        dg_formulation,
-        tuples::get<detail::TemporaryReference<VolumeTagsForCorrection>>(
-            volume_args_tuple)...);
+    if constexpr (requires {
+                    boundary_correction.dg_auxiliary_boundary_terms(
+                        make_not_null(&get<BoundaryCorrectionTags>(
+                            *boundary_corrections_on_mortar))...,
+                        get<Tags>(local_boundary_data)...,
+                        get<Tags>(neighbor_boundary_data)...,
+                        interface_orientation, dg_formulation,
+                        tuples::get<detail::TemporaryReference<
+                            VolumeTagsForCorrection>>(volume_args_tuple)...);
+                  }) {
+      boundary_correction.dg_auxiliary_boundary_terms(
+          make_not_null(
+              &get<BoundaryCorrectionTags>(*boundary_corrections_on_mortar))...,
+          get<Tags>(local_boundary_data)...,
+          get<Tags>(neighbor_boundary_data)..., interface_orientation,
+          dg_formulation,
+          tuples::get<detail::TemporaryReference<VolumeTagsForCorrection>>(
+              volume_args_tuple)...);
+    } else {
+      boundary_correction.dg_auxiliary_boundary_terms(
+          make_not_null(
+              &get<BoundaryCorrectionTags>(*boundary_corrections_on_mortar))...,
+          get<Tags>(local_boundary_data)...,
+          get<Tags>(neighbor_boundary_data)..., dg_formulation,
+          tuples::get<detail::TemporaryReference<VolumeTagsForCorrection>>(
+              volume_args_tuple)...);
+    }
   }
 };
 

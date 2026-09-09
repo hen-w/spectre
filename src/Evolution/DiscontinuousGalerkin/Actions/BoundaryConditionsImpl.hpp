@@ -39,6 +39,7 @@
 #include "Evolution/DiscontinuousGalerkin/Actions/ComputeTimeDerivativeHelpers.hpp"
 #include "Evolution/DiscontinuousGalerkin/Actions/NormalCovectorAndMagnitude.hpp"
 #include "Evolution/DiscontinuousGalerkin/Actions/PackageDataImpl.hpp"
+#include "Evolution/DiscontinuousGalerkin/InterfaceOrientation.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/InterpolateFromBoundary.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/LiftFlux.hpp"
@@ -604,19 +605,57 @@ void apply_boundary_condition_on_face(
 
     // Compute boundary correction
     if constexpr (ComputeAuxiliary) {
-      boundary_correction.dg_auxiliary_boundary_terms(
-          make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
-              boundary_corrections_on_face))...,
-          get<PackageFieldTags>(internal_packaged_data)...,
-          get<PackageFieldTags>(external_packaged_data)..., dg_formulation,
-          get<BoundaryTermsVolumeTags>(*box)...);
+      if constexpr (requires {
+                      boundary_correction.dg_auxiliary_boundary_terms(
+                          make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
+                              boundary_corrections_on_face))...,
+                          get<PackageFieldTags>(internal_packaged_data)...,
+                          get<PackageFieldTags>(external_packaged_data)...,
+                          evolution::dg::InterfaceOrientation::ExternalBoundary,
+                          dg_formulation,
+                          get<BoundaryTermsVolumeTags>(*box)...);
+                    }) {
+        boundary_correction.dg_auxiliary_boundary_terms(
+            make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
+                boundary_corrections_on_face))...,
+            get<PackageFieldTags>(internal_packaged_data)...,
+            get<PackageFieldTags>(external_packaged_data)...,
+            evolution::dg::InterfaceOrientation::ExternalBoundary,
+            dg_formulation, get<BoundaryTermsVolumeTags>(*box)...);
+      } else {
+        boundary_correction.dg_auxiliary_boundary_terms(
+            make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
+                boundary_corrections_on_face))...,
+            get<PackageFieldTags>(internal_packaged_data)...,
+            get<PackageFieldTags>(external_packaged_data)..., dg_formulation,
+            get<BoundaryTermsVolumeTags>(*box)...);
+      }
     } else {
-      boundary_correction.template dg_boundary_terms<true>(
-          make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
-              boundary_corrections_on_face))...,
-          get<PackageFieldTags>(internal_packaged_data)...,
-          get<PackageFieldTags>(external_packaged_data)..., dg_formulation,
-          get<BoundaryTermsVolumeTags>(*box)...);
+      if constexpr (requires {
+                      boundary_correction.template dg_boundary_terms<true>(
+                          make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
+                              boundary_corrections_on_face))...,
+                          get<PackageFieldTags>(internal_packaged_data)...,
+                          get<PackageFieldTags>(external_packaged_data)...,
+                          evolution::dg::InterfaceOrientation::ExternalBoundary,
+                          dg_formulation,
+                          get<BoundaryTermsVolumeTags>(*box)...);
+                    }) {
+        boundary_correction.template dg_boundary_terms<true>(
+            make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
+                boundary_corrections_on_face))...,
+            get<PackageFieldTags>(internal_packaged_data)...,
+            get<PackageFieldTags>(external_packaged_data)...,
+            evolution::dg::InterfaceOrientation::ExternalBoundary,
+            dg_formulation, get<BoundaryTermsVolumeTags>(*box)...);
+      } else {
+        boundary_correction.template dg_boundary_terms<true>(
+            make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
+                boundary_corrections_on_face))...,
+            get<PackageFieldTags>(internal_packaged_data)...,
+            get<PackageFieldTags>(external_packaged_data)..., dg_formulation,
+            get<BoundaryTermsVolumeTags>(*box)...);
+      }
     }
 
     // Lift the boundary correction
