@@ -6,6 +6,7 @@ set(LIBRARY "Test_Ccz4")
 set(LIBRARY_SOURCES
   BoundaryConditions/Test_DirichletCharacteristics.cpp
   BoundaryCorrections/Test_LaxFriedrichs.cpp
+  BoundaryCorrections/Test_ProposedFlux.cpp
   BoundaryConditions/Test_DirichletAnalytic.cpp
   BoundaryConditions/Test_ConstraintsRadiationPreserving.cpp
   BoundaryConditions/Test_Sommerfeld.cpp
