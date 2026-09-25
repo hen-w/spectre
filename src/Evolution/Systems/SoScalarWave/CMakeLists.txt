@@ -9,6 +9,7 @@ spectre_target_sources(
   ${LIBRARY}
   PRIVATE
   Characteristics.cpp
+  SpectralFilter.cpp
   TimeDerivative.cpp
   )
 
@@ -18,6 +19,8 @@ spectre_target_headers(
   HEADERS
   Actions/OverwriteExternalBoundaryDt.hpp
   Characteristics.hpp
+  ProjectSpectralFilter.hpp
+  SpectralFilter.hpp
   System.hpp
   Tags.hpp
   TagsDeclarations.hpp

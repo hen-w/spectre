@@ -13,12 +13,12 @@
 #include "Evolution/BoundaryCorrection.hpp"
 #include "Evolution/ComputeTags.hpp"
 #include "Evolution/DgSubcell/Actions/Initialize.hpp"
-#include "Evolution/DgSubcell/GetTciDecision.hpp"
 #include "Evolution/DgSubcell/Actions/Labels.hpp"
-#include "Evolution/DgSubcell/PrepareNeighborData.hpp"
 #include "Evolution/DgSubcell/Actions/ReconstructionCommunication.hpp"
 #include "Evolution/DgSubcell/Actions/SelectNumericalMethod.hpp"
 #include "Evolution/DgSubcell/Actions/TakeTimeStep.hpp"
+#include "Evolution/DgSubcell/GetTciDecision.hpp"
+#include "Evolution/DgSubcell/PrepareNeighborData.hpp"
 #include "Evolution/DgSubcell/SetInterpolators.hpp"
 #include "Evolution/DgSubcell/Tags/MethodOrder.hpp"
 #include "Evolution/DgSubcell/Tags/ObserverCoordinates.hpp"
@@ -29,45 +29,43 @@
 #include "Evolution/DiscontinuousGalerkin/CleanMortarHistory.hpp"
 #include "Evolution/DiscontinuousGalerkin/DgElementArray.hpp"
 #include "Evolution/DiscontinuousGalerkin/Initialization/Mortars.hpp"
+#include "Evolution/DiscontinuousGalerkin/Initialization/SpectralFilters.hpp"
 #include "Evolution/Initialization/DgDomain.hpp"
 #include "Evolution/Initialization/Evolution.hpp"
 #include "Evolution/Initialization/NonconservativeSystem.hpp"
 #include "Evolution/Initialization/SetVariables.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryCorrections/Factory.hpp"
-#include "Evolution/Systems/Ccz4/FiniteDifference/ConstraintEnergyCompute.hpp"
-#include "Evolution/Systems/Ccz4/FiniteDifference/HamiltonianConstraintCompute.hpp"
-#include "Evolution/Systems/Ccz4/FiniteDifference/MomentumConstraintCompute.hpp"
-#include "Evolution/Systems/Ccz4/FiniteDifference/SpatialZ4ConstraintUpCompute.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/ApplyFilter.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/ConstraintEnergyCompute.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/DetConformalSpatialMetricCompute.hpp"
-#include "Evolution/Systems/Ccz4/FiniteDifference/UnlimitedDeg4Prim.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/EnforceConstrainedEvolution.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/EnforceTracelessDerivConformalMetric.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/EnforceTracelessDtConformalMetric.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/GhostData.hpp"
-#include "Evolution/Systems/Ccz4/FiniteDifference/NeighborPackagedData.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/HamiltonianConstraintCompute.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/LdgTimeDerivative.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/MomentumConstraintCompute.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/NeighborPackagedData.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Reconstructor.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/ResizeTimeDerivatives.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/SetInitialEta.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/SetK0.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/SoTimeDerivative.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/SpatialZ4ConstraintUpCompute.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/TraceATildeCompute.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/UnlimitedDeg4Prim.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/UpdateAuxiliaryVariables.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/UpdateAuxiliaryVariablesFd.hpp"
 #include "Evolution/Systems/Ccz4/Solutions/Factory.hpp"
-#include "Evolution/Systems/Ccz4/ApplyTensorYlmFilter.hpp"
+#include "Evolution/Systems/Ccz4/SpectralFilter.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
-#include "Evolution/Tags/Filter.hpp"
 #include "IO/Observer/Actions/RegisterEvents.hpp"
 #include "IO/Observer/Helpers.hpp"
 #include "IO/Observer/ObserverComponent.hpp"
-#include "NumericalAlgorithms/LinearOperators/CgFilter.hpp"
 #include "NumericalAlgorithms/LinearOperators/Divergence.hpp"
-#include "NumericalAlgorithms/LinearOperators/ExponentialFilter.hpp"
 #include "Options/Protocols/FactoryCreation.hpp"
 #include "Parallel/Phase.hpp"
 #include "Parallel/PhaseControl/ExecutePhaseChange.hpp"
@@ -76,11 +74,11 @@
 #include "Parallel/Protocols/RegistrationMetavariables.hpp"
 #include "ParallelAlgorithms/Actions/AddComputeTags.hpp"
 #include "ParallelAlgorithms/Actions/AddSimpleTags.hpp"
-#include "ParallelAlgorithms/Actions/FilterAction.hpp"
 #include "ParallelAlgorithms/Actions/InitializeItems.hpp"
-#include "ParallelAlgorithms/Actions/MutateApply.hpp"
 #include "ParallelAlgorithms/Actions/LocalizedPerturbation.hpp"
+#include "ParallelAlgorithms/Actions/MutateApply.hpp"
 #include "ParallelAlgorithms/Actions/RandomizeVariables.hpp"
+#include "ParallelAlgorithms/Actions/SpectralFilter.hpp"
 #include "ParallelAlgorithms/Actions/TerminatePhase.hpp"
 #include "ParallelAlgorithms/Events/Completion.hpp"
 #include "ParallelAlgorithms/Events/Factory.hpp"
@@ -133,8 +131,6 @@ struct EvolutionMetavars {
   struct RandomizeInitialData {};
   // For labeling the yaml option for LocalizedPerturbation
   struct PerturbInitialData {};
-
-  struct FilterEvolvedVariables {};
 
   static constexpr bool local_time_stepping =
       TimeStepperBase::local_time_stepping;
@@ -239,10 +235,9 @@ struct EvolutionMetavars {
         tmpl::pair<TimeStepper, TimeSteppers::time_steppers>,
         tmpl::pair<Trigger, tmpl::append<Triggers::logical_triggers,
                                          Triggers::time_triggers>>,
-        tmpl::pair<Filters::Filter,
-                   tmpl::list<Filters::Exponential<volume_dim>,
-                              Filters::CgFilter<volume_dim>,
-                              Ccz4::TensorYlmFilter>>>;
+        tmpl::pair<Filters::runtime::Filter<
+                       volume_dim, typename system::variables_tag::tags_list>,
+                   Ccz4::all_runtime_filters>>;
   };
 
   using observed_reduction_data_tags = observers::collect_reduction_data_tags<
@@ -295,17 +290,8 @@ struct EvolutionMetavars {
       evolution::Actions::RunEventsAndDenseTriggers<tmpl::list<>>,
       Actions::MutateApply<UpdateU<system, local_time_stepping>>,
       Actions::MutateApply<CleanHistory<system>>,
-      dg::Actions::Filter<
-          FilterEvolvedVariables,
-          tmpl::list<::Ccz4::Tags::ConformalMetric<DataVector, 3>,
-                     ::Ccz4::Tags::ConformalFactor<DataVector>,
-                     ::Ccz4::Tags::ATilde<DataVector, 3>,
-                     gr::Tags::TraceExtrinsicCurvature<DataVector>,
-                     ::Ccz4::Tags::Theta<DataVector>,
-                     ::Ccz4::Tags::GammaHat<DataVector, 3>,
-                     gr::Tags::Lapse<DataVector>,
-                     gr::Tags::Shift<DataVector, 3>,
-                     ::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>>>>;
+      dg::Actions::SpectralFilter<volume_dim,
+                                  typename system::variables_tag::tags_list>>>;
 
   using dg_subcell_step_actions = tmpl::flatten<tmpl::list<
       evolution::dg::subcell::Actions::SelectNumericalMethod,
@@ -329,17 +315,8 @@ struct EvolutionMetavars {
       evolution::Actions::RunEventsAndDenseTriggers<tmpl::list<>>,
       Actions::MutateApply<UpdateU<system, local_time_stepping>>,
       Actions::MutateApply<CleanHistory<system>>,
-      dg::Actions::Filter<
-          FilterEvolvedVariables,
-          tmpl::list<::Ccz4::Tags::ConformalMetric<DataVector, 3>,
-                     ::Ccz4::Tags::ConformalFactor<DataVector>,
-                     ::Ccz4::Tags::ATilde<DataVector, 3>,
-                     gr::Tags::TraceExtrinsicCurvature<DataVector>,
-                     ::Ccz4::Tags::Theta<DataVector>,
-                     ::Ccz4::Tags::GammaHat<DataVector, 3>,
-                     gr::Tags::Lapse<DataVector>,
-                     gr::Tags::Shift<DataVector, 3>,
-                     ::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>>,
+      dg::Actions::SpectralFilter<volume_dim,
+                                  typename system::variables_tag::tags_list>,
       Actions::Goto<evolution::dg::subcell::Actions::Labels::EndOfSolvers>,
 
       Actions::Label<evolution::dg::subcell::Actions::Labels::BeginSubcell>,
@@ -347,13 +324,13 @@ struct EvolutionMetavars {
 
       // -- Round 1: exchange evolved variables via Inbox<true> --
       evolution::dg::subcell::Actions::SendDataForReconstruction<
-          volume_dim, SubcellOptions::GhostVariables,
-          use_dg_element_collection, true>,
+          volume_dim, SubcellOptions::GhostVariables, use_dg_element_collection,
+          true>,
       evolution::dg::subcell::Actions::ReceiveAndSendDataForReconstruction<
-          volume_dim, SubcellOptions::GhostVariables,
-          use_dg_element_collection, true>,
-      evolution::dg::subcell::Actions::ReceiveDataForReconstruction<
-          volume_dim, true>,
+          volume_dim, SubcellOptions::GhostVariables, use_dg_element_collection,
+          true>,
+      evolution::dg::subcell::Actions::ReceiveDataForReconstruction<volume_dim,
+                                                                    true>,
 
       // -- Between rounds: compute FieldA/B/D/P from FD derivatives --
       Ccz4::fd::UpdateAuxiliaryVariablesFd,
@@ -393,7 +370,6 @@ struct EvolutionMetavars {
       Initialization::Actions::InitializeItems<
           Initialization::TimeStepping<EvolutionMetavars, TimeStepperBase>,
           evolution::dg::Initialization::Domain<EvolutionMetavars>,
-          dg::Actions::InitializeFilters<FilterEvolvedVariables>,
           Initialization::TimeStepperHistory<EvolutionMetavars>>,
       Initialization::Actions::NonconservativeSystem<system>,
       tmpl::conditional_t<
@@ -416,8 +392,11 @@ struct EvolutionMetavars {
           Ccz4::Tags::Kappa1Compute, Ccz4::Tags::Kappa2Compute>>,
       ::evolution::dg::Initialization::Mortars<volume_dim>,
       evolution::Actions::InitializeRunEventsAndDenseTriggers,
-      Initialization::Actions::AddSimpleTags<
-          ::Ccz4::fd::SetInitialEta, ::Ccz4::fd::SetK0>,
+      Initialization::Actions::AddSimpleTags<::Ccz4::fd::SetInitialEta,
+                                             ::Ccz4::fd::SetK0>,
+      Initialization::Actions::InitializeItems<
+          evolution::dg::Initialization::SpectralFilters<
+              volume_dim, typename system::variables_tag::tags_list>>,
       Parallel::Actions::TerminatePhase>>;
 
   using dg_element_array_component = DgElementArray<

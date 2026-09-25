@@ -41,6 +41,7 @@ set(LIBRARY_SOURCES
   Test_DerivZ4Constraint.cpp
   Test_Ricci.cpp
   Test_RicciScalarPlusDivergenceZ4Constraint.cpp
+  Test_SpectralFilter.cpp
   Test_Tags.cpp
   Test_TempTags.cpp
   Test_TimeDerivative.cpp

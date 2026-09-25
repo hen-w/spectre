@@ -112,7 +112,7 @@ double UpwindPenalty<Dim>::dg_package_data(
 }
 
 template <size_t Dim>
-void UpwindPenalty<Dim>::dg_boundary_terms(
+void UpwindPenalty<Dim>::dg_boundary_terms_impl(
     const gsl::not_null<Scalar<DataVector>*> psi_boundary_correction,
     const gsl::not_null<Scalar<DataVector>*> pi_boundary_correction,
     const gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>

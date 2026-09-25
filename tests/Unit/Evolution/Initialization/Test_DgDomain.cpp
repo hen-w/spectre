@@ -567,7 +567,10 @@ void test_nonconforming_blocks() {
   using component = Component<metavars>;
 
   const auto creator = domain::creators::NonconformingSphericalShells(
-      2.0, 3.0, 4.0, 0, 0, 5, 7, 11, nullptr, nullptr);
+      2.0, 3.0, 4.0, {}, {}, 0, 0, 5, 7, 11,
+      domain::creators::NonconformingSphericalShells_detail::Excision{},
+      // The pre-refactor creator hardcoded equiangular wedge maps.
+      true, nullptr);
   auto domain = creator.create_domain();
   const auto initial_refinement = creator.initial_refinement_levels();
   const auto initial_extents = creator.initial_extents();

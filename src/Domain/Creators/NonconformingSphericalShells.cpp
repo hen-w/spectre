@@ -48,16 +48,16 @@ namespace domain::creators {
 
 NonconformingSphericalShells::NonconformingSphericalShells(
     const double inner_radius, const double interface_radius,
-    const double outer_radius,
-    std::vector<double> wedges_radial_partitioning,
+    const double outer_radius, std::vector<double> wedges_radial_partitioning,
     std::vector<double> shells_radial_partitioning,
+    std::array<std::vector<domain::CoordinateMaps::Distribution>, 2>
+        radial_distribution,
     const size_t initial_radial_refinement,
     const size_t initial_angular_refinement,
     const size_t initial_number_of_radial_grid_points,
     const size_t initial_spherical_harmonic_l,
     const size_t initial_number_of_angular_grid_points_of_wedges,
-    std::variant<Excision, InnerCube> interior,
-    const bool use_equiangular_map,
+    std::variant<Excision, InnerCube> interior, const bool use_equiangular_map,
     std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>
         outer_boundary_condition,
     const Options::Context& context)
@@ -97,24 +97,27 @@ NonconformingSphericalShells::NonconformingSphericalShells(
             std::to_string(outer_radius_) + ".");
   }
 
-  // Validate wedges partitioning
-  {
-    std::vector<CoordinateMaps::Distribution> wedge_radial_dist;
-    set_shell_distribution(
-        make_not_null(&num_wedge_layers_),
-        make_not_null(&wedge_radial_dist), wedges_radial_partitioning_,
-        CoordinateMaps::Distribution::Linear, inner_radius_,
-        interface_radius_, "inner", "interface", context);
+  // Validate wedges partitioning and store the radial distribution per layer
+  set_shell_distribution(make_not_null(&num_wedge_layers_),
+                         make_not_null(&wedge_radial_distribution_),
+                         wedges_radial_partitioning_, radial_distribution[0],
+                         inner_radius_, interface_radius_, "inner", "interface",
+                         context);
+  if (fill_interior_ and wedge_radial_distribution_.front() !=
+                             CoordinateMaps::Distribution::Linear) {
+    PARSE_ERROR(context,
+                "The 'RadialDistribution' must be 'Linear' for the innermost "
+                "wedge layer when the interior is filled with a cube because "
+                "it changes in sphericity. Add entries to "
+                "'WedgesRadialPartitioning' to add outer wedge layers for "
+                "which you can select different radial distributions.");
   }
 
-  // Validate shells partitioning
-  {
-    std::vector<CoordinateMaps::Distribution> shell_radial_dist;
-    set_shell_distribution(
-        make_not_null(&num_shells_), make_not_null(&shell_radial_dist),
-        shells_radial_partitioning_, CoordinateMaps::Distribution::Linear,
-        interface_radius_, outer_radius_, "interface", "outer", context);
-  }
+  // Validate shells partitioning and store the radial distribution per shell
+  set_shell_distribution(
+      make_not_null(&num_shells_), make_not_null(&shell_radial_distribution_),
+      shells_radial_partitioning_, radial_distribution[1], interface_radius_,
+      outer_radius_, "interface", "outer", context);
 
   const size_t num_wedge_blocks = 6 * num_wedge_layers_;
   const size_t num_blocks =
@@ -171,8 +174,8 @@ NonconformingSphericalShells::NonconformingSphericalShells(
     }
     if ((inner_bc == nullptr) != (outer_boundary_condition_ == nullptr)) {
       PARSE_ERROR(context,
-                  "Must specify either both inner and outer boundary conditions "
-                  "or neither.");
+                  "Must specify either both inner and outer boundary "
+                  "conditions or neither.");
     }
   } else {
     if (is_none(outer_boundary_condition_)) {
@@ -264,9 +267,7 @@ Domain<3> NonconformingSphericalShells::create_domain() const {
           sph_wedge_coordinate_maps(
               inner_radius_, interface_radius_, inner_sphericity, 1.0,
               use_equiangular_map_, std::nullopt, false,
-              wedges_radial_partitioning_,
-              std::vector<CoordinateMaps::Distribution>(
-                  num_wedge_layers_, CoordinateMaps::Distribution::Linear)));
+              wedges_radial_partitioning_, wedge_radial_distribution_));
 
   // Build wedge blocks
   for (size_t i = 0; i < num_wedge_blocks; ++i) {
@@ -328,9 +329,10 @@ Domain<3> NonconformingSphericalShells::create_domain() const {
                                : shells_radial_partitioning_[i];
     auto shell_map =
         make_coordinate_map_base<Frame::BlockLogical, Frame::Inertial>(
-            CoordinateMaps::ProductOf2Maps<CoordinateMaps::Affine,
+            CoordinateMaps::ProductOf2Maps<CoordinateMaps::Interval,
                                            CoordinateMaps::Identity<2>>{
-                CoordinateMaps::Affine{-1.0, 1.0, shell_inner, shell_outer},
+                CoordinateMaps::Interval{-1.0, 1.0, shell_inner, shell_outer,
+                                         shell_radial_distribution_[i], 0.0},
                 CoordinateMaps::Identity<2>{}},
             CoordinateMaps::SphericalToCartesianPfaffian{});
 

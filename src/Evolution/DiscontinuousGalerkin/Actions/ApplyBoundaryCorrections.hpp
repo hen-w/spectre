@@ -11,6 +11,7 @@
 #include <optional>
 #include <tuple>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -43,7 +44,11 @@
 #include "NumericalAlgorithms/DiscontinuousGalerkin/LiftFlux.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/LiftFromBoundary.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/MortarHelpers.hpp"
+#include "NumericalAlgorithms/DiscontinuousGalerkin/ProjectToBoundary.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Tags/Formulation.hpp"
+#include "NumericalAlgorithms/LinearOperators/Filters/Filter.hpp"
+#include "NumericalAlgorithms/LinearOperators/Filters/None.hpp"
+#include "NumericalAlgorithms/LinearOperators/Filters/Tag.hpp"
 #include "NumericalAlgorithms/Spectral/BoundaryInterpolationMatrices.hpp"
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
 #include "NumericalAlgorithms/Spectral/Quadrature.hpp"
@@ -54,6 +59,7 @@
 #include "Time/BoundaryHistory.hpp"
 #include "Time/EvolutionOrdering.hpp"
 #include "Time/SelfStart.hpp"
+#include "Time/Tags/StepNumberWithinSlab.hpp"
 #include "Time/Time.hpp"
 #include "Time/TimeStepId.hpp"
 #include "Time/TimeSteppers/LtsTimeStepper.hpp"
@@ -64,6 +70,7 @@
 #include "Utilities/ErrorHandling/Error.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/MakeArray.hpp"
+#include "Utilities/MemoryHelpers.hpp"
 #include "Utilities/TMPL.hpp"
 
 /// \cond
@@ -212,8 +219,8 @@ bool receive_boundary_data(
       }
     }
 
-    std::unordered_set<Direction<volume_dim>>
-        directions_with_multiple_non_conforming_neighbors{};
+    std::unordered_map<Direction<volume_dim>, std::vector<size_t>>
+        contributors_multiple_non_conforming_neighbors{};
 
     for (auto& mortar_id_and_data : messages_to_process->second) {
       const auto& received_mortar_id = mortar_id_and_data.first;
@@ -231,7 +238,7 @@ bool receive_boundary_data(
               : DirectionalId<volume_dim>{direction, element.id()};
 
       ASSERT(mortar_next_time_step_ids.at(mortar_id) <= current_id or
-                 directions_with_multiple_non_conforming_neighbors.contains(
+                 contributors_multiple_non_conforming_neighbors.contains(
                      direction),
              "Processing wrong time for auxiliary mortar "
                  << mortar_id << "\nExpected <= " << current_id
@@ -361,20 +368,19 @@ bool receive_boundary_data(
                   // The data received from each neighbor has been
                   // interpolated to a subset of points of the single mortar
                   // mesh of the host.  If this is the first neighbor
-                  // processed, initialize the buffer with NaN.
-                  if (not directions_with_multiple_non_conforming_neighbors
+                  // processed,
+                  if (not contributors_multiple_non_conforming_neighbors
                               .contains(direction)) {
-                    directions_with_multiple_non_conforming_neighbors.emplace(
-                        direction);
+                    contributors_multiple_non_conforming_neighbors.emplace(
+                        direction, std::vector<size_t>(
+                                       face_mesh.number_of_grid_points(), 0));
                     mortar_meshes->at(mortar_id) = face_mesh;
                     gts_mortar_data->at(mortar_id).neighbor().face_mesh =
                         face_mesh;
                     gts_mortar_data->at(mortar_id).neighbor().mortar_mesh =
                         face_mesh;
                     gts_mortar_data->at(mortar_id).neighbor().mortar_data =
-                        DataVector{
-                            mortar_data_size,
-                            std::numeric_limits<double>::signaling_NaN()};
+                        DataVector{mortar_data_size, 0.0};
                   }
                   const auto& interpolated_boundary_data =
                       received_mortar_data.interpolated_boundary_data.value();
@@ -397,9 +403,13 @@ bool receive_boundary_data(
                       gts_mortar_data->at(mortar_id)
                           .neighbor()
                           .mortar_data.value();
-                  for (size_t c = 0; c < number_of_components; ++c) {
-                    for (size_t i = 0; i < npts_interpolated; ++i) {
-                      target_mortar_data[offsets[i] + c * npts_mortar] =
+                  auto& contributors =
+                      contributors_multiple_non_conforming_neighbors.at(
+                          direction);
+                  for (size_t i = 0; i < npts_interpolated; ++i) {
+                    ++contributors[offsets[i]];
+                    for (size_t c = 0; c < number_of_components; ++c) {
+                      target_mortar_data[offsets[i] + c * npts_mortar] +=
                           interpolated_data[i + c * npts_interpolated];
                     }
                   }
@@ -417,30 +427,34 @@ bool receive_boundary_data(
           box);
     }
 
-    // Verify all points in NonconformingNeighborInterpolates mortars were
-    // filled (no remaining NaN from initialization).
-    {
-      const auto& gts_mortar_data =
-          db::get<evolution::dg::Tags::MortarData<volume_dim>>(*box);
-      for (const auto& direction :
-           directions_with_multiple_non_conforming_neighbors) {
-        const DirectionalId<volume_dim> nc_mortar_id =
-            DirectionalId<volume_dim>{direction, element.id()};
-        const auto& target_mortar_data =
-            gts_mortar_data.at(nc_mortar_id)
-                .neighbor()
-                .mortar_data.value();
-        ASSERT(
-            std::none_of(
-                target_mortar_data.begin(),
-                target_mortar_data.begin() +
-                    static_cast<ptrdiff_t>(
-                        volume_mesh.slice_away(direction.dimension())
-                            .number_of_grid_points()),
-                [](double v) { return std::isnan(v); }),
-            "Not all points were interpolated");
-      }
-    }
+    db::mutate<evolution::dg::Tags::MortarData<volume_dim>>(
+        [&contributors_multiple_non_conforming_neighbors, &element](
+            const gsl::not_null<DirectionalIdMap<
+                volume_dim, evolution::dg::MortarDataHolder<volume_dim>>*>
+                gts_mortar_data) {
+          for (const auto& [direction, contributors] :
+               contributors_multiple_non_conforming_neighbors) {
+            const DirectionalId<volume_dim> mortar_id =
+                DirectionalId<volume_dim>{direction, element.id()};
+            auto& target_mortar_data =
+                gts_mortar_data->at(mortar_id).neighbor().mortar_data.value();
+            const size_t npts_mortar = contributors.size();
+            const size_t number_of_components =
+                target_mortar_data.size() / npts_mortar;
+            ASSERT(alg::none_of(contributors,
+                                [](const size_t n) { return n == 0; }),
+                   "Not all points were interpolated.  Direction = "
+                       << direction << " ElementId = " << element.id() << "\n"
+                       << "target_mortar_data = " << target_mortar_data);
+            for (size_t i = 0; i < npts_mortar; ++i) {
+              for (size_t c = 0; c < number_of_components; ++c) {
+                target_mortar_data[i + c * npts_mortar] /=
+                    static_cast<double>(contributors[i]);
+              }
+            }
+          }
+        },
+        box);
 
     inbox_data.erase(messages_to_process);
 
@@ -563,8 +577,8 @@ bool receive_boundary_data(
     // chosen.  It is important that the corrected version be what is
     // inserted into the boundary history.
     const TimeStepId processing_time = messages_to_process->first;
-    std::unordered_set<Direction<volume_dim>>
-        directions_with_multiple_non_conforming_neighbors{};
+    std::unordered_map<Direction<volume_dim>, std::vector<size_t>>
+        contributors_multiple_non_conforming_neighbors{};
 
     for (auto& mortar_id_and_data : messages_to_process->second) {
       const auto& received_mortar_id = mortar_id_and_data.first;
@@ -584,7 +598,7 @@ bool receive_boundary_data(
               : DirectionalId<volume_dim>{direction, element.id()};
 
       ASSERT(mortar_next_time_step_ids.at(mortar_id) == processing_time or
-                 directions_with_multiple_non_conforming_neighbors.contains(
+                 contributors_multiple_non_conforming_neighbors.contains(
                      direction),
              "Processing wrong time for mortar "
                  << mortar_id << "\nExpected "
@@ -753,10 +767,11 @@ bool receive_boundary_data(
                   // The data received from each neighbor has been interpolated
                   // to a subset of points of the single mortar mesh of the host
                   // If this is the first neighbor processed,
-                  if (not directions_with_multiple_non_conforming_neighbors
+                  if (not contributors_multiple_non_conforming_neighbors
                               .contains(direction)) {
-                    directions_with_multiple_non_conforming_neighbors.emplace(
-                        direction);
+                    contributors_multiple_non_conforming_neighbors.emplace(
+                        direction, std::vector<size_t>(
+                                       face_mesh.number_of_grid_points(), 0));
                     mortar_next_time_step_ids_mutable->at(mortar_id) =
                         received_mortar_data.validity_range;
                     mortar_meshes->at(mortar_id) = face_mesh;
@@ -765,9 +780,7 @@ bool receive_boundary_data(
                     gts_mortar_data->at(mortar_id).neighbor().mortar_mesh =
                         face_mesh;
                     gts_mortar_data->at(mortar_id).neighbor().mortar_data =
-                        DataVector{
-                            mortar_data_size,
-                            std::numeric_limits<double>::signaling_NaN()};
+                        DataVector{mortar_data_size, 0.0};
                   }
                   ASSERT(
                       mortar_next_time_step_ids_mutable->at(mortar_id) ==
@@ -796,9 +809,13 @@ bool receive_boundary_data(
                   auto& target_mortar_data = gts_mortar_data->at(mortar_id)
                                                  .neighbor()
                                                  .mortar_data.value();
-                  for (size_t c = 0; c < number_of_components; ++c) {
-                    for (size_t i = 0; i < npts_interpolated; ++i) {
-                      target_mortar_data[offsets[i] + c * npts_mortar] =
+                  auto& contributors =
+                      contributors_multiple_non_conforming_neighbors.at(
+                          direction);
+                  for (size_t i = 0; i < npts_interpolated; ++i) {
+                    ++contributors[offsets[i]];
+                    for (size_t c = 0; c < number_of_components; ++c) {
+                      target_mortar_data[offsets[i] + c * npts_mortar] +=
                           interpolated_data[i + c * npts_interpolated];
                     }
                   }
@@ -816,22 +833,34 @@ bool receive_boundary_data(
           box);
     }
 
-    const auto& gts_mortar_data =
-        db::get<evolution::dg::Tags::MortarData<volume_dim>>(*box);
-    for (const auto& direction :
-         directions_with_multiple_non_conforming_neighbors) {
-      const DirectionalId<volume_dim> mortar_id =
-          DirectionalId<volume_dim>{direction, element.id()};
-      const auto& target_mortar_data =
-          gts_mortar_data.at(mortar_id).neighbor().mortar_data.value();
-      ASSERT(std::none_of(target_mortar_data.begin(),
-                          target_mortar_data.begin() +
-                              static_cast<ptrdiff_t>(
-                                  volume_mesh.slice_away(direction.dimension())
-                                      .number_of_grid_points()),
-                          [](double v) { return std::isnan(v); }),
-             "Not all points were interpolated");
-    }
+    db::mutate<evolution::dg::Tags::MortarData<volume_dim>>(
+        [&contributors_multiple_non_conforming_neighbors, &element](
+            const gsl::not_null<DirectionalIdMap<
+                volume_dim, evolution::dg::MortarDataHolder<volume_dim>>*>
+                gts_mortar_data) {
+          for (const auto& [direction, contributors] :
+               contributors_multiple_non_conforming_neighbors) {
+            const DirectionalId<volume_dim> mortar_id =
+                DirectionalId<volume_dim>{direction, element.id()};
+            auto& target_mortar_data =
+                gts_mortar_data->at(mortar_id).neighbor().mortar_data.value();
+            const size_t npts_mortar = contributors.size();
+            const size_t number_of_components =
+                target_mortar_data.size() / npts_mortar;
+            ASSERT(alg::none_of(contributors,
+                                [](const size_t n) { return n == 0; }),
+                   "Not all points were interpolated.  Direction = "
+                       << direction << " ElementId = " << element.id() << "\n"
+                       << "target_mortar_data = " << target_mortar_data);
+            for (size_t i = 0; i < npts_mortar; ++i) {
+              for (size_t c = 0; c < number_of_components; ++c) {
+                target_mortar_data[i + c * npts_mortar] /=
+                    static_cast<double>(contributors[i]);
+              }
+            }
+          }
+        },
+        box);
 
     inbox_data.erase(messages_to_process);
   }
@@ -859,6 +888,7 @@ struct ApplyBoundaryCorrections {
   using system = typename Metavariables::system;
   static constexpr size_t volume_dim = VolumeDim;
   using variables_tag = typename system::variables_tag;
+  using FilterTagList = typename variables_tag::tags_list;
   using dt_variables_tag = db::add_tag_prefix<::Tags::dt, variables_tag>;
   using DtVariables = typename dt_variables_tag::type;
   using derived_boundary_corrections =
@@ -898,7 +928,16 @@ struct ApplyBoundaryCorrections {
           evolution::dg::Tags::NormalCovectorAndMagnitude<volume_dim>,
           ::Tags::TimeStepper<TimeStepperType>,
           evolution::Tags::BoundaryCorrection,
-          tmpl::conditional_t<DenseOutput, ::Tags::Time, ::Tags::TimeStep>,
+          tmpl::conditional_t<
+              DenseOutput, ::Tags::Time,
+              tmpl::list<::Tags::TimeStep,
+                         Filters::runtime::Tags::SpectralFilter<volume_dim,
+                                                                FilterTagList>,
+                         ::Tags::StepNumberWithinSlab,
+                         domain::Tags::Jacobian<volume_dim, Frame::Grid,
+                                                Frame::Inertial>,
+                         domain::Tags::InverseJacobian<volume_dim, Frame::Grid,
+                                                       Frame::Inertial>>>,
           tmpl::conditional_t<local_time_stepping, tmpl::list<>,
                               domain::Tags::DetInvJacobian<
                                   Frame::ElementLogical, Frame::Inertial>>>>,
@@ -921,13 +960,22 @@ struct ApplyBoundaryCorrections {
       const TimeStepperType& time_stepper,
       const evolution::BoundaryCorrection& boundary_correction,
       const TimeDelta& time_step,
+      const Filters::runtime::Filter<volume_dim, FilterTagList>&
+          boundary_filter,
+      const uint64_t step_number_within_slab,
+      const Jacobian<DataVector, volume_dim, Frame::Grid, Frame::Inertial>&
+          volume_jac_grid_to_inertial,
+      const InverseJacobian<DataVector, volume_dim, Frame::Grid,
+                            Frame::Inertial>& volume_inv_jac_grid_to_inertial,
       const Scalar<DataVector>& gts_det_inv_jacobian,
       const VolumeArgs&... volume_args) {
     apply_impl(vars_to_update, mortar_data, volume_mesh, element, mortar_meshes,
                mortar_infos, dg_formulation, face_normal_covector_and_magnitude,
                time_stepper, boundary_correction, time_step,
-               std::numeric_limits<double>::signaling_NaN(),
-               gts_det_inv_jacobian, volume_args...);
+               std::numeric_limits<double>::signaling_NaN(), &boundary_filter,
+               step_number_within_slab, volume_jac_grid_to_inertial,
+               volume_inv_jac_grid_to_inertial, gts_det_inv_jacobian,
+               volume_args...);
   }
 
   template <typename... VolumeArgs>
@@ -945,12 +993,21 @@ struct ApplyBoundaryCorrections {
           face_normal_covector_and_magnitude,
       const TimeStepperType& time_stepper,
       const evolution::BoundaryCorrection& boundary_correction,
-      const TimeDelta& time_step, const VolumeArgs&... volume_args) {
+      const TimeDelta& time_step,
+      const Filters::runtime::Filter<volume_dim, FilterTagList>&
+          boundary_filter,
+      const uint64_t step_number_within_slab,
+      const Jacobian<DataVector, volume_dim, Frame::Grid, Frame::Inertial>&
+          volume_jac_grid_to_inertial,
+      const InverseJacobian<DataVector, volume_dim, Frame::Grid,
+                            Frame::Inertial>& volume_inv_jac_grid_to_inertial,
+      const VolumeArgs&... volume_args) {
     apply_impl(vars_to_update, mortar_data, volume_mesh, element, mortar_meshes,
                mortar_infos, dg_formulation, face_normal_covector_and_magnitude,
                time_stepper, boundary_correction, time_step,
-               std::numeric_limits<double>::signaling_NaN(), {},
-               volume_args...);
+               std::numeric_limits<double>::signaling_NaN(), &boundary_filter,
+               step_number_within_slab, volume_jac_grid_to_inertial,
+               volume_inv_jac_grid_to_inertial, {}, volume_args...);
   }
 
   // dense output (LTS only)
@@ -970,10 +1027,14 @@ struct ApplyBoundaryCorrections {
       const LtsTimeStepper& time_stepper,
       const evolution::BoundaryCorrection& boundary_correction,
       const double dense_output_time, const VolumeArgs&... volume_args) {
-    apply_impl(vars_to_update, mortar_data, volume_mesh, element, mortar_meshes,
-               mortar_infos, dg_formulation, face_normal_covector_and_magnitude,
-               time_stepper, boundary_correction, TimeDelta{},
-               dense_output_time, {}, volume_args...);
+    apply_impl(
+        vars_to_update, mortar_data, volume_mesh, element, mortar_meshes,
+        mortar_infos, dg_formulation, face_normal_covector_and_magnitude,
+        time_stepper, boundary_correction, TimeDelta{}, dense_output_time,
+        nullptr, static_cast<uint64_t>(0),
+        Jacobian<DataVector, volume_dim, Frame::Grid, Frame::Inertial>{},
+        InverseJacobian<DataVector, volume_dim, Frame::Grid, Frame::Inertial>{},
+        {}, volume_args...);
   }
 
   template <typename DbTagsList, typename... InboxTags, typename ArrayIndex,
@@ -1006,6 +1067,13 @@ struct ApplyBoundaryCorrections {
       const TimeStepperType& time_stepper,
       const evolution::BoundaryCorrection& boundary_correction,
       const TimeDelta& time_step, const double dense_output_time,
+      const Filters::runtime::Filter<volume_dim, FilterTagList>* const
+          filter_ptr,
+      const uint64_t step_number_within_slab,
+      const Jacobian<DataVector, volume_dim, Frame::Grid, Frame::Inertial>&
+          volume_jac_grid_to_inertial,
+      const InverseJacobian<DataVector, volume_dim, Frame::Grid,
+                            Frame::Inertial>& volume_inv_jac_grid_to_inertial,
       const Scalar<DataVector>& gts_det_inv_jacobian,
       const VolumeArgs&... volume_args) {
     // We treat this as a set, but use a map because we don't have a
@@ -1031,6 +1099,68 @@ struct ApplyBoundaryCorrections {
     if (mortars_to_act_on.empty()) {
       return;
     }
+
+    bool boundary_filter_active = false;
+    // The auxiliary boundary correction is not filtered currently (see the
+    // filter application below), so the auxiliary pass skips the
+    // filter-activity check and the face-Jacobian setup it would trigger.
+    if constexpr (not DenseOutput and not ComputeAuxiliary) {
+      if (filter_ptr != nullptr and
+          dynamic_cast<
+              const Filters::runtime::None<volume_dim, FilterTagList>*>(
+              filter_ptr) == nullptr) {
+        const auto step_number = static_cast<size_t>(step_number_within_slab);
+        boundary_filter_active =
+            filter_ptr->apply_boundary_filter_on_substep() or
+            filter_ptr->apply_boundary_filter_on_this_step(step_number);
+      }
+    }
+
+    const bool need_face_jacobians = [&]() {
+      if constexpr (DenseOutput) {
+        return false;
+      } else {
+        return boundary_filter_active and filter_ptr != nullptr and
+               filter_ptr->need_jacobians();
+      }
+    }();
+
+    size_t max_face_grid_points = 0;
+    if (need_face_jacobians) {
+      for (const auto& [mortar_id, _info] : mortar_infos) {
+        if (not mortars_to_act_on.contains(mortar_id) or
+            mortar_id.id() == ElementId<volume_dim>::external_boundary_id()) {
+          continue;
+        }
+        max_face_grid_points =
+            std::max(max_face_grid_points,
+                     volume_mesh.slice_away(mortar_id.direction().dimension())
+                         .number_of_grid_points());
+      }
+    }
+
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    std::unique_ptr<double[]> face_jac_buffer{nullptr};
+    if (max_face_grid_points > 0) {
+      constexpr size_t jac_components =
+          Jacobian<DataVector, volume_dim, Frame::Grid,
+                   Frame::Inertial>::size();
+      // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+      face_jac_buffer = cpp20::make_unique_for_overwrite<double[]>(
+          2 * jac_components * max_face_grid_points);
+    }
+
+    std::optional<
+        Jacobian<DataVector, volume_dim, Frame::Grid, Frame::Inertial>>
+        face_jac_grid_to_inertial{};
+    std::optional<
+        InverseJacobian<DataVector, volume_dim, Frame::Grid, Frame::Inertial>>
+        face_inv_jac_grid_to_inertial{};
+    if (face_jac_buffer != nullptr) {
+      face_jac_grid_to_inertial.emplace();
+      face_inv_jac_grid_to_inertial.emplace();
+    }
+    std::optional<Direction<volume_dim>> cached_face_jac_direction{};
 
     tuples::tagged_tuple_from_typelist<db::wrap_tags_in<
         detail::TemporaryReference, volume_tags_for_dg_boundary_terms>>
@@ -1068,12 +1198,17 @@ struct ApplyBoundaryCorrections {
         "final.");
     call_with_dynamic_type<void, derived_boundary_corrections>(
         &boundary_correction,
-        [&dense_output_time, &dg_formulation, &element,
-         &face_normal_covector_and_magnitude, &mortar_data, &mortar_meshes,
-         &mortar_infos, &mortars_to_act_on, &time_step, &time_stepper,
-         &vars_to_update, &volume_args_tuple, &volume_det_jacobian,
-         &volume_det_inv_jacobian,
+        [&cached_face_jac_direction, &dense_output_time, &dg_formulation,
+         &element, &face_inv_jac_grid_to_inertial,
+         &face_jac_buffer,  // NOLINT(modernize-avoid-c-arrays)
+         &face_jac_grid_to_inertial, &face_normal_covector_and_magnitude,
+         boundary_filter_active, filter_ptr, max_face_grid_points,
+         need_face_jacobians, &mortar_data, &mortar_meshes, &mortar_infos,
+         &mortars_to_act_on, &time_step, &time_stepper, &vars_to_update,
+         &volume_args_tuple, &volume_det_jacobian, &volume_det_inv_jacobian,
+         &volume_inv_jac_grid_to_inertial, &volume_jac_grid_to_inertial,
          &volume_mesh](auto* typed_boundary_correction) {
+          (void)need_face_jacobians;
           using BcType = std::decay_t<decltype(*typed_boundary_correction)>;
           // Compute internal boundary quantities on the mortar for sides of
           // the element that have neighbors, i.e. they are not an external
@@ -1141,10 +1276,38 @@ struct ApplyBoundaryCorrections {
                 volume_mesh.quadrature(direction.dimension()) ==
                     Spectral::Quadrature::GaussRadauUpper;
 
+            if (need_face_jacobians and
+                (not cached_face_jac_direction.has_value() or
+                 *cached_face_jac_direction != direction)) {
+              constexpr size_t jac_components =
+                  Jacobian<DataVector, volume_dim, Frame::Grid,
+                           Frame::Inertial>::size();
+              const size_t current_face_size =
+                  face_mesh.number_of_grid_points();
+              for (size_t i = 0; i < jac_components; ++i) {
+                (*face_jac_grid_to_inertial)[i].set_data_ref(
+                    &face_jac_buffer[i * max_face_grid_points],
+                    current_face_size);
+                (*face_inv_jac_grid_to_inertial)[i].set_data_ref(
+                    &face_jac_buffer[(jac_components + i) *
+                                     max_face_grid_points],
+                    current_face_size);
+              }
+              ::dg::project_tensor_to_boundary(
+                  make_not_null(&*face_jac_grid_to_inertial),
+                  volume_jac_grid_to_inertial, volume_mesh, direction);
+              ::dg::project_tensor_to_boundary(
+                  make_not_null(&*face_inv_jac_grid_to_inertial),
+                  volume_inv_jac_grid_to_inertial, volume_mesh, direction);
+              cached_face_jac_direction = direction;
+            }
+
             const auto compute_correction_coupling =
-                [&typed_boundary_correction, &direction, dg_formulation,
-                 &dt_boundary_correction_on_mortar, &face_det_jacobian,
-                 &face_mesh, &face_normal_covector_and_magnitude,
+                [&typed_boundary_correction, boundary_filter_active, &direction,
+                 dg_formulation, &dt_boundary_correction_on_mortar,
+                 &face_det_jacobian, &face_inv_jac_grid_to_inertial,
+                 &face_jac_grid_to_inertial, &face_mesh,
+                 &face_normal_covector_and_magnitude, filter_ptr,
                  &local_data_on_mortar, &mortar_id, &mortar_meshes,
                  &mortar_infos, &neighbor_data_on_mortar, using_points_on_face,
                  &volume_args_tuple, &volume_det_jacobian,
@@ -1244,6 +1407,26 @@ struct ApplyBoundaryCorrections {
                 }
                 return dt_boundary_correction_on_mortar;
               }();
+              // The auxiliary boundary correction is not filtered currently
+              if constexpr (not DenseOutput and not ComputeAuxiliary) {
+                // Filter the boundary correction on the mortar before it is
+                // lifted into the volume.
+                if (boundary_filter_active) {
+                  using BoundaryFilterVars = Variables<FilterTagList>;
+                  auto boundary_filter_view =
+                      dt_boundary_correction
+                          .template reference_with_different_prefixes<
+                              BoundaryFilterVars>();
+                  filter_ptr->apply_on_boundary(
+                      make_not_null(&boundary_filter_view), face_mesh,
+                      face_inv_jac_grid_to_inertial, face_jac_grid_to_inertial);
+                }
+              } else {
+                (void)boundary_filter_active;
+                (void)face_inv_jac_grid_to_inertial;
+                (void)face_jac_grid_to_inertial;
+                (void)filter_ptr;
+              }
 
               // Both paths initialize this to be non-owning.
               Scalar<DataVector> magnitude_of_face_normal{};

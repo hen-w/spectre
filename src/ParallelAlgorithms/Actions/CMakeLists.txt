@@ -22,6 +22,7 @@ spectre_target_headers(
   MutateApply.hpp
   RandomizeVariables.hpp
   SetData.hpp
+  SpectralFilter.hpp
   TerminatePhase.hpp
   UpdateMessageQueue.hpp
   )

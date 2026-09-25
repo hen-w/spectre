@@ -78,14 +78,18 @@ SpatialDiscretization:
   DiscontinuousGalerkin:
     Formulation: StrongInertial
     Quadrature: GaussLobatto
+    Filtering:
+      - None:
+          BlocksToFilter: All
 
 # Filtering is being tested by the 2D executable (see EvolveScalarWave.hpp)
-Filtering:
-  FilterEvolvedVariables:
-    - ExponentialFilter:
-        Alpha: 36
-        HalfPower: 128
-        BlocksToFilter: All
+# Legacy volume filters (system removed 2026-09-25); historic settings:
+# Filtering:
+#   FilterEvolvedVariables:
+#     - ExponentialFilter:
+#         Alpha: 36
+#         HalfPower: 128
+#         BlocksToFilter: All
 
 EventsAndTriggersAtCheckpoints:
 

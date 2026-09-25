@@ -15,6 +15,8 @@
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "Domain/BlockLogicalCoordinates.hpp"
 #include "Domain/BoundaryConditions/BoundaryCondition.hpp"
+#include "Domain/CoordinateMaps/Distribution.hpp"
+#include "Domain/CoordinateMaps/Interval.hpp"
 #include "Domain/Creators/NonconformingSphericalShells.hpp"
 #include "Domain/Domain.hpp"
 #include "Domain/ElementMap.hpp"
@@ -31,6 +33,20 @@ using Excision =
     domain::creators::NonconformingSphericalShells_detail::Excision;
 using InnerCube =
     domain::creators::NonconformingSphericalShells_detail::InnerCube;
+using Distribution = domain::CoordinateMaps::Distribution;
+
+// Build a vector of `size` Linear distributions.
+std::vector<Distribution> linear(const size_t size) {
+  return std::vector<Distribution>(size, Distribution::Linear);
+}
+
+// Build an all-Linear RadialDistribution option with `num_wedge_layers`
+// entries for the wedges and `num_shells` entries for the spherical-harmonic
+// shells.
+std::array<std::vector<Distribution>, 2> all_linear(
+    const size_t num_wedge_layers, const size_t num_shells) {
+  return {{linear(num_wedge_layers), linear(num_shells)}};
+}
 
 std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>
 create_boundary_condition(const bool outer) {
@@ -77,6 +93,24 @@ std::string excised_option_string(
     shells_part_str += std::to_string(shells_partitioning[i]);
   }
   shells_part_str += "]\n";
+  // All-Linear RadialDistribution sized to match the partitionings.
+  std::string radial_dist_str = "  RadialDistribution: [[";
+  const size_t num_wedge_layers = 1 + wedges_partitioning.size();
+  const size_t num_shells = 1 + shells_partitioning.size();
+  for (size_t i = 0; i < num_wedge_layers; ++i) {
+    if (i > 0) {
+      radial_dist_str += ", ";
+    }
+    radial_dist_str += "Linear";
+  }
+  radial_dist_str += "], [";
+  for (size_t i = 0; i < num_shells; ++i) {
+    if (i > 0) {
+      radial_dist_str += ", ";
+    }
+    radial_dist_str += "Linear";
+  }
+  radial_dist_str += "]]\n";
   return "NonconformingSphericalShells:\n"
          "  InnerRadius: " +
          std::to_string(inner_radius) +
@@ -86,9 +120,8 @@ std::string excised_option_string(
          "\n"
          "  OuterRadius: " +
          std::to_string(outer_radius) + "\n" + wedges_part_str +
-         shells_part_str +
-         "  InitialRadialRefinement: " +
-         std::to_string(radial_refinement) +
+         shells_part_str + radial_dist_str +
+         "  InitialRadialRefinement: " + std::to_string(radial_refinement) +
          "\n"
          "  InitialAngularRefinementOfWedges: " +
          std::to_string(angular_refinement) +
@@ -100,10 +133,9 @@ std::string excised_option_string(
          std::to_string(spherical_harmonic_l) +
          "\n"
          "  InitialNumberOfAngularGridPointsOfWedges: " +
-         std::to_string(angular_extents) +
-         "\n" + interior_option +
-         "  UseEquiangularMap: " +
-         (use_equiangular_map ? "true" : "false") + "\n" + outer_bc_option;
+         std::to_string(angular_extents) + "\n" + interior_option +
+         "  UseEquiangularMap: " + (use_equiangular_map ? "true" : "false") +
+         "\n" + outer_bc_option;
 }
 
 std::string filled_option_string(
@@ -136,6 +168,24 @@ std::string filled_option_string(
     shells_part_str += std::to_string(shells_partitioning[i]);
   }
   shells_part_str += "]\n";
+  // All-Linear RadialDistribution sized to match the partitionings.
+  std::string radial_dist_str = "  RadialDistribution: [[";
+  const size_t num_wedge_layers = 1 + wedges_partitioning.size();
+  const size_t num_shells = 1 + shells_partitioning.size();
+  for (size_t i = 0; i < num_wedge_layers; ++i) {
+    if (i > 0) {
+      radial_dist_str += ", ";
+    }
+    radial_dist_str += "Linear";
+  }
+  radial_dist_str += "], [";
+  for (size_t i = 0; i < num_shells; ++i) {
+    if (i > 0) {
+      radial_dist_str += ", ";
+    }
+    radial_dist_str += "Linear";
+  }
+  radial_dist_str += "]]\n";
   return "NonconformingSphericalShells:\n"
          "  InnerRadius: " +
          std::to_string(inner_radius) +
@@ -145,9 +195,8 @@ std::string filled_option_string(
          "\n"
          "  OuterRadius: " +
          std::to_string(outer_radius) + "\n" + wedges_part_str +
-         shells_part_str +
-         "  InitialRadialRefinement: " +
-         std::to_string(radial_refinement) +
+         shells_part_str + radial_dist_str +
+         "  InitialRadialRefinement: " + std::to_string(radial_refinement) +
          "\n"
          "  InitialAngularRefinementOfWedges: " +
          std::to_string(angular_refinement) +
@@ -180,38 +229,38 @@ void test_parse_errors() {
   const size_t l = 9;
   const size_t angular_extents = 11;
 
-  CHECK_THROWS_WITH(
-      domain::creators::NonconformingSphericalShells(
-          inner_radius, 0.5 * inner_radius, outer_radius, {}, {},
-          radial_refinement, angular_refinement, radial_extents, l,
-          angular_extents, Excision{nullptr}, true, nullptr,
-          Options::Context{false, {}, 1, 1}),
-      Catch::Matchers::ContainsSubstring(
-          "Inner radius must be smaller than interface radius"));
+  CHECK_THROWS_WITH(domain::creators::NonconformingSphericalShells(
+                        inner_radius, 0.5 * inner_radius, outer_radius, {}, {},
+                        all_linear(1, 1), radial_refinement, angular_refinement,
+                        radial_extents, l, angular_extents, Excision{nullptr},
+                        true, nullptr, Options::Context{false, {}, 1, 1}),
+                    Catch::Matchers::ContainsSubstring(
+                        "Inner radius must be smaller than interface radius"));
 
-  CHECK_THROWS_WITH(
-      domain::creators::NonconformingSphericalShells(
-          inner_radius, 1.5 * outer_radius, outer_radius, {}, {},
-          radial_refinement, angular_refinement, radial_extents, l,
-          angular_extents, Excision{nullptr}, true, nullptr,
-          Options::Context{false, {}, 1, 1}),
-      Catch::Matchers::ContainsSubstring(
-          "Interface radius must be smaller than outer radius"));
+  CHECK_THROWS_WITH(domain::creators::NonconformingSphericalShells(
+                        inner_radius, 1.5 * outer_radius, outer_radius, {}, {},
+                        all_linear(1, 1), radial_refinement, angular_refinement,
+                        radial_extents, l, angular_extents, Excision{nullptr},
+                        true, nullptr, Options::Context{false, {}, 1, 1}),
+                    Catch::Matchers::ContainsSubstring(
+                        "Interface radius must be smaller than outer radius"));
 
   CHECK_THROWS_WITH(
       domain::creators::NonconformingSphericalShells(
           inner_radius, interface_radius, outer_radius, {}, {},
-          radial_refinement, angular_refinement, radial_extents, l,
-          angular_extents, Excision{create_boundary_condition(false)}, true,
-          nullptr, Options::Context{false, {}, 1, 1}),
+          all_linear(1, 1), radial_refinement, angular_refinement,
+          radial_extents, l, angular_extents,
+          Excision{create_boundary_condition(false)}, true, nullptr,
+          Options::Context{false, {}, 1, 1}),
       Catch::Matchers::ContainsSubstring(
           "Must specify either both inner and outer boundary conditions "
           "or neither."));
   CHECK_THROWS_WITH(
       domain::creators::NonconformingSphericalShells(
           inner_radius, interface_radius, outer_radius, {}, {},
-          radial_refinement, angular_refinement, radial_extents, l,
-          angular_extents, Excision{create_boundary_condition(false)}, true,
+          all_linear(1, 1), radial_refinement, angular_refinement,
+          radial_extents, l, angular_extents,
+          Excision{create_boundary_condition(false)}, true,
           std::make_unique<TestHelpers::domain::BoundaryConditions::
                                TestPeriodicBoundaryCondition<3>>(),
           Options::Context{false, {}, 1, 1}),
@@ -221,8 +270,8 @@ void test_parse_errors() {
   CHECK_THROWS_WITH(
       domain::creators::NonconformingSphericalShells(
           inner_radius, interface_radius, outer_radius, {}, {},
-          radial_refinement, angular_refinement, radial_extents, l,
-          angular_extents,
+          all_linear(1, 1), radial_refinement, angular_refinement,
+          radial_extents, l, angular_extents,
           Excision{std::make_unique<TestHelpers::domain::BoundaryConditions::
                                         TestPeriodicBoundaryCondition<3>>()},
           true, create_boundary_condition(true),
@@ -233,8 +282,9 @@ void test_parse_errors() {
   CHECK_THROWS_WITH(
       domain::creators::NonconformingSphericalShells(
           inner_radius, interface_radius, outer_radius, {}, {},
-          radial_refinement, angular_refinement, radial_extents, l,
-          angular_extents, Excision{create_boundary_condition(false)}, true,
+          all_linear(1, 1), radial_refinement, angular_refinement,
+          radial_extents, l, angular_extents,
+          Excision{create_boundary_condition(false)}, true,
           std::make_unique<TestHelpers::domain::BoundaryConditions::
                                TestNoneBoundaryCondition<3>>(),
           Options::Context{false, {}, 1, 1}),
@@ -244,8 +294,8 @@ void test_parse_errors() {
   CHECK_THROWS_WITH(
       domain::creators::NonconformingSphericalShells(
           inner_radius, interface_radius, outer_radius, {}, {},
-          radial_refinement, angular_refinement, radial_extents, l,
-          angular_extents,
+          all_linear(1, 1), radial_refinement, angular_refinement,
+          radial_extents, l, angular_extents,
           Excision{std::make_unique<TestHelpers::domain::BoundaryConditions::
                                         TestNoneBoundaryCondition<3>>()},
           true, create_boundary_condition(true),
@@ -258,24 +308,24 @@ void test_parse_errors() {
   CHECK_THROWS_WITH(
       domain::creators::NonconformingSphericalShells(
           inner_radius, interface_radius, outer_radius, {2.2, 2.0}, {},
-          radial_refinement, angular_refinement, radial_extents, l,
-          angular_extents, Excision{nullptr}, true, nullptr,
+          all_linear(3, 1), radial_refinement, angular_refinement,
+          radial_extents, l, angular_extents, Excision{nullptr}, true, nullptr,
           Options::Context{false, {}, 1, 1}),
       Catch::Matchers::ContainsSubstring(
           "Specify radial partitioning in ascending order"));
   CHECK_THROWS_WITH(
       domain::creators::NonconformingSphericalShells(
           inner_radius, interface_radius, outer_radius, {1.5}, {},
-          radial_refinement, angular_refinement, radial_extents, l,
-          angular_extents, Excision{nullptr}, true, nullptr,
+          all_linear(2, 1), radial_refinement, angular_refinement,
+          radial_extents, l, angular_extents, Excision{nullptr}, true, nullptr,
           Options::Context{false, {}, 1, 1}),
       Catch::Matchers::ContainsSubstring(
           "First radial partition must be larger than the inner radius"));
   CHECK_THROWS_WITH(
       domain::creators::NonconformingSphericalShells(
           inner_radius, interface_radius, outer_radius, {2.5}, {},
-          radial_refinement, angular_refinement, radial_extents, l,
-          angular_extents, Excision{nullptr}, true, nullptr,
+          all_linear(2, 1), radial_refinement, angular_refinement,
+          radial_extents, l, angular_extents, Excision{nullptr}, true, nullptr,
           Options::Context{false, {}, 1, 1}),
       Catch::Matchers::ContainsSubstring(
           "Last radial partition must be smaller than the interface radius"));
@@ -284,27 +334,62 @@ void test_parse_errors() {
   CHECK_THROWS_WITH(
       domain::creators::NonconformingSphericalShells(
           inner_radius, interface_radius, outer_radius, {}, {2.7, 2.5},
-          radial_refinement, angular_refinement, radial_extents, l,
-          angular_extents, Excision{nullptr}, true, nullptr,
+          all_linear(1, 3), radial_refinement, angular_refinement,
+          radial_extents, l, angular_extents, Excision{nullptr}, true, nullptr,
           Options::Context{false, {}, 1, 1}),
       Catch::Matchers::ContainsSubstring(
           "Specify radial partitioning in ascending order"));
   CHECK_THROWS_WITH(
       domain::creators::NonconformingSphericalShells(
           inner_radius, interface_radius, outer_radius, {}, {2.3},
-          radial_refinement, angular_refinement, radial_extents, l,
-          angular_extents, Excision{nullptr}, true, nullptr,
+          all_linear(1, 2), radial_refinement, angular_refinement,
+          radial_extents, l, angular_extents, Excision{nullptr}, true, nullptr,
           Options::Context{false, {}, 1, 1}),
       Catch::Matchers::ContainsSubstring(
           "First radial partition must be larger than the interface radius"));
   CHECK_THROWS_WITH(
       domain::creators::NonconformingSphericalShells(
           inner_radius, interface_radius, outer_radius, {}, {3.0},
-          radial_refinement, angular_refinement, radial_extents, l,
-          angular_extents, Excision{nullptr}, true, nullptr,
+          all_linear(1, 2), radial_refinement, angular_refinement,
+          radial_extents, l, angular_extents, Excision{nullptr}, true, nullptr,
           Options::Context{false, {}, 1, 1}),
       Catch::Matchers::ContainsSubstring(
           "Last radial partition must be smaller than the outer radius"));
+
+  // RadialDistribution parse errors.
+  // (i) Wrong number of distributions for the wedge layers: with one wedge
+  // partition there are two wedge layers, but only one distribution is given.
+  CHECK_THROWS_WITH(
+      domain::creators::NonconformingSphericalShells(
+          inner_radius, interface_radius, outer_radius, {2.1}, {},
+          all_linear(1, 1), radial_refinement, angular_refinement,
+          radial_extents, l, angular_extents, Excision{nullptr}, true, nullptr,
+          Options::Context{false, {}, 1, 1}),
+      Catch::Matchers::ContainsSubstring(
+          "Specify a 'RadialDistribution' for every spherical shell"));
+  // (ii) Wrong number of distributions for the shells: with one shell partition
+  // there are two shells, but only one distribution is given.
+  CHECK_THROWS_WITH(
+      domain::creators::NonconformingSphericalShells(
+          inner_radius, interface_radius, outer_radius, {}, {2.6},
+          all_linear(1, 1), radial_refinement, angular_refinement,
+          radial_extents, l, angular_extents, Excision{nullptr}, true, nullptr,
+          Options::Context{false, {}, 1, 1}),
+      Catch::Matchers::ContainsSubstring(
+          "Specify a 'RadialDistribution' for every spherical shell"));
+  // (iii) Non-Linear innermost wedge layer with a filled-cube interior.
+  CHECK_THROWS_WITH(
+      domain::creators::NonconformingSphericalShells(
+          inner_radius, interface_radius, outer_radius, {}, {},
+          std::array<std::vector<Distribution>, 2>{
+              {std::vector<Distribution>{Distribution::Logarithmic},
+               std::vector<Distribution>{Distribution::Linear}}},
+          radial_refinement, angular_refinement, radial_extents, l,
+          angular_extents, InnerCube{0.0}, true, nullptr,
+          Options::Context{false, {}, 1, 1}),
+      Catch::Matchers::ContainsSubstring(
+          "must be 'Linear' for the innermost wedge layer when the interior is "
+          "filled with a cube"));
 }
 
 template <typename Generator>
@@ -614,13 +699,14 @@ void test_excised(const gsl::not_null<Generator*> gen) {
           outer_radius,
           {},
           {},
+          all_linear(1, 1),
           radial_refinement,
           angular_refinement,
           radial_extents,
           l,
           angular_extents,
           with_boundary_conditions ? Excision{create_boundary_condition(false)}
-                                  : Excision{nullptr},
+                                   : Excision{nullptr},
           true,
           with_boundary_conditions ? create_boundary_condition(true) : nullptr};
       test_excised_construction(gen, creator, inner_radius, interface_radius,
@@ -643,13 +729,14 @@ void test_excised(const gsl::not_null<Generator*> gen) {
           outer_radius,
           wedges_part,
           {},
+          all_linear(2, 1),
           radial_refinement,
           angular_refinement,
           radial_extents,
           l,
           angular_extents,
           with_boundary_conditions ? Excision{create_boundary_condition(false)}
-                                  : Excision{nullptr},
+                                   : Excision{nullptr},
           true,
           with_boundary_conditions ? create_boundary_condition(true) : nullptr};
       test_excised_construction(gen, creator, inner_radius, interface_radius,
@@ -673,13 +760,14 @@ void test_excised(const gsl::not_null<Generator*> gen) {
           outer_radius,
           {},
           shells_part,
+          all_linear(1, 2),
           radial_refinement,
           angular_refinement,
           radial_extents,
           l,
           angular_extents,
           with_boundary_conditions ? Excision{create_boundary_condition(false)}
-                                  : Excision{nullptr},
+                                   : Excision{nullptr},
           true,
           with_boundary_conditions ? create_boundary_condition(true) : nullptr};
       test_excised_construction(gen, creator, inner_radius, interface_radius,
@@ -704,13 +792,14 @@ void test_excised(const gsl::not_null<Generator*> gen) {
           outer_radius,
           wedges_part,
           shells_part,
+          all_linear(2, 2),
           radial_refinement,
           angular_refinement,
           radial_extents,
           l,
           angular_extents,
           with_boundary_conditions ? Excision{create_boundary_condition(false)}
-                                  : Excision{nullptr},
+                                   : Excision{nullptr},
           true,
           with_boundary_conditions ? create_boundary_condition(true) : nullptr};
       test_excised_construction(gen, creator, inner_radius, interface_radius,
@@ -753,6 +842,7 @@ void test_filled(const gsl::not_null<Generator*> gen) {
               outer_radius,
               {},
               {},
+              all_linear(1, 1),
               radial_refinement,
               angular_refinement,
               radial_extents,
@@ -761,7 +851,7 @@ void test_filled(const gsl::not_null<Generator*> gen) {
               InnerCube{sphericity},
               use_equiangular_map,
               with_boundary_conditions ? create_boundary_condition(true)
-                                      : nullptr};
+                                       : nullptr};
           test_filled_construction(gen, creator, inner_radius,
                                    interface_radius, outer_radius, {}, {},
                                    with_boundary_conditions);
@@ -784,6 +874,7 @@ void test_filled(const gsl::not_null<Generator*> gen) {
               outer_radius,
               wedges_part,
               shells_part,
+              all_linear(2, 2),
               radial_refinement,
               angular_refinement,
               radial_extents,
@@ -792,7 +883,7 @@ void test_filled(const gsl::not_null<Generator*> gen) {
               InnerCube{sphericity},
               use_equiangular_map,
               with_boundary_conditions ? create_boundary_condition(true)
-                                      : nullptr};
+                                       : nullptr};
           test_filled_construction(gen, creator, inner_radius,
                                    interface_radius, outer_radius,
                                    wedges_part, shells_part,
@@ -809,6 +900,207 @@ void test_filled(const gsl::not_null<Generator*> gen) {
     }
   }
 }
+
+// Pin (a): an all-Linear domain must reproduce the exact affine radii at
+// sample logical points. Catches Interval(Linear) silently changing the old
+// (Affine) behavior for either the shells or the wedges.
+void test_linear_unchanged() {
+  INFO("Linear distribution reproduces the affine radii");
+  const double inner_radius = 1.0;
+  const double interface_radius = 1.5;
+  const double outer_radius = 2.0;
+  const domain::creators::NonconformingSphericalShells creator{
+      inner_radius,
+      interface_radius,
+      outer_radius,
+      {},
+      {},
+      all_linear(1, 1),
+      3,
+      2,
+      5,
+      6,
+      7,
+      Excision{nullptr},
+      true,
+      nullptr};
+  const auto domain = creator.create_domain();
+  const auto& blocks = domain.blocks();
+  {
+    INFO("Wedge block spans [inner, interface] linearly along zeta");
+    const size_t wedge_block_id = 0;
+    const ElementMap<3, Frame::Inertial> element_map{
+        ElementId<3>{wedge_block_id}, blocks[wedge_block_id]};
+    const auto radius_at = [&element_map](const double zeta) {
+      const tnsr::I<double, 3, Frame::ElementLogical> x_logical{
+          {{0.0, 0.0, zeta}}};
+      return get(magnitude(element_map(x_logical)));
+    };
+    CHECK(radius_at(-1.0) == approx(inner_radius));
+    CHECK(radius_at(0.0) == approx(0.5 * (inner_radius + interface_radius)));
+    CHECK(radius_at(1.0) == approx(interface_radius));
+  }
+  {
+    INFO("Shell block spans [interface, outer] linearly along xi");
+    const size_t shell_block_id = 6;  // 6 wedges (1 layer), excised, 1st shell
+    const ElementMap<3, Frame::Inertial> element_map{
+        ElementId<3>{shell_block_id}, blocks[shell_block_id]};
+    const double theta = 1.0;
+    const double phi = 2.0;
+    const auto radius_at = [&element_map, theta, phi](const double xi) {
+      const tnsr::I<double, 3, Frame::ElementLogical> x_logical{
+          {{xi, theta, phi}}};
+      return get(magnitude(element_map(x_logical)));
+    };
+    CHECK(radius_at(-1.0) == approx(interface_radius));
+    CHECK(radius_at(0.0) == approx(0.5 * (interface_radius + outer_radius)));
+    CHECK(radius_at(1.0) == approx(outer_radius));
+  }
+}
+
+// Pin (b): a Logarithmic spherical-harmonic shell must reproduce the radii of
+// a directly-constructed Interval(Logarithmic) map. Catches the shell radial
+// distribution option being dropped (the shell would fall back to Linear).
+void test_logarithmic_shells() {
+  INFO("Logarithmic shell reproduces the Interval(Logarithmic) radii");
+  const double inner_radius = 1.0;
+  const double interface_radius = 1.5;
+  const double outer_radius = 2.0;
+  const domain::creators::NonconformingSphericalShells creator{
+      inner_radius,
+      interface_radius,
+      outer_radius,
+      {},
+      {},
+      std::array<std::vector<Distribution>, 2>{
+          {std::vector<Distribution>{Distribution::Linear},
+           std::vector<Distribution>{Distribution::Logarithmic}}},
+      3,
+      2,
+      5,
+      6,
+      7,
+      Excision{nullptr},
+      true,
+      nullptr};
+  const auto domain = creator.create_domain();
+  const auto& blocks = domain.blocks();
+  const size_t shell_block_id = 6;  // 6 wedges (1 layer), excised, 1st shell
+  const ElementMap<3, Frame::Inertial> element_map{ElementId<3>{shell_block_id},
+                                                   blocks[shell_block_id]};
+  // Reference is exactly the Interval the creator builds for this shell.
+  const domain::CoordinateMaps::Interval reference{
+      -1.0, 1.0, interface_radius, outer_radius, Distribution::Logarithmic,
+      0.0};
+  const double theta = 1.0;
+  const double phi = 2.0;
+  for (const double xi : {-1.0, 0.0, 1.0}) {
+    CAPTURE(xi);
+    const double reference_radius = reference(std::array<double, 1>{{xi}})[0];
+    const tnsr::I<double, 3, Frame::ElementLogical> x_logical{
+        {{xi, theta, phi}}};
+    CHECK(get(magnitude(element_map(x_logical))) == approx(reference_radius));
+  }
+}
+
+// Pin (c): a Logarithmic OUTER wedge layer (filled interior, Linear innermost
+// layer) must reproduce the radii of a directly-constructed
+// Interval(Logarithmic) map, and its midpoint radius must differ from the
+// linear midpoint. Catches the wedge radial distribution option being dropped.
+void test_logarithmic_wedge() {
+  INFO(
+      "Logarithmic outer wedge layer reproduces the Interval(Logarithmic) "
+      "radii");
+  const double inner_radius = 1.0;
+  const double interface_radius = 1.5;
+  const double outer_radius = 2.0;
+  const double wedge_partition = 1.2;
+  const domain::creators::NonconformingSphericalShells creator{
+      inner_radius,
+      interface_radius,
+      outer_radius,
+      {wedge_partition},
+      {},
+      std::array<std::vector<Distribution>, 2>{
+          {std::vector<Distribution>{Distribution::Linear,
+                                     Distribution::Logarithmic},
+           std::vector<Distribution>{Distribution::Linear}}},
+      3,
+      2,
+      5,
+      6,
+      7,
+      InnerCube{0.0},
+      true,
+      nullptr};
+  const auto domain = creator.create_domain();
+  const auto& blocks = domain.blocks();
+  // Two wedge layers (12 wedge blocks). The outer layer is blocks 6..11 and
+  // spans [wedge_partition, interface_radius] with both faces spherical, so at
+  // xi = eta = 0 the mapped radius follows the radial distribution exactly.
+  const size_t wedge_block_id = 6;
+  const ElementMap<3, Frame::Inertial> element_map{ElementId<3>{wedge_block_id},
+                                                   blocks[wedge_block_id]};
+  const domain::CoordinateMaps::Interval reference{
+      -1.0, 1.0, wedge_partition, interface_radius, Distribution::Logarithmic,
+      0.0};
+  const auto radius_at = [&element_map](const double zeta) {
+    const tnsr::I<double, 3, Frame::ElementLogical> x_logical{
+        {{0.0, 0.0, zeta}}};
+    return get(magnitude(element_map(x_logical)));
+  };
+  for (const double zeta : {-1.0, 0.0, 1.0}) {
+    CAPTURE(zeta);
+    const double reference_radius = reference(std::array<double, 1>{{zeta}})[0];
+    CHECK(radius_at(zeta) == approx(reference_radius));
+  }
+  // The log-distributed midpoint must differ from the linear midpoint,
+  // otherwise the wedge distribution option was silently ignored.
+  CHECK(radius_at(0.0) != approx(0.5 * (wedge_partition + interface_radius)));
+}
+
+// Pin (e): a creator built with a mixed (non-Linear) distribution must produce
+// block maps that differ from the all-Linear ones. Guards against the option
+// being parsed but never plumbed into the maps.
+void test_mixed_differs_from_linear() {
+  INFO("Mixed distributions differ from all-Linear");
+  const double inner_radius = 1.0;
+  const double interface_radius = 1.5;
+  const double outer_radius = 2.0;
+  const auto make_creator = [&](const Distribution shell_distribution) {
+    return domain::creators::NonconformingSphericalShells{
+        inner_radius,
+        interface_radius,
+        outer_radius,
+        {},
+        {},
+        std::array<std::vector<Distribution>, 2>{
+            {std::vector<Distribution>{Distribution::Linear},
+             std::vector<Distribution>{shell_distribution}}},
+        3,
+        2,
+        5,
+        6,
+        7,
+        Excision{nullptr},
+        true,
+        nullptr};
+  };
+  const auto linear_creator = make_creator(Distribution::Linear);
+  const auto log_creator = make_creator(Distribution::Logarithmic);
+  const auto linear_domain = linear_creator.create_domain();
+  const auto log_domain = log_creator.create_domain();
+  const size_t shell_block_id = 6;  // 6 wedges (1 layer), excised, 1st shell
+  const ElementMap<3, Frame::Inertial> linear_map{
+      ElementId<3>{shell_block_id}, linear_domain.blocks()[shell_block_id]};
+  const ElementMap<3, Frame::Inertial> log_map{
+      ElementId<3>{shell_block_id}, log_domain.blocks()[shell_block_id]};
+  const tnsr::I<double, 3, Frame::ElementLogical> midpoint_logical{
+      {{0.0, 1.0, 2.0}}};
+  const double linear_radius = get(magnitude(linear_map(midpoint_logical)));
+  const double log_radius = get(magnitude(log_map(midpoint_logical)));
+  CHECK(linear_radius != approx(log_radius));
+}
 }  // namespace
 
 // [[TimeOut, 30]]
@@ -819,4 +1111,8 @@ SPECTRE_TEST_CASE("Unit.Domain.Creators.NonconformingSphericalShells",
   test_parse_errors();
   test_excised(make_not_null(&gen));
   test_filled(make_not_null(&gen));
+  test_linear_unchanged();
+  test_logarithmic_shells();
+  test_logarithmic_wedge();
+  test_mixed_differs_from_linear();
 }

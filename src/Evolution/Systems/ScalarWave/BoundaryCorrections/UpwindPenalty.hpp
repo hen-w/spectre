@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <optional>
+#include <utility>
 
 #include "DataStructures/DataBox/Prefixes.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
@@ -217,6 +218,15 @@ class UpwindPenalty final : public evolution::BoundaryCorrection {
   using dg_package_data_temporary_tags = tmpl::list<Tags::ConstraintGamma2>;
   using dg_package_data_volume_tags = tmpl::list<>;
   using dg_boundary_terms_volume_tags = tmpl::list<>;
+  // ScalarWave is not an LDG system and has no auxiliary pass. These empty
+  // lists satisfy the type-level requirements of the LDG-aware
+  // ComputeTimeDerivative and ApplyBoundaryCorrections actions, which
+  // transform over every registered boundary correction's auxiliary tag
+  // aliases; the auxiliary code paths are never instantiated for this system.
+  using dg_auxiliary_package_field_tags = tmpl::list<>;
+  using dg_auxiliary_package_data_temporary_tags = tmpl::list<>;
+  using dg_auxiliary_package_data_volume_tags = tmpl::list<>;
+  using dg_auxiliary_boundary_terms_volume_tags = tmpl::list<>;
 
   double dg_package_data(
       gsl::not_null<Scalar<DataVector>*> packaged_char_speed_v_psi,
@@ -243,7 +253,16 @@ class UpwindPenalty final : public evolution::BoundaryCorrection {
       const std::optional<Scalar<DataVector>>& normal_dot_mesh_velocity,
       const Direction<Dim>& /*face_direction*/) const;
 
-  void dg_boundary_terms(
+  /// The LDG-aware actions invoke `dg_boundary_terms` as a member template
+  /// with a `ForExternalBoundary` flag. ScalarWave has no auxiliary pass and
+  /// uses the same boundary terms on internal and external faces, so both
+  /// instantiations forward to the untemplated implementation.
+  template <bool ForExternalBoundary = false, typename... Args>
+  void dg_boundary_terms(Args&&... args) const {
+    dg_boundary_terms_impl(std::forward<Args>(args)...);
+  }
+
+  void dg_boundary_terms_impl(
       gsl::not_null<Scalar<DataVector>*> psi_boundary_correction,
       gsl::not_null<Scalar<DataVector>*> pi_boundary_correction,
       gsl::not_null<tnsr::i<DataVector, Dim, Frame::Inertial>*>

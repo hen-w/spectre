@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstring>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "DataStructures/DataVector.hpp"
@@ -14,6 +15,7 @@
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "Domain/Structure/Direction.hpp"
 #include "Domain/Structure/Element.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "NumericalAlgorithms/SphericalHarmonics/Spherepack.hpp"
 #include "NumericalAlgorithms/SphericalHarmonics/SpherepackCache.hpp"
 #include "NumericalAlgorithms/SphericalHarmonics/TensorYlmFilter.hpp"
@@ -698,3 +700,123 @@ YLM_TENSORYLM_INSTANTIATE_MODAL_NODAL_TRANSFORMS(
 YLM_TENSORYLM_INSTANTIATE_MODAL_NODAL_TRANSFORMS(
     Ccz4::filter_detail::ccz4_ghost_vars_list<Frame::Inertial>);
 }  // namespace ylm::TensorYlm::filter_detail
+
+// Specializations of the generic TensorYlm filter entry points
+// (declared in NumericalAlgorithms/SphericalHarmonics/TensorYlmFilter.hpp)
+// for the full CCZ4 evolved-variable list. These are what
+// Filters::runtime::SphericalShell<Ccz4::fd::System::variables_tag_list>
+// calls for volume and boundary filtering.
+namespace ylm::TensorYlm {
+
+namespace {
+using ccz4_filtered_vars_list =
+    ::Ccz4::filter_detail::ccz4_vars_list<Frame::Inertial>;
+using ccz4_evolved_vars_list = ::Ccz4::fd::System::variables_tag_list;
+
+// The filter operates in place through a non-owning view over the
+// leading block of the full evolved Variables, so the 9 filtered
+// (original) variables must be the first 9 tags of the evolved list,
+// in the same order. The trailing LDG auxiliary and boundary
+// second-order variables are never touched.
+template <typename FullList>
+using leading_nine_tags = tmpl::list<
+    tmpl::at_c<FullList, 0>, tmpl::at_c<FullList, 1>, tmpl::at_c<FullList, 2>,
+    tmpl::at_c<FullList, 3>, tmpl::at_c<FullList, 4>, tmpl::at_c<FullList, 5>,
+    tmpl::at_c<FullList, 6>, tmpl::at_c<FullList, 7>, tmpl::at_c<FullList, 8>>;
+static_assert(std::is_same_v<ccz4_filtered_vars_list,
+                             leading_nine_tags<ccz4_evolved_vars_list>>,
+              "The 9 filtered CCZ4 variables must be the leading tags of the "
+              "full evolved variables list, in the order assumed by the "
+              "filter.");
+}  // namespace
+
+template <>
+void fill_tensor_ylm_filters<ccz4_evolved_vars_list>(
+    const gsl::not_null<FilterMatrixHolder*> matrix, const size_t ell_max,
+    const size_t number_of_ell_modes_to_kill,
+    const std::optional<size_t> half_power,
+    const CoefficientNormalization coefficient_normalization) {
+  const bool parameters_match =
+      matrix->number_of_ell_modes_to_kill == number_of_ell_modes_to_kill and
+      matrix->half_power == half_power and
+      matrix->coefficient_normalization == coefficient_normalization;
+  if (not parameters_match or not matrix->scalar.has_value()) {
+    matrix->scalar = decltype(matrix->scalar)::value_type{};
+    ylm::TensorYlm::fill_filter<Scalar<DataVector>::structure>(
+        make_not_null(&matrix->scalar.value()), ell_max,
+        number_of_ell_modes_to_kill, half_power, coefficient_normalization);
+  }
+  if (not parameters_match or not matrix->i.has_value()) {
+    matrix->i = decltype(matrix->i)::value_type{};
+    ylm::TensorYlm::fill_filter<tnsr::i<DataVector, 3>::structure>(
+        make_not_null(&matrix->i.value()), ell_max, number_of_ell_modes_to_kill,
+        half_power, coefficient_normalization);
+  }
+  if (not parameters_match or not matrix->ii.has_value()) {
+    matrix->ii = decltype(matrix->ii)::value_type{};
+    ylm::TensorYlm::fill_filter<tnsr::ii<DataVector, 3>::structure>(
+        make_not_null(&matrix->ii.value()), ell_max,
+        number_of_ell_modes_to_kill, half_power, coefficient_normalization);
+  }
+
+  matrix->number_of_ell_modes_to_kill = number_of_ell_modes_to_kill;
+  matrix->half_power = half_power;
+  matrix->coefficient_normalization = coefficient_normalization;
+}
+
+template <>
+void apply_tensor_ylm_filter(
+    const gsl::not_null<Variables<ccz4_evolved_vars_list>*> vars,
+    const gsl::not_null<Variables<ccz4_evolved_vars_list>*> temp_storage,
+    const InverseJacobian<DataVector, 3, Frame::Inertial, Frame::Grid>&
+        jac_inertial_to_grid,
+    const InverseJacobian<DataVector, 3, Frame::Grid, Frame::Inertial>&
+        jac_grid_to_inertial,
+    const FilterMatrixHolder& filter_matrices, const size_t ell_max,
+    const size_t radial_extents) {
+  ASSERT(filter_matrices.scalar.has_value() and
+             filter_matrices.i.has_value() and filter_matrices.ii.has_value(),
+         "The scalar, i, and ii filter matrices must be filled by "
+         "fill_tensor_ylm_filters before calling apply_tensor_ylm_filter "
+         "for the CCZ4 variables. Filled: scalar = "
+             << filter_matrices.scalar.has_value()
+             << ", i = " << filter_matrices.i.has_value()
+             << ", ii = " << filter_matrices.ii.has_value());
+
+  constexpr size_t number_of_filtered_components =
+      Variables<ccz4_filtered_vars_list>::number_of_independent_components;
+
+  // Non-owning view over the leading 9-variable block of vars: the
+  // trailing auxiliary and boundary second-order variables are passed
+  // through untouched by construction.
+  Variables<ccz4_filtered_vars_list> filtered_vars(
+      vars->data(),
+      number_of_filtered_components * vars->number_of_grid_points());
+  // Non-owning view over temp_storage with EXACTLY radial_extents *
+  // spectral_size grid points: the delegate's spectral scratch derives
+  // component strides from the temp's grid-point count, and its sparse
+  // filter matrices index a component-major layout with that exact
+  // stride. (Its equal-size re-initialize short-circuits before the
+  // non-owning check, so the view is never resized.) temp_storage is
+  // sized for all evolved components at >= this grid-point count (see
+  // the size contract in TensorYlmFilter.hpp), so capacity always
+  // suffices.
+  const size_t spectral_grid_points =
+      radial_extents * ::ylm::get_spherepack_cache(ell_max).spectral_size();
+  ASSERT(temp_storage->size() >=
+             number_of_filtered_components * spectral_grid_points,
+         "The temp_storage buffer with "
+             << temp_storage->size() << " doubles cannot hold the "
+             << number_of_filtered_components * spectral_grid_points
+             << " doubles of filtered-variable spectral scratch.");
+  Variables<ccz4_filtered_vars_list> temp_filtered_vars(
+      temp_storage->data(),
+      number_of_filtered_components * spectral_grid_points);
+
+  ::Ccz4::apply_tensor_ylm_filter(
+      make_not_null(&filtered_vars), make_not_null(&temp_filtered_vars),
+      jac_inertial_to_grid, jac_grid_to_inertial,
+      filter_matrices.scalar.value(), filter_matrices.i.value(),
+      filter_matrices.ii.value(), ell_max, radial_extents);
+}
+}  // namespace ylm::TensorYlm

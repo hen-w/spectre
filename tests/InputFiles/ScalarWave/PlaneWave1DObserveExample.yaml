@@ -88,9 +88,9 @@ SpatialDiscretization:
   DiscontinuousGalerkin:
     Formulation: StrongInertial
     Quadrature: GaussLobatto
-
-Filtering:
-  FilterEvolvedVariables: []
+    Filtering:
+      - None:
+          BlocksToFilter: All
 
 # [observe_event_trigger]
 EventsAndDenseTriggers:

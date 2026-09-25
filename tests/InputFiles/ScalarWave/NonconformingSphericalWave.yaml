@@ -50,6 +50,9 @@ DomainCreator:
     InnerRadius: 1.9
     InterfaceRadius: 2.4
     OuterRadius: 2.9
+    WedgesRadialPartitioning: []
+    ShellsRadialPartitioning: []
+    RadialDistribution: [[Linear], [Linear]]
     InitialRadialRefinement: 0
     InitialAngularRefinementOfWedges: 1
     InitialNumberOfRadialGridPoints: 5
@@ -70,6 +73,9 @@ SpatialDiscretization:
   DiscontinuousGalerkin:
     Formulation: StrongInertial
     Quadrature: GaussLobatto
+    Filtering:
+      - None:
+          BlocksToFilter: All
 
 EventsAndTriggersAtCheckpoints:
 

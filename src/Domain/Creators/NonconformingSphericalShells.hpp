@@ -14,6 +14,7 @@
 
 #include "Domain/BoundaryConditions/BoundaryCondition.hpp"
 #include "Domain/BoundaryConditions/GetBoundaryConditionsBase.hpp"
+#include "Domain/CoordinateMaps/Distribution.hpp"
 #include "Domain/Creators/DomainCreator.hpp"
 #include "Options/Context.hpp"
 #include "Options/Options.hpp"
@@ -143,21 +144,19 @@ class NonconformingSphericalShells : public DomainCreator<3> {
   using BulgedCube = CoordinateMaps::BulgedCube;
 
  public:
-  using maps_list =
-      tmpl::list<domain::CoordinateMap<Frame::BlockLogical, Frame::Inertial,
-                                       BulgedCube>,
-                 domain::CoordinateMap<Frame::BlockLogical, Frame::Inertial,
-                                       Affine3D>,
-                 domain::CoordinateMap<Frame::BlockLogical, Frame::Inertial,
-                                       Equiangular3D>,
-                 domain::CoordinateMap<
-                     Frame::BlockLogical, Frame::Inertial,
-                     domain::CoordinateMaps::ProductOf2Maps<
-                         domain::CoordinateMaps::Affine,
-                         domain::CoordinateMaps::Identity<2>>,
-                     domain::CoordinateMaps::SphericalToCartesianPfaffian>,
-                 domain::CoordinateMap<Frame::BlockLogical, Frame::Inertial,
-                                       CoordinateMaps::Wedge<3>>>;
+  using maps_list = tmpl::list<
+      domain::CoordinateMap<Frame::BlockLogical, Frame::Inertial, BulgedCube>,
+      domain::CoordinateMap<Frame::BlockLogical, Frame::Inertial, Affine3D>,
+      domain::CoordinateMap<Frame::BlockLogical, Frame::Inertial,
+                            Equiangular3D>,
+      domain::CoordinateMap<
+          Frame::BlockLogical, Frame::Inertial,
+          domain::CoordinateMaps::ProductOf2Maps<
+              domain::CoordinateMaps::Interval,
+              domain::CoordinateMaps::Identity<2>>,
+          domain::CoordinateMaps::SphericalToCartesianPfaffian>,
+      domain::CoordinateMap<Frame::BlockLogical, Frame::Inertial,
+                            CoordinateMaps::Wedge<3>>>;
 
   using Excision = NonconformingSphericalShells_detail::Excision;
   using InnerCube = NonconformingSphericalShells_detail::InnerCube;
@@ -193,6 +192,18 @@ class NonconformingSphericalShells : public DomainCreator<3> {
     static constexpr Options::String help = {
         "Radial coordinates of boundaries splitting the shell region between "
         "InterfaceRadius and OuterRadius."};
+  };
+
+  struct RadialDistribution {
+    using type =
+        std::array<std::vector<domain::CoordinateMaps::Distribution>, 2>;
+    static constexpr Options::String help = {
+        "Radial distribution of grid points per layer: first entry for the "
+        "wedge layers, second for the spherical-harmonic shells. There must be "
+        "N+1 distributions for N radial partitions in each. If the interior is "
+        "filled with a cube, the innermost wedge layer must be 'Linear' "
+        "because "
+        "it changes in sphericity."};
   };
 
   struct InitialRadialRefinement {
@@ -253,13 +264,12 @@ class NonconformingSphericalShells : public DomainCreator<3> {
     using type = std::unique_ptr<BoundaryConditionsBase>;
   };
 
-  using basic_options =
-      tmpl::list<InnerRadius, InterfaceRadius, OuterRadius,
-                 WedgesRadialPartitioning, ShellsRadialPartitioning,
-                 InitialRadialRefinement, InitialAngularRefinementOfWedges,
-                 InitialNumberOfRadialGridPoints, InitialSphericalHarmonicL,
-                 InitialNumberOfAngularGridPointsOfWedges, Interior,
-                 UseEquiangularMap>;
+  using basic_options = tmpl::list<
+      InnerRadius, InterfaceRadius, OuterRadius, WedgesRadialPartitioning,
+      ShellsRadialPartitioning, RadialDistribution, InitialRadialRefinement,
+      InitialAngularRefinementOfWedges, InitialNumberOfRadialGridPoints,
+      InitialSphericalHarmonicL, InitialNumberOfAngularGridPointsOfWedges,
+      Interior, UseEquiangularMap>;
 
   template <typename Metavariables>
   using options = tmpl::conditional_t<
@@ -279,13 +289,13 @@ class NonconformingSphericalShells : public DomainCreator<3> {
       double inner_radius, double interface_radius, double outer_radius,
       std::vector<double> wedges_radial_partitioning,
       std::vector<double> shells_radial_partitioning,
-      size_t initial_radial_refinement,
-      size_t initial_angular_refinement,
+      std::array<std::vector<domain::CoordinateMaps::Distribution>, 2>
+          radial_distribution,
+      size_t initial_radial_refinement, size_t initial_angular_refinement,
       size_t initial_number_of_radial_grid_points,
       size_t initial_spherical_harmonic_l,
       size_t initial_number_of_angular_grid_points_of_wedges,
-      std::variant<Excision, InnerCube> interior,
-      bool use_equiangular_map,
+      std::variant<Excision, InnerCube> interior, bool use_equiangular_map,
       std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>
           outer_boundary_condition = nullptr,
       const Options::Context& context = {});
@@ -310,8 +320,8 @@ class NonconformingSphericalShells : public DomainCreator<3> {
 
   std::vector<std::string> block_names() const override;
 
-  std::unordered_map<std::string, std::unordered_set<std::string>> block_groups()
-      const override;
+  std::unordered_map<std::string, std::unordered_set<std::string>>
+  block_groups() const override;
 
   std::vector<std::array<size_t, 3>> initial_extents() const override;
 
@@ -322,6 +332,10 @@ class NonconformingSphericalShells : public DomainCreator<3> {
   double outer_radius_{};
   std::vector<double> wedges_radial_partitioning_{};
   std::vector<double> shells_radial_partitioning_{};
+  std::vector<domain::CoordinateMaps::Distribution>
+      wedge_radial_distribution_{};
+  std::vector<domain::CoordinateMaps::Distribution>
+      shell_radial_distribution_{};
   size_t num_wedge_layers_{};
   size_t num_shells_{};
   size_t initial_radial_refinement_{};

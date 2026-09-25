@@ -16,6 +16,7 @@ spectre_target_sources(
   DerivLapse.cpp
   DerivZ4Constraint.cpp
   RicciScalarPlusDivergenceZ4Constraint.cpp
+  SpectralFilter.cpp
   TimeDerivative.cpp
   Z4Constraint.cpp
   )
@@ -35,6 +36,7 @@ spectre_target_headers(
   Ricci.hpp
   Ricci.tpp
   RicciScalarPlusDivergenceZ4Constraint.hpp
+  SpectralFilter.hpp
   System.hpp
   Tags.hpp
   TagsDeclarations.hpp

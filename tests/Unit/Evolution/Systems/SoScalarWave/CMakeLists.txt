@@ -9,6 +9,7 @@ set(LIBRARY_SOURCES
   BoundaryConditions/Test_Periodic.cpp
   BoundaryCorrections/Test_LaxFriedrichs.cpp
   Test_Characteristics.cpp
+  Test_SpectralFilter.cpp
   Test_Tags.cpp
   Test_TimeDerivative.cpp
   )
@@ -19,8 +20,14 @@ target_link_libraries(
   ${LIBRARY}
   PRIVATE
   DataStructures
+  Domain
+  ErrorHandling
+  Framework
+  LinearOperators
   MathFunctions
   SoScalarWave
+  Spectral
+  SphericalHarmonics
   Time
   Utilities
   WaveEquationSolutions

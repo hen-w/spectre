@@ -22,6 +22,7 @@
 #include "Evolution/DiscontinuousGalerkin/DgElementArray.hpp"
 #include "Evolution/DiscontinuousGalerkin/Initialization/Mortars.hpp"
 #include "Evolution/DiscontinuousGalerkin/Initialization/QuadratureTag.hpp"
+#include "Evolution/DiscontinuousGalerkin/Initialization/SpectralFilters.hpp"
 #include "Evolution/Initialization/DgDomain.hpp"
 #include "Evolution/Initialization/Evolution.hpp"
 #include "Evolution/Initialization/NonconservativeSystem.hpp"
@@ -32,14 +33,14 @@
 #include "Evolution/Systems/ScalarWave/Equations.hpp"
 #include "Evolution/Systems/ScalarWave/Initialize.hpp"
 #include "Evolution/Systems/ScalarWave/MomentumDensity.hpp"
+#include "Evolution/Systems/ScalarWave/ProjectSpectralFilter.hpp"
+#include "Evolution/Systems/ScalarWave/SpectralFilter.hpp"
 #include "Evolution/Systems/ScalarWave/System.hpp"
-#include "Evolution/Tags/Filter.hpp"
 #include "IO/Observer/Actions/RegisterEvents.hpp"
 #include "IO/Observer/Helpers.hpp"
 #include "IO/Observer/ObserverComponent.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Tags.hpp"
-#include "NumericalAlgorithms/LinearOperators/ExponentialFilter.hpp"
 #include "Options/Protocols/FactoryCreation.hpp"
 #include "Options/String.hpp"
 #include "Parallel/ArrayCollection/DgElementCollection.hpp"
@@ -53,9 +54,9 @@
 #include "Parallel/Protocols/RegistrationMetavariables.hpp"
 #include "Parallel/Reduction.hpp"
 #include "ParallelAlgorithms/Actions/AddComputeTags.hpp"
-#include "ParallelAlgorithms/Actions/FilterAction.hpp"
 #include "ParallelAlgorithms/Actions/InitializeItems.hpp"
 #include "ParallelAlgorithms/Actions/MutateApply.hpp"
+#include "ParallelAlgorithms/Actions/SpectralFilter.hpp"
 #include "ParallelAlgorithms/Actions/TerminatePhase.hpp"
 #include "ParallelAlgorithms/Amr/Actions/CollectDataFromChildren.hpp"
 #include "ParallelAlgorithms/Amr/Actions/Component.hpp"
@@ -200,8 +201,9 @@ struct EvolutionMetavars {
         tmpl::pair<LtsTimeStepper, TimeSteppers::lts_time_steppers>,
         tmpl::pair<MathFunction<1, Frame::Inertial>,
                    MathFunctions::all_math_functions<1, Frame::Inertial>>,
-        tmpl::pair<Filters::Filter,
-                   tmpl::list<Filters::Exponential<volume_dim>>>,
+        tmpl::pair<Filters::runtime::Filter<
+                       volume_dim, typename system::variables_tag::tags_list>,
+                   ScalarWave::all_runtime_filters<volume_dim>>,
         tmpl::pair<PhaseChange, PhaseControl::factory_creatable_classes>,
         tmpl::pair<
             ScalarWave::BoundaryConditions::BoundaryCondition<volume_dim>,
@@ -226,13 +228,6 @@ struct EvolutionMetavars {
   using observed_reduction_data_tags =
       observers::collect_reduction_data_tags<tmpl::flatten<tmpl::list<
           tmpl::at<typename factory_creation::factory_classes, Event>>>>;
-
-  // The scalar wave system generally does not require filtering, except
-  // possibly on certain deformed domains.  We nevertheless add filtering for
-  // testing purposes.  When performing numerical experiments with the scalar
-  // wave system, the user should determine whether the filters can be removed
-  // from input files.
-  struct FilterEvolvedVariables {};
 
   using step_actions = tmpl::flatten<tmpl::list<
       evolution::dg::Actions::ComputeTimeDerivative<
@@ -259,8 +254,8 @@ struct EvolutionMetavars {
           local_time_stepping,
           Actions::MutateApply<evolution::dg::CleanMortarHistory<volume_dim>>,
           tmpl::list<>>,
-      dg::Actions::Filter<FilterEvolvedVariables,
-                          typename system::variables_tag::tags_list>>>;
+      dg::Actions::SpectralFilter<volume_dim,
+                                  typename system::variables_tag::tags_list>>>;
 
   using const_global_cache_tags =
       tmpl::list<evolution::initial_data::Tags::InitialData>;
@@ -272,7 +267,6 @@ struct EvolutionMetavars {
       Initialization::Actions::InitializeItems<
           Initialization::TimeStepping<EvolutionMetavars, TimeStepperBase>,
           evolution::dg::Initialization::Domain<EvolutionMetavars>,
-          dg::Actions::InitializeFilters<FilterEvolvedVariables>,
           ::amr::Initialization::Initialize<volume_dim, EvolutionMetavars>,
           Initialization::TimeStepperHistory<EvolutionMetavars>>,
       Initialization::Actions::NonconservativeSystem<system>,
@@ -284,6 +278,9 @@ struct EvolutionMetavars {
                                                   local_time_stepping>>,
       ::evolution::dg::Initialization::Mortars<volume_dim>,
       evolution::Actions::InitializeRunEventsAndDenseTriggers,
+      Initialization::Actions::InitializeItems<
+          evolution::dg::Initialization::SpectralFilters<
+              volume_dim, typename system::variables_tag::tags_list>>,
       Parallel::Actions::TerminatePhase>;
 
   using dg_element_array = DgElementArray<
@@ -338,7 +335,7 @@ struct EvolutionMetavars {
                                           ::ScalarWave::Tags::ConstraintGamma2>,
         evolution::dg::Initialization::ProjectMortars<volume_dim,
                                                       local_time_stepping>,
-        dg::Actions::InitializeFilters<FilterEvolvedVariables>,
+        ScalarWave::ProjectSpectralFilter<volume_dim>,
         Initialization::ProjectTimeStepperHistory<EvolutionMetavars>,
         evolution::Actions::ProjectRunEventsAndDenseTriggers,
         ::amr::projectors::DefaultInitialize<

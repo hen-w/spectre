@@ -104,7 +104,10 @@ void insert_mortar_data(
 
 void test_non_conforming_spheres() {
   const auto creator = domain::creators::NonconformingSphericalShells(
-      2.0, 3.0, 4.0, 0, 2, 5, 8, 11, nullptr, nullptr);
+      2.0, 3.0, 4.0, {}, {}, 0, 2, 5, 8, 11,
+      domain::creators::NonconformingSphericalShells_detail::Excision{},
+      // The pre-refactor creator hardcoded equiangular wedge maps.
+      true, nullptr);
   const auto domain = creator.create_domain();
   const auto refinement_levels = creator.initial_refinement_levels();
   const ElementId<3> shell_id{6};

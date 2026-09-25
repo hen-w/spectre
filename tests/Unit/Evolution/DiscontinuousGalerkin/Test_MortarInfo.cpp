@@ -60,7 +60,10 @@ SPECTRE_TEST_CASE("Unit.Evolution.DG.MortarInfo", "[Unit][Evolution]") {
   test<1>({{}}, std::nullopt);
   test<2>({{Spectral::SegmentSize::Full}}, std::nullopt);
   const auto creator = domain::creators::NonconformingSphericalShells(
-      2.0, 3.0, 4.0, 0, 0, 5, 8, 11, nullptr, nullptr);
+      2.0, 3.0, 4.0, {}, {}, 0, 0, 5, 8, 11,
+      domain::creators::NonconformingSphericalShells_detail::Excision{},
+      // The pre-refactor creator hardcoded equiangular wedge maps.
+      true, nullptr);
   const auto domain = creator.create_domain();
   test<3>(
       {{Spectral::SegmentSize::UpperHalf, Spectral::SegmentSize::LowerHalf}},
