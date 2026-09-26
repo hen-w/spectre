@@ -21,6 +21,7 @@
 #include "Domain/ElementMap.hpp"
 #include "Domain/MinimumGridSpacing.hpp"
 #include "Domain/Structure/CreateInitialMesh.hpp"
+#include "Domain/Structure/Direction.hpp"
 #include "Domain/Structure/Element.hpp"
 #include "Domain/Structure/ElementId.hpp"
 #include "Domain/Structure/InitialElementIds.hpp"
@@ -80,8 +81,16 @@ double get_num_points_and_grid_spacing_cost(
   return mesh.number_of_grid_points() / sqrt(min_grid_spacing);
 }
 
-// \brief Whether the `ElementWeight::NumGridPoints` cost must account for the
-// static DG-subcell (FD) region of a filled-sphere domain.
+// The radial direction of a wedge is zeta. Both Sphere and
+// NonconformingSphericalShells connect its lower face to the filled inner cube.
+bool is_innermost_wedge(const Block<3>& block, const size_t inner_cube_id) {
+  const auto neighbor = block.neighbors().find(Direction<3>::lower_zeta());
+  return neighbor != block.neighbors().end() and
+         neighbor->second.ids().contains(inner_cube_id);
+}
+
+// \brief Identify the inner cube when `ElementWeight::NumGridPoints` must
+// account for the static DG-subcell (FD) region of a filled-sphere domain.
 //
 // \details Elements running DG-subcell carry a mesh of (2n-1)^3 grid points,
 // not the declared n^3, so weighting them by their declared point count
@@ -92,22 +101,19 @@ double get_num_points_and_grid_spacing_cost(
 // block named InnerCube; layouts that violate the assumptions behind that
 // static FD region are an error rather than a silent misweighting.
 template <size_t Dim>
-bool use_subcell_fd_weighting(
+std::optional<size_t> inner_cube_for_subcell_fd_weighting(
     const std::vector<Block<Dim>>& blocks,
     const std::vector<std::array<size_t, Dim>>& initial_refinement_levels) {
   if constexpr (Dim == 3) {
     std::optional<size_t> inner_cube_block_number{};
-    size_t number_of_shell0_blocks = 0;
     for (size_t block_number = 0; block_number < blocks.size();
          block_number++) {
       if (blocks[block_number].name() == "InnerCube") {
         inner_cube_block_number = block_number;
-      } else if (blocks[block_number].name().starts_with("Shell0")) {
-        number_of_shell0_blocks++;
       }
     }
     if (not inner_cube_block_number.has_value()) {
-      return false;
+      return std::nullopt;
     }
     if (initial_refinement_levels[inner_cube_block_number.value()] !=
         std::array<size_t, Dim>{{1, 1, 1}}) {
@@ -118,19 +124,18 @@ bool use_subcell_fd_weighting(
           << inner_cube_block_number.value() << " has initial refinement "
           << initial_refinement_levels[inner_cube_block_number.value()]
           << ". The static FD region is unknown for this layout; extend "
-             "use_subcell_fd_weighting() if this layout is intended.");
+             "inner_cube_for_subcell_fd_weighting() if this layout is "
+             "intended.");
     }
-    if (number_of_shell0_blocks == 0) {
-      ERROR(
-          "Subcell-aware element weighting found a block named InnerCube but "
-          "no blocks named Shell0*, so the innermost radial layer of the "
-          "innermost shell cannot be identified. Extend "
-          "use_subcell_fd_weighting() if this layout is intended.");
-    }
+    size_t number_of_innermost_wedges = 0;
     for (size_t block_number = 0; block_number < blocks.size();
          block_number++) {
-      if (blocks[block_number].name().starts_with("Shell0") and
-          initial_refinement_levels[block_number][2] != 1) {
+      if (not is_innermost_wedge(blocks[block_number],
+                                 blocks[*inner_cube_block_number].id())) {
+        continue;
+      }
+      ++number_of_innermost_wedges;
+      if (initial_refinement_levels[block_number][2] != 1) {
         ERROR(
             "Subcell-aware element weighting assumes radial (zeta) "
             "refinement 1 in the innermost shell (the FD region is the "
@@ -138,30 +143,40 @@ bool use_subcell_fd_weighting(
             << blocks[block_number].name() << "' has radial refinement "
             << initial_refinement_levels[block_number][2]
             << ". The static FD region is unknown for this layout; extend "
-               "use_subcell_fd_weighting() if this layout is intended.");
+               "inner_cube_for_subcell_fd_weighting() if this layout is "
+               "intended.");
       }
     }
-    return true;
+    if (number_of_innermost_wedges != 6) {
+      ERROR(
+          "Subcell-aware element weighting requires six innermost wedges "
+          "connected to InnerCube through their lower-zeta faces, but found "
+          << number_of_innermost_wedges
+          << ". The static FD region is unknown "
+             "for this layout.");
+    }
+    return blocks[*inner_cube_block_number].id();
   } else {
     (void)blocks;
     (void)initial_refinement_levels;
-    return false;
+    return std::nullopt;
   }
 }
 
 // \brief Whether `element_id` is in the static FD region of a filled-sphere
-// domain (see `use_subcell_fd_weighting()`): the InnerCube block or the
-// innermost radial (zeta) layer of the innermost shell's wedges.
+// domain (see `inner_cube_for_subcell_fd_weighting()`): the InnerCube block or
+// the innermost radial (zeta) layer of the innermost shell's wedges.
 template <size_t Dim>
 bool is_static_fd_element(const ElementId<Dim>& element_id,
-                          const Block<Dim>& block) {
+                          const Block<Dim>& block, const size_t inner_cube_id) {
   if constexpr (Dim == 3) {
-    return block.name() == "InnerCube" or
-           (block.name().starts_with("Shell0") and
+    return block.id() == inner_cube_id or
+           (is_innermost_wedge(block, inner_cube_id) and
             element_id.segment_id(2).index() == 0);
   } else {
     (void)element_id;
     (void)block;
+    (void)inner_cube_id;
     return false;
   }
 }
@@ -190,9 +205,10 @@ std::unordered_map<ElementId<Dim>, double> get_element_costs(
     const std::optional<Spectral::Quadrature>& i1_quadrature) {
   std::unordered_map<ElementId<Dim>, double> element_costs{};
 
-  const bool subcell_fd_weighting =
-      element_weight == ElementWeight::NumGridPoints and
-      use_subcell_fd_weighting(blocks, initial_refinement_levels);
+  const auto inner_cube_id = element_weight == ElementWeight::NumGridPoints
+                                 ? inner_cube_for_subcell_fd_weighting(
+                                       blocks, initial_refinement_levels)
+                                 : std::nullopt;
 
   for (size_t block_number = 0; block_number < blocks.size(); block_number++) {
     const auto& block = blocks[block_number];
@@ -215,7 +231,8 @@ std::unordered_map<ElementId<Dim>, double> get_element_costs(
       } else if (element_weight == ElementWeight::NumGridPoints) {
         element_costs.insert(
             {element_id,
-             subcell_fd_weighting and is_static_fd_element(element_id, block)
+             inner_cube_id.has_value() and
+                     is_static_fd_element(element_id, block, *inner_cube_id)
                  ? subcell_grid_points_per_element
                  : grid_points_per_element});
       } else {

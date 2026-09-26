@@ -16,6 +16,8 @@
 #include "Domain/Block.hpp"
 #include "Domain/Creators/AlignedLattice.hpp"
 #include "Domain/Creators/DomainCreator.hpp"
+#include "Domain/Creators/NonconformingSphericalShells.hpp"
+#include "Domain/Creators/Sphere.hpp"
 #include "Domain/Domain.hpp"
 #include "Domain/ElementDistribution.hpp"
 #include "Domain/Structure/ElementId.hpp"
@@ -26,6 +28,138 @@
 #include "Utilities/Gsl.hpp"
 
 namespace {
+// Check the static FD set independently of block connectivity: the cube and
+// radial segment zero in the first six wedge blocks. On ordinary Sphere
+// domains also compare with the original name-based costs and assignments.
+void test_subcell_costs(const DomainCreator<3>& creator,
+                        const bool has_ylm_shells) {
+  const auto domain = creator.create_domain();
+  const auto& blocks = domain.blocks();
+  const auto refinements = creator.initial_refinement_levels();
+  const auto extents = creator.initial_extents();
+  const auto costs = domain::get_element_costs(
+      blocks, refinements, extents, domain::ElementWeight::NumGridPoints,
+      std::nullopt, std::nullopt);
+  std::unordered_map<ElementId<3>, double> legacy_costs{};
+  size_t fd_count = 0;
+  size_t ylm_count = 0;
+  size_t cube_id = 0;
+  for (const auto& [id, cost] : costs) {
+    const auto& block = blocks[id.block_id()];
+    const bool is_cube = block.name() == "InnerCube";
+    const bool is_fd =
+        is_cube or (id.block_id() < 6 and id.segment_id(2).index() == 0);
+    const bool is_ylm = has_ylm_shells and block.name().starts_with("Shell");
+    CHECK(cost == (is_fd ? 4913.0 : (is_ylm ? 2925.0 : 729.0)));
+    fd_count += is_fd;
+    ylm_count += is_ylm;
+    if (is_cube) {
+      cube_id = id.block_id();
+    }
+    if (not has_ylm_shells) {
+      const bool legacy_fd = is_cube or (block.name().starts_with("Shell0") and
+                                         id.segment_id(2).index() == 0);
+      legacy_costs.emplace(id, legacy_fd ? 4913.0 : 729.0);
+    }
+  }
+  CHECK(fd_count == 32);
+  CHECK(ylm_count == (has_ylm_shells ? 30 : 0));
+  if (not has_ylm_shells) {
+    CHECK(costs == legacy_costs);
+    for (const size_t num_procs : {62_st, 186_st, 372_st}) {
+      const domain::BlockZCurveProcDistribution<3> distribution{
+          costs, num_procs, blocks, refinements, extents, {}};
+      const domain::BlockZCurveProcDistribution<3> legacy_distribution{
+          legacy_costs, num_procs, blocks, refinements, extents, {}};
+      for (const auto& [id, cost] : costs) {
+        CHECK(distribution.get_proc_for_element(id) ==
+              legacy_distribution.get_proc_for_element(id));
+      }
+    }
+  }
+  // Keep the fail-loud guards, while Uniform bypasses FD weighting.
+  auto invalid_refinements = refinements;
+  invalid_refinements[cube_id][0] = 0;
+  CHECK_THROWS_WITH(
+      domain::get_element_costs(blocks, invalid_refinements, extents,
+                                domain::ElementWeight::NumGridPoints,
+                                std::nullopt, std::nullopt),
+      Catch::Matchers::ContainsSubstring(
+          "InnerCube block has initial refinement"));
+  invalid_refinements = refinements;
+  invalid_refinements[0][2] = 0;
+  CHECK_THROWS_WITH(
+      domain::get_element_costs(blocks, invalid_refinements, extents,
+                                domain::ElementWeight::NumGridPoints,
+                                std::nullopt, std::nullopt),
+      Catch::Matchers::ContainsSubstring("radial (zeta) refinement 1"));
+  const auto uniform_costs = domain::get_element_costs(
+      blocks, invalid_refinements, extents, domain::ElementWeight::Uniform,
+      std::nullopt, std::nullopt);
+  for (const auto& [id, cost] : uniform_costs) {
+    CHECK(cost == 1.0);
+  }
+}
+
+void test_filled_sphere_costs() {
+  using domain::CoordinateMaps::Distribution;
+  // Shell41 and the log-graded pure-wedge layout.
+  for (const bool log_graded : {false, true}) {
+    CAPTURE(log_graded);
+    std::vector<double> partitions{};
+    for (size_t i = 0; i < (log_graded ? 10_st : 41_st); ++i) {
+      partitions.push_back(23.0 + 16.1 * i);
+    }
+    if (log_graded) {
+      partitions.insert(partitions.end(), {354.880343, 515.938061, 622.093093});
+    }
+    const size_t num_shells = partitions.size() + 1;
+    std::vector<std::array<size_t, 3>> refinements(6 * num_shells + 1,
+                                                   {{1, 1, 1}});
+    std::vector<Distribution> distributions(num_shells, Distribution::Linear);
+    if (log_graded) {
+      for (size_t shell = 10; shell < 14; ++shell) {
+        distributions[shell] = Distribution::Logarithmic;
+        for (size_t wedge = 0; wedge < 6; ++wedge) {
+          refinements[6 * shell + wedge][2] = 14 - shell;
+        }
+      }
+    }
+    const domain::creators::Sphere sphere{
+        6.9,
+        683.1,
+        domain::creators::Sphere::InnerCube{0.0},
+        refinements,
+        std::array<size_t, 3>{{9, 9, 9}},
+        true,
+        std::nullopt,
+        partitions,
+        distributions};
+    test_subcell_costs(sphere, false);
+  }
+  // The Ylm creator calls its first spherical-harmonic block Shell0, which
+  // must not be mistaken for an FD wedge. It has radial refinement in xi.
+  const domain::creators::NonconformingSphericalShells ylm{
+      6.9,
+      167.9,
+      683.1,
+      {23.0, 39.1, 55.2, 71.3, 87.4, 103.5, 119.6, 135.7, 151.8},
+      {184.36547733518756, 202.4456773855363, 222.29895143317333,
+       244.0991798218503, 268.03729484802381, 294.32295299754816,
+       323.18637117388278, 354.880343, 389.68245260668192, 427.89750648307671,
+       469.86020240238878, 515.938061, 566.53464515765734, 622.093093},
+      {{std::vector<Distribution>(10, Distribution::Linear),
+        std::vector<Distribution>(15, Distribution::Logarithmic)}},
+      1,
+      1,
+      9,
+      12,
+      9,
+      domain::creators::NonconformingSphericalShells::InnerCube{0.0},
+      true};
+  test_subcell_costs(ylm, true);
+}
+
 // Test the weighting done by `domain::get_element_costs` for a uniform cost
 // function
 void test_uniform_cost_function() {
@@ -502,6 +636,7 @@ void test_proc_retrieval(
 
 SPECTRE_TEST_CASE("Unit.Domain.ElementDistribution", "[Domain][Unit]") {
   // Test cost functions
+  test_filled_sphere_costs();
   test_uniform_cost_function();
   test_weighted_cost_function(domain::ElementWeight::NumGridPoints);
   test_weighted_cost_function(
