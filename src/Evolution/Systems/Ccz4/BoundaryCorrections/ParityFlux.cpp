@@ -242,16 +242,11 @@ void ParityFlux<Dim>::dg_boundary_terms(
       make_with_value<Scalar<DataVector>>(lapse_int, 0.0);
 
   const size_t num_points = get(conformal_factor_int).size();
-  constexpr double f_param = ::Ccz4::fd::System::f;
 
   const bool external =
       orientation == evolution::dg::InterfaceOrientation::ExternalBoundary;
   const bool central_external = external and use_central_flux_at_boundary_;
   const double sign = element_local_sign(orientation);
-  // tau1/tau2 as used by the LaxFriedrichs-style treatment of the auxiliary
-  // reduction variables field_a/b/d/p (and the central-flux boundary branch).
-  const double effective_tau1 = central_external ? 0.0 : tau1_;
-  const double effective_tau2 = central_external ? 1.0 : tau2_;
 
   // --- common per-side precomputations (side-local) ---
   const Scalar<DataVector> normal_dot_shift_int =
@@ -447,142 +442,23 @@ void ParityFlux<Dim>::dg_boundary_terms(
         return result;
       };
 
-  const auto field_a_flux_dot_normal =
-      [](const Scalar<DataVector>& shift_dot_normal,
-         const tnsr::i<DataVector, Dim, Frame::Inertial>& field_a,
-         const Scalar<DataVector>& trace_extrinsic_curvature,
-         const Scalar<DataVector>& theta,
-         const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector) {
-        tnsr::i<DataVector, Dim, Frame::Inertial> result;
-        ::tenex::evaluate<ti::k>(
-            make_not_null(&result),
-            -shift_dot_normal() * field_a(ti::k) +
-                2.0 * normal_covector(ti::k) * trace_extrinsic_curvature() -
-                4.0 * normal_covector(ti::k) * theta());
-        return result;
-      };
-
-  const auto field_b_flux_dot_normal =
-      [](const Scalar<DataVector>& shift_dot_normal,
-         const tnsr::iJ<DataVector, Dim, Frame::Inertial>& field_b,
-         const tnsr::I<DataVector, Dim, Frame::Inertial>& auxiliary_shift_b,
-         const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector) {
-        tnsr::iJ<DataVector, Dim, Frame::Inertial> result;
-        if constexpr (::Ccz4::fd::System::shifting_shift) {
-          ::tenex::evaluate<ti::k, ti::I>(
-              make_not_null(&result),
-              -shift_dot_normal() * field_b(ti::k, ti::I) -
-                  f_param * normal_covector(ti::k) * auxiliary_shift_b(ti::I));
-        } else {
-          ::tenex::evaluate<ti::k, ti::I>(
-              make_not_null(&result),
-              -f_param * normal_covector(ti::k) * auxiliary_shift_b(ti::I));
-        }
-        return result;
-      };
-
-  const auto field_d_flux_dot_normal =
-      [](const Scalar<DataVector>& shift_dot_normal,
-         const tnsr::ijj<DataVector, Dim, Frame::Inertial>& field_d,
-         const tnsr::ii<DataVector, Dim, Frame::Inertial>& conformal_metric,
-         const tnsr::iJ<DataVector, Dim, Frame::Inertial>& field_b,
-         const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector,
-         const Scalar<DataVector>& lapse,
-         const tnsr::ii<DataVector, Dim, Frame::Inertial>& a_tilde) {
-        tnsr::ijj<DataVector, Dim, Frame::Inertial> result;
-        ::tenex::evaluate<ti::k, ti::i, ti::j>(
-            make_not_null(&result),
-            -shift_dot_normal() * field_d(ti::k, ti::i, ti::j) -
-                0.25 * conformal_metric(ti::l, ti::i) *
-                    (normal_covector(ti::k) * field_b(ti::j, ti::L) +
-                     normal_covector(ti::j) * field_b(ti::k, ti::L)) -
-                0.25 * conformal_metric(ti::l, ti::j) *
-                    (normal_covector(ti::k) * field_b(ti::i, ti::L) +
-                     normal_covector(ti::i) * field_b(ti::k, ti::L)) +
-                (1.0 / 6.0) * conformal_metric(ti::i, ti::j) *
-                    (normal_covector(ti::k) * field_b(ti::l, ti::L) +
-                     normal_covector(ti::l) * field_b(ti::k, ti::L)) +
-                lapse() * normal_covector(ti::k) * a_tilde(ti::i, ti::j));
-        return result;
-      };
-
-  const auto field_p_flux_dot_normal =
-      [](const Scalar<DataVector>& shift_dot_normal,
-         const tnsr::i<DataVector, Dim, Frame::Inertial>& field_p,
-         const Scalar<DataVector>& lapse,
-         const Scalar<DataVector>& trace_extrinsic_curvature,
-         const tnsr::iJ<DataVector, Dim, Frame::Inertial>& field_b,
-         const tnsr::i<DataVector, Dim, Frame::Inertial>& normal_covector) {
-        tnsr::i<DataVector, Dim, Frame::Inertial> result;
-        ::tenex::evaluate<ti::k>(
-            make_not_null(&result),
-            -shift_dot_normal() * field_p(ti::k) -
-                (lapse() / 3.0) * normal_covector(ti::k) *
-                    trace_extrinsic_curvature() +
-                (1.0 / 6.0) * normal_covector(ti::k) * field_b(ti::l, ti::L) +
-                (1.0 / 6.0) * normal_covector(ti::l) * field_b(ti::k, ti::L));
-        return result;
-      };
-
-  // The auxiliary reduction variables field_a/b/d/p are not respecified by the
-  // parity candidate; they retain the LaxFriedrichs central-flux-plus-penalty
-  // treatment (with Tau1/Tau2).
+  // The physical-pass corrections of the auxiliary reduction variables
+  // field_a/b/d/p are never consumed (the auxiliaries are reconstructed, not
+  // evolved; their dt does not enter the operator), so they are set to zero.
+  *field_a_boundary_correction =
+      make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(
+          conformal_factor_int, 0.0);
+  *field_b_boundary_correction =
+      make_with_value<tnsr::iJ<DataVector, Dim, Frame::Inertial>>(
+          conformal_factor_int, 0.0);
+  *field_d_boundary_correction =
+      make_with_value<tnsr::ijj<DataVector, Dim, Frame::Inertial>>(
+          conformal_factor_int, 0.0);
+  *field_p_boundary_correction =
+      make_with_value<tnsr::i<DataVector, Dim, Frame::Inertial>>(
+          conformal_factor_int, 0.0);
   const auto zero_scalar =
       make_with_value<Scalar<DataVector>>(DataVector(num_points), 0.0);
-  {
-    const auto field_a_flux_int = field_a_flux_dot_normal(
-        normal_dot_shift_int, field_a_int, trace_extrinsic_curvature_int,
-        theta_int, normal_covector_int);
-    const auto field_a_flux_ext = field_a_flux_dot_normal(
-        normal_dot_shift_ext, field_a_ext, trace_extrinsic_curvature_ext,
-        theta_ext, normal_covector_ext);
-    ::tenex::evaluate<ti::k>(
-        field_a_boundary_correction,
-        -0.5 * effective_tau2 *
-                (field_a_flux_int(ti::k) + field_a_flux_ext(ti::k)) -
-            0.5 * effective_tau1 * (field_a_ext(ti::k) - field_a_int(ti::k)));
-
-    const auto field_b_flux_int =
-        field_b_flux_dot_normal(normal_dot_shift_int, field_b_int,
-                                auxiliary_shift_b_int, normal_covector_int);
-    const auto field_b_flux_ext =
-        field_b_flux_dot_normal(normal_dot_shift_ext, field_b_ext,
-                                auxiliary_shift_b_ext, normal_covector_ext);
-    ::tenex::evaluate<ti::k, ti::I>(
-        field_b_boundary_correction,
-        -0.5 * effective_tau2 *
-                (field_b_flux_int(ti::k, ti::I) +
-                 field_b_flux_ext(ti::k, ti::I)) -
-            0.5 * effective_tau1 *
-                (field_b_ext(ti::k, ti::I) - field_b_int(ti::k, ti::I)));
-
-    const auto field_d_flux_int = field_d_flux_dot_normal(
-        normal_dot_shift_int, field_d_int, conformal_metric_int, field_b_int,
-        normal_covector_int, lapse_int, a_tilde_int);
-    const auto field_d_flux_ext = field_d_flux_dot_normal(
-        normal_dot_shift_ext, field_d_ext, conformal_metric_ext, field_b_ext,
-        normal_covector_ext, lapse_ext, a_tilde_ext);
-    ::tenex::evaluate<ti::k, ti::i, ti::j>(
-        field_d_boundary_correction,
-        -0.5 * effective_tau2 *
-                (field_d_flux_int(ti::k, ti::i, ti::j) +
-                 field_d_flux_ext(ti::k, ti::i, ti::j)) -
-            0.5 * effective_tau1 *
-                (field_d_ext(ti::k, ti::i, ti::j) -
-                 field_d_int(ti::k, ti::i, ti::j)));
-
-    const auto field_p_flux_int = field_p_flux_dot_normal(
-        normal_dot_shift_int, field_p_int, lapse_int,
-        trace_extrinsic_curvature_int, field_b_int, normal_covector_int);
-    const auto field_p_flux_ext = field_p_flux_dot_normal(
-        normal_dot_shift_ext, field_p_ext, lapse_ext,
-        trace_extrinsic_curvature_ext, field_b_ext, normal_covector_ext);
-    ::tenex::evaluate<ti::k>(
-        field_p_boundary_correction,
-        -0.5 * effective_tau2 *
-                (field_p_flux_int(ti::k) + field_p_flux_ext(ti::k)) -
-            0.5 * effective_tau1 * (field_p_ext(ti::k) - field_p_int(ti::k)));
-  }
 
   if (central_external) {
     // Plain central flux with no penalty, exactly like the LaxFriedrichs
