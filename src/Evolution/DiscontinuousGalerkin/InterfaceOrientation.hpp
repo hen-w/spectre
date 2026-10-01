@@ -88,6 +88,12 @@ inline std::ostream& operator<<(std::ostream& os,
  *   `opposite(side_me)`, so the result is `InteriorIsUpper` when
  *   `side_me == Side::Lower` and `InteriorIsLower` when `side_me ==
  *   Side::Upper`.
+ * - A mortar with multiple non-conforming neighbors is labeled by the host
+ *   element's own id and aggregates every neighbor on the face. The neighbor
+ *   side is then determined from all the neighbor orientations across the
+ *   direction, which must agree; disagreement is an error. Single-neighbor
+ *   mortars reduce to their one orientation entry, so their behavior is
+ *   unchanged.
  * - If `side_me == side_nb` the interface is twisted by an
  *   orientation-reversing discrete rotation between the two blocks and no
  *   consistent Upper/Lower labeling of the interface exists. The label is then

@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "Domain/Structure/Direction.hpp"
@@ -173,11 +174,65 @@ void test_self_identification_error() {
   REQUIRE(reversing_xi(Direction<2>::upper_xi().opposite()).side() ==
           Side::Upper);
 
-  CHECK_THROWS_WITH(interface_orientation<2>(
-                        element, Direction<2>::upper_xi(),
-                        make_neighbors<2>(element, reversing_xi), element),
-                    Catch::Matchers::ContainsSubstring(
-                        "cannot label a periodic self-neighbor"));
+  CHECK_THROWS_WITH(
+      interface_orientation<2>(element, Direction<2>::upper_xi(),
+                               make_neighbors<2>(element, reversing_xi),
+                               element),
+      Catch::Matchers::ContainsSubstring("on a twisted interface"));
+}
+
+void test_host_labeled_mortar() {
+  // A mortar with multiple non-conforming neighbors is labeled by the host
+  // element's own id. All neighbor orientations agree that the neighbors sit
+  // on the opposite side of the interface (as on the radial wedge-to-Ylm-shell
+  // interface), so a unique label exists even though the passed neighbor id
+  // equals the host id.
+  const ElementId<3> element{
+      12, {{SegmentId{0, 0}, SegmentId{0, 0}, SegmentId{0, 0}}}};
+  const auto aligned = OrientationMap<3>::create_aligned();
+  // A quarter-turn about zeta: permutes xi/eta but keeps the zeta side.
+  const OrientationMap<3> quarter_turn{std::array<Direction<3>, 3>{
+      {Direction<3>::upper_eta(), Direction<3>::lower_xi(),
+       Direction<3>::upper_zeta()}}};
+  std::unordered_set<ElementId<3>> ids{};
+  std::unordered_map<size_t, OrientationMap<3>> orientations{};
+  for (size_t block = 0; block < 3; ++block) {
+    ids.insert(ElementId<3>{
+        block, {{SegmentId{0, 0}, SegmentId{0, 0}, SegmentId{0, 0}}}});
+    orientations[block] = block % 2 == 0 ? aligned : quarter_turn;
+  }
+  const Neighbors<3> neighbors{ids, orientations, false};
+
+  CHECK(interface_orientation<3>(element, Direction<3>::lower_zeta(), neighbors,
+                                 element) ==
+        InterfaceOrientation::InteriorIsUpper);
+  CHECK(interface_orientation<3>(element, Direction<3>::upper_zeta(), neighbors,
+                                 element) ==
+        InterfaceOrientation::InteriorIsLower);
+}
+
+void test_host_labeled_disagreement_error() {
+  // Mixed neighbor orientations that place the neighbors on both sides of the
+  // interface admit no single label and must ERROR.
+  const ElementId<3> element{
+      12, {{SegmentId{0, 0}, SegmentId{0, 0}, SegmentId{0, 0}}}};
+  const OrientationMap<3> zeta_reversing{std::array<Direction<3>, 3>{
+      {Direction<3>::upper_xi(), Direction<3>::upper_eta(),
+       Direction<3>::lower_zeta()}}};
+  std::unordered_set<ElementId<3>> ids{};
+  std::unordered_map<size_t, OrientationMap<3>> orientations{};
+  ids.insert(
+      ElementId<3>{0, {{SegmentId{0, 0}, SegmentId{0, 0}, SegmentId{0, 0}}}});
+  orientations[0] = OrientationMap<3>::create_aligned();
+  ids.insert(
+      ElementId<3>{1, {{SegmentId{0, 0}, SegmentId{0, 0}, SegmentId{0, 0}}}});
+  orientations[1] = zeta_reversing;
+  const Neighbors<3> neighbors{ids, orientations, false};
+
+  CHECK_THROWS_WITH(
+      interface_orientation<3>(element, Direction<3>::lower_zeta(), neighbors,
+                               element),
+      Catch::Matchers::ContainsSubstring("orientations disagree"));
 }
 
 void test_stream_operator() {
@@ -197,6 +252,8 @@ SPECTRE_TEST_CASE("Unit.Evolution.DG.InterfaceOrientation",
   test_twisted_3d();
   test_periodic_self_neighbor();
   test_self_identification_error();
+  test_host_labeled_mortar();
+  test_host_labeled_disagreement_error();
   test_stream_operator();
 }
 }  // namespace evolution::dg
