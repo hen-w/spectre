@@ -5,6 +5,7 @@ spectre_target_sources(
   ${LIBRARY}
   PRIVATE
   LaxFriedrichs.cpp
+  ParityFlux.cpp
   ProposedFlux.cpp
   )
 
@@ -14,5 +15,6 @@ spectre_target_headers(
   HEADERS
   Factory.hpp
   LaxFriedrichs.hpp
+  ParityFlux.hpp
   ProposedFlux.hpp
   )
