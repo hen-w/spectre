@@ -11,6 +11,7 @@
 
 #include "DataStructures/DataBox/PrefixHelpers.hpp"
 #include "DataStructures/DataBox/Prefixes.hpp"
+#include "DataStructures/DataBox/TagName.hpp"
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/EagerMath/DeterminantAndInverse.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
@@ -215,30 +216,43 @@ void volume_terms(
     tmpl::for_each<non_flux_tags>([&dt_vars_ptr, &mesh_velocity,
                                    &partial_derivs](auto var_tag_v) {
       using var_tag = typename decltype(var_tag_v)::type;
-      using dt_var_tag = ::Tags::dt<var_tag>;
-      using deriv_var_tag =
-          ::Tags::deriv<var_tag, tmpl::size_t<Dim>, Frame::Inertial>;
+      // Systems whose differentiated variables are a strict prefix of the
+      // evolved variables cannot add this term for the remaining ones.
+      if constexpr (not tmpl::list_contains_v<tmpl::list<PartialDerivTags...>,
+                                              var_tag>) {
+        (void)dt_vars_ptr;
+        (void)mesh_velocity;
+        (void)partial_derivs;
+        ERROR("Moving meshes require the spatial derivative of every "
+              "variable without a flux, but "
+              << db::tag_name<var_tag>() << " is not differentiated.");
+      } else {
+        using dt_var_tag = ::Tags::dt<var_tag>;
+        using deriv_var_tag =
+            ::Tags::deriv<var_tag, tmpl::size_t<Dim>, Frame::Inertial>;
 
-      const auto& deriv_var = get<deriv_var_tag>(*partial_derivs);
-      auto& dt_var = get<dt_var_tag>(*dt_vars_ptr);
+        const auto& deriv_var = get<deriv_var_tag>(*partial_derivs);
+        auto& dt_var = get<dt_var_tag>(*dt_vars_ptr);
 
-      // Loop over all independent components of the derivative of the
-      // variable.
-      for (size_t deriv_var_storage_index = 0;
-           deriv_var_storage_index < deriv_var.size();
-           ++deriv_var_storage_index) {
-        // We grab the `deriv_tensor_index`, which would be e.g.
-        // `(i, a, b)`, so `(0, 2, 3)`
-        const auto deriv_var_tensor_index =
-            deriv_var.get_tensor_index(deriv_var_storage_index);
-        // Then we drop the derivative index (the first entry) to get
-        // `(a, b)` (or `(2, 3)`)
-        const auto dt_var_tensor_index =
-            all_but_specified_element_of(deriv_var_tensor_index, 0);
-        // Set `deriv_index` to `i` (or `0` in the example)
-        const size_t deriv_index = gsl::at(deriv_var_tensor_index, 0);
-        dt_var.get(dt_var_tensor_index) += mesh_velocity->get(deriv_index) *
-                                           deriv_var[deriv_var_storage_index];
+        // Loop over all independent components of the derivative of the
+        // variable.
+        for (size_t deriv_var_storage_index = 0;
+             deriv_var_storage_index < deriv_var.size();
+             ++deriv_var_storage_index) {
+          // We grab the `deriv_tensor_index`, which would be e.g.
+          // `(i, a, b)`, so `(0, 2, 3)`
+          const auto deriv_var_tensor_index =
+              deriv_var.get_tensor_index(deriv_var_storage_index);
+          // Then we drop the derivative index (the first entry) to get
+          // `(a, b)` (or `(2, 3)`)
+          const auto dt_var_tensor_index =
+              all_but_specified_element_of(deriv_var_tensor_index, 0);
+          // Set `deriv_index` to `i` (or `0` in the example)
+          const size_t deriv_index = gsl::at(deriv_var_tensor_index, 0);
+          dt_var.get(dt_var_tensor_index) +=
+              mesh_velocity->get(deriv_index) *
+              deriv_var[deriv_var_storage_index];
+        }
       }
     });
   }

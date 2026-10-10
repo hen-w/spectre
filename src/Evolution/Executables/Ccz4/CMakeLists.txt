@@ -14,6 +14,7 @@ target_link_libraries(
   PRIVATE
   Actions
   Ccz4
+  Ccz4GradientProjection
   ConstraintDamping
   Charmxx::main
   DgSubcell

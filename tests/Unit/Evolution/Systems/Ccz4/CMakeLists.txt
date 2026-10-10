@@ -72,3 +72,5 @@ target_link_libraries(
   Spectral
   Utilities
 )
+
+add_subdirectory(GradientProjection)

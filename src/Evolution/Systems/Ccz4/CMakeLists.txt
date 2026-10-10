@@ -65,4 +65,5 @@ target_link_libraries(
 
 add_subdirectory(BoundaryConditions)
 add_subdirectory(FiniteDifference)
+add_subdirectory(GradientProjection)
 add_subdirectory(Instantiations)
