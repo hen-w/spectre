@@ -3,7 +3,9 @@
 
 # Second-order CCZ4 with the DG upwind gradient-projection scheme on one
 # radial layer of six excised wedges, with analytic Minkowski data on the inner
-# and outer boundaries. Only the options are checked.
+# and outer boundaries. Only the options are checked. With DG-subcell, every
+# element here uses DG since finite differences are not allowed at external
+# boundaries.
 
 Executable: EvolveCcz4
 Testing:
@@ -30,6 +32,9 @@ PhaseChangeAndTriggers: []
 
 EvolutionSystem:
   Ccz4:
+    EvolveLapseAndShift: true
+    ConstrainedEvolution: true
+    KreissOligerEpsilon: 0.1
     EtaConstant: 0.0
     Kappa1:
       GaussianPlusConstant:
@@ -84,6 +89,28 @@ SpatialDiscretization:
     Filtering:
       - None:
           BlocksToFilter: All
+    Subcell:
+      TroubledCellIndicator:
+        PerssonTci:
+          Exponent: 4.0
+          NumHighestModes: 1
+        RdmpTci:
+          Delta0: 1.0e-7
+          Epsilon: 1.0e-3
+        FdToDgTci:
+          NumberOfStepsBetweenTciCalls: 1
+          MinTciCallsAfterRollback: 1
+          MinimumClearTcis: 1
+        AlwaysUseSubcells: false
+        EnableExtensionDirections: false
+        UseHalo: false
+        OnlyDgBlocksAndGroups: None
+      SubcellToDgReconstructionMethod: DimByDim
+      FiniteDifferenceDerivativeOrder: 4
+      FdInterpolationOrder: 3
+  SubcellSolver:
+    Reconstructor:
+      UnlimitedDeg4Prim
 
 EventsAndTriggersAtCheckpoints:
 

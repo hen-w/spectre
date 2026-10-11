@@ -22,23 +22,17 @@ void test(bool constrained_evolution) {
   auto conformal_spatial_metric =
       make_with_value<tnsr::ii<DataVector, dim>>(num_pts, 0.);
   auto a_tilde = make_with_value<tnsr::ii<DataVector, dim>>(num_pts, 0.);
-  auto boundary_conformal_spatial_metric =
-      make_with_value<tnsr::ii<DataVector, dim>>(num_pts, 0.);
 
   for (size_t i = 0; i < dim; ++i) {
     conformal_spatial_metric.get(i, i) = DataVector{num_pts, 2.};
     a_tilde.get(i, i) = DataVector{num_pts, 1.};
-    boundary_conformal_spatial_metric.get(i, i) = DataVector{num_pts, 2.};
   }
 
   auto box = db::create<
       db::AddSimpleTags<::Ccz4::fd::Tags::ConstrainedEvolution,
                         ::Ccz4::Tags::ConformalMetric<DataVector, dim>,
-                        ::Ccz4::Tags::ATilde<DataVector, dim>,
-                        ::Ccz4::Tags::BoundaryConformalMetric<DataVector,
-                                                              dim>>>(
-      constrained_evolution, conformal_spatial_metric, a_tilde,
-      boundary_conformal_spatial_metric);
+                        ::Ccz4::Tags::ATilde<DataVector, dim>>>(
+      constrained_evolution, conformal_spatial_metric, a_tilde);
 
   for (size_t i = 0; i < dim; ++i) {
     for (size_t j = i; j < dim; ++j) {
@@ -50,10 +44,6 @@ void test(bool constrained_evolution) {
         CHECK_ITERABLE_APPROX(
             (get<::Ccz4::Tags::ATilde<DataVector, dim>>(box)).get(i, j),
             (DataVector{num_pts, 1.}));
-        CHECK_ITERABLE_APPROX(
-            (get<::Ccz4::Tags::BoundaryConformalMetric<DataVector, dim>>(box))
-                .get(i, j),
-            (DataVector{num_pts, 2.}));
       } else {
         CHECK_ITERABLE_APPROX(
             (get<::Ccz4::Tags::ConformalMetric<DataVector, dim>>(box))
@@ -61,10 +51,6 @@ void test(bool constrained_evolution) {
             (DataVector{num_pts, 0.}));
         CHECK_ITERABLE_APPROX(
             (get<::Ccz4::Tags::ATilde<DataVector, dim>>(box)).get(i, j),
-            (DataVector{num_pts, 0.}));
-        CHECK_ITERABLE_APPROX(
-            (get<::Ccz4::Tags::BoundaryConformalMetric<DataVector, dim>>(box))
-                .get(i, j),
             (DataVector{num_pts, 0.}));
       }
     }
@@ -76,11 +62,9 @@ void test(bool constrained_evolution) {
     if (get<::Ccz4::fd::Tags::ConstrainedEvolution>(box)) {
       conformal_spatial_metric.get(i, i) = DataVector{num_pts, 1.};
       a_tilde.get(i, i) = DataVector{num_pts, 0.};
-      boundary_conformal_spatial_metric.get(i, i) = DataVector{num_pts, 1.};
     } else {
       conformal_spatial_metric.get(i, i) = DataVector{num_pts, 2.};
       a_tilde.get(i, i) = DataVector{num_pts, 1.};
-      boundary_conformal_spatial_metric.get(i, i) = DataVector{num_pts, 2.};
     }
   }
   for (size_t i = 0; i < dim; ++i) {
@@ -91,10 +75,6 @@ void test(bool constrained_evolution) {
       CHECK_ITERABLE_APPROX(
           (get<::Ccz4::Tags::ATilde<DataVector, dim>>(box)).get(i, j),
           a_tilde.get(i, j));
-      CHECK_ITERABLE_APPROX(
-          (get<::Ccz4::Tags::BoundaryConformalMetric<DataVector, dim>>(box))
-              .get(i, j),
-          boundary_conformal_spatial_metric.get(i, j));
     }
   }
 }

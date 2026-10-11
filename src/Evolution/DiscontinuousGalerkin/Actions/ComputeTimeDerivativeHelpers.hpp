@@ -5,6 +5,8 @@
 
 #include <type_traits>
 
+#include "DataStructures/DataBox/PrefixHelpers.hpp"
+#include "DataStructures/DataBox/Prefixes.hpp"
 #include "Utilities/TMPL.hpp"
 #include "Utilities/TypeTraits/CreateHasStaticMemberVariable.hpp"
 #include "Utilities/TypeTraits/CreateHasTypeAlias.hpp"
@@ -12,6 +14,36 @@
 namespace evolution::dg::Actions::detail {
 CREATE_HAS_TYPE_ALIAS(boundary_conditions_base)
 CREATE_HAS_TYPE_ALIAS_V(boundary_conditions_base)
+
+CREATE_HAS_TYPE_ALIAS(boundary_correction_target_tag)
+CREATE_HAS_TYPE_ALIAS_V(boundary_correction_target_tag)
+
+template <bool HasBoundaryCorrectionTargetTag = false>
+struct boundary_correction_target_tag_impl {
+  template <typename System>
+  using f = db::add_tag_prefix<::Tags::dt, typename System::variables_tag>;
+};
+
+template <>
+struct boundary_correction_target_tag_impl<true> {
+  template <typename System>
+  using f = typename System::boundary_correction_target_tag;
+};
+
+/*!
+ * \brief The `Variables` tag into which the global-time-stepping boundary
+ * corrections are lifted: `System::boundary_correction_target_tag` if the
+ * system defines it, otherwise the time derivative of the evolved variables.
+ *
+ * \details A system that defines the alias evaluates its volume terms into the
+ * same separate buffer before `ComputeTimeDerivative` (which then skips the
+ * generic volume terms) and computes the time derivatives of the evolved
+ * variables from the buffer after all corrections are lifted.
+ */
+template <typename System>
+using boundary_correction_target_tag =
+    typename boundary_correction_target_tag_impl<
+        has_boundary_correction_target_tag_v<System>>::template f<System>;
 
 CREATE_HAS_TYPE_ALIAS(inverse_spatial_metric_tag)
 CREATE_HAS_TYPE_ALIAS_V(inverse_spatial_metric_tag)

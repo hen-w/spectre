@@ -12,10 +12,20 @@
 #include "Utilities/TMPL.hpp"
 
 namespace Ccz4::fd {
-struct LdgTimeDerivative;
 template <typename Frame>
 struct ComputeLargestCharacteristicSpeed;
 
+/*!
+ * \brief The second-order CCZ4 system evolved with finite differences on the
+ * subcells of the CCZ4 gradient-projection DG-FD scheme.
+ *
+ * \details The evolved `Variables` (shared with
+ * `Ccz4::GradientProjection::System`) hold the 25 physical fields followed by
+ * the 30 scratch gradients `Tags::PotentialGradients`. The finite-difference
+ * right-hand side, derivatives, reconstruction and filter act on the physical
+ * prefix; the gradients are only formed for the DG neighbors' face packages
+ * and have zero time derivative.
+ */
 struct System {
   using flux_variables = tmpl::list<>;
   using boundary_conditions_base = BoundaryConditions::BoundaryCondition;
@@ -43,44 +53,19 @@ struct System {
                  gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
                  ::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>;
 
-  // Auxiliary reduction variables for LDG
-  using auxiliary_variables_tags = tmpl::list<
-      ::Ccz4::Tags::FieldA<DataVector, 3>, ::Ccz4::Tags::FieldB<DataVector, 3>,
-      ::Ccz4::Tags::FieldD<DataVector, 3>, ::Ccz4::Tags::FieldP<DataVector, 3>>;
+  // The physical fields followed by the scratch gradients of the CCZ4
+  // gradient-projection scheme. The physical fields must stay first and the
+  // gauge fields (lapse, shift, b) last among them: finite-difference
+  // derivatives, reconstruction and filtering act on that prefix.
+  using physical_and_gradient_tags =
+      tmpl::push_back<original_evolved_variables_tags,
+                      Tags::PotentialGradients>;
 
-  // Boundary-integrated second-order fields used by
-  // DirichletCharacteristics/CRPBC as ghost-side second-order data.
-  using boundary_second_order_tags =
-      tmpl::list<::Ccz4::Tags::BoundaryConformalMetric<DataVector, 3>,
-                 ::Ccz4::Tags::BoundaryConformalFactor<DataVector>,
-                 ::Ccz4::Tags::BoundaryLapse<DataVector>,
-                 ::Ccz4::Tags::BoundaryShift<DataVector, 3>>;
-
-  // Full evolved variables = original 9 + 4 boundary second-order fields
-  using evolved_variables_tags =
-      tmpl::append<original_evolved_variables_tags,
-                   boundary_second_order_tags>;
-
-  // Variables whose spectral derivatives are computed by the DG infrastructure.
-  // This includes all variables in variables_tag: original evolved + auxiliary
-  // + boundary second-order fields. Boundary second-order fields are
-  // ODE-evolved (spatially constant) so their derivatives are zero, but we
-  // include them here because the DG infrastructure's moving-mesh code
-  // iterates over all variables and expects derivatives for each.
-  using gradient_variables =
-      tmpl::append<original_evolved_variables_tags, auxiliary_variables_tags,
-                   boundary_second_order_tags>;
-
-  // variables_tag = gradient_variables (which is all tags in the correct order)
-  using variables_tag = ::Tags::Variables<gradient_variables>;
-
+  using variables_tag = ::Tags::Variables<physical_and_gradient_tags>;
   using variables_tag_list = typename variables_tag::tags_list;
 
-  // gradients_tags is used by the FD path (SoTimeDerivative) for FD
-  // derivative computation — must be the original evolved variables only
+  // The variables differentiated by finite differences: the physical fields.
   using gradients_tags = original_evolved_variables_tags;
-
-  using compute_volume_time_derivative_terms = LdgTimeDerivative;
 
   using compute_largest_characteristic_speed =
       ComputeLargestCharacteristicSpeed<Frame::Inertial>;

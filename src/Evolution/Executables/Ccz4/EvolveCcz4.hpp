@@ -12,6 +12,19 @@
 #include "Evolution/Actions/RunEventsAndTriggers.hpp"
 #include "Evolution/BoundaryCorrection.hpp"
 #include "Evolution/ComputeTags.hpp"
+#include "Evolution/DgSubcell/Actions/Initialize.hpp"
+#include "Evolution/DgSubcell/Actions/Labels.hpp"
+#include "Evolution/DgSubcell/Actions/ReconstructionCommunication.hpp"
+#include "Evolution/DgSubcell/Actions/SelectNumericalMethod.hpp"
+#include "Evolution/DgSubcell/Actions/TakeTimeStep.hpp"
+#include "Evolution/DgSubcell/GetTciDecision.hpp"
+#include "Evolution/DgSubcell/NeighborReconstructedFaceSolution.hpp"
+#include "Evolution/DgSubcell/PrepareNeighborData.hpp"
+#include "Evolution/DgSubcell/SetInterpolators.hpp"
+#include "Evolution/DgSubcell/Tags/MethodOrder.hpp"
+#include "Evolution/DgSubcell/Tags/ObserverCoordinates.hpp"
+#include "Evolution/DgSubcell/Tags/ObserverMesh.hpp"
+#include "Evolution/DgSubcell/Tags/TciStatus.hpp"
 #include "Evolution/DiscontinuousGalerkin/Actions/ApplyBoundaryCorrections.hpp"
 #include "Evolution/DiscontinuousGalerkin/Actions/ComputeTimeDerivative.hpp"
 #include "Evolution/DiscontinuousGalerkin/DgElementArray.hpp"
@@ -21,20 +34,31 @@
 #include "Evolution/Initialization/Evolution.hpp"
 #include "Evolution/Initialization/NonconservativeSystem.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/ApplyFilter.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/DetConformalSpatialMetricCompute.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/EnforceConstrainedEvolution.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/EnforceTracelessDtConformalMetric.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/GhostData.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/Reconstructor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/ResizeTimeDerivatives.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/SetInitialEta.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/SetK0.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/SoTimeDerivative.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/TraceATildeCompute.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/UnlimitedDeg4Prim.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/BoundaryConditions/DirichletAnalytic.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/BoundaryCorrections/UpwindGradientProjection.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Filter.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/FinalizeTimeDerivative.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/FiniteDifferenceGradients.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Initialize.hpp"
-#include "Evolution/Systems/Ccz4/GradientProjection/PrepareChartFields.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/NeighborPackagedData.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/StepActions.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/SubcellStepActions.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/System.hpp"
 #include "Evolution/Systems/Ccz4/Solutions/Factory.hpp"
+#include "Evolution/Systems/Ccz4/SpectralFilter.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "IO/Observer/Actions/RegisterEvents.hpp"
 #include "IO/Observer/Helpers.hpp"
@@ -49,6 +73,7 @@
 #include "Parallel/Protocols/RegistrationMetavariables.hpp"
 #include "ParallelAlgorithms/Actions/AddComputeTags.hpp"
 #include "ParallelAlgorithms/Actions/AddSimpleTags.hpp"
+#include "ParallelAlgorithms/Actions/Goto.hpp"
 #include "ParallelAlgorithms/Actions/InitializeItems.hpp"
 #include "ParallelAlgorithms/Actions/LocalizedPerturbation.hpp"
 #include "ParallelAlgorithms/Actions/MutateApply.hpp"
@@ -95,6 +120,11 @@ class CProxy_GlobalCache;
 /// \endcond
 
 struct EvolutionMetavars {
+  // With DG-subcell, elements may use finite differences (fixed at
+  // initialization by the subcell options; there is no troubled-cell
+  // indicator) and every right-hand side exchanges ghost data twice. Without
+  // it, only DG is used, with the single DG exchange.
+  static constexpr bool use_dg_subcell = true;
   static constexpr size_t volume_dim = 3;
   using initial_data_list = Ccz4::Solutions::all_solutions;
   using initial_data_tag = evolution::initial_data::Tags::InitialData;
@@ -114,32 +144,60 @@ struct EvolutionMetavars {
   using analytic_variables_tags = typename system::physical_tags;
 
   using analytic_compute = evolution::Tags::AnalyticSolutionsCompute<
-      volume_dim, analytic_variables_tags, false, initial_data_list>;
+      volume_dim, analytic_variables_tags, use_dg_subcell, initial_data_list>;
   using error_compute = Tags::ErrorsCompute<analytic_variables_tags>;
   using error_tags = db::wrap_tags_in<Tags::Error, analytic_variables_tags>;
-  // Only the physical fields are observable: the chart fields are scratch
-  // storage whose time derivatives are temporary targets.
+  // Only the physical fields are observable: the stored gradients are
+  // scratch storage recomputed before every use.
   using observe_fields = tmpl::push_back<
       tmpl::append<
           typename system::physical_tags, error_tags,
           tmpl::list<::Ccz4::Tags::DetConformalSpatialMetric<DataVector>,
                      ::Ccz4::Tags::TraceATilde<DataVector>>,
-          db::wrap_tags_in<::Tags::dt, typename system::physical_tags>>,
-      ::Events::Tags::ObserverCoordinatesCompute<volume_dim,
-                                                 Frame::ElementLogical>,
-      ::Events::Tags::ObserverCoordinatesCompute<volume_dim, Frame::Grid>,
-      ::Events::Tags::ObserverCoordinatesCompute<volume_dim, Frame::Inertial>>;
-  using non_tensor_compute_tags =
-      tmpl::list<::Events::Tags::ObserverMeshCompute<volume_dim>,
-                 ::Events::Tags::ObserverInverseJacobianCompute<
-                     volume_dim, Frame::ElementLogical, Frame::Inertial>,
-                 ::Events::Tags::ObserverJacobianCompute<
-                     volume_dim, Frame::ElementLogical, Frame::Inertial>,
-                 ::Events::Tags::ObserverDetInvJacobianCompute<
-                     Frame::ElementLogical, Frame::Inertial>,
-                 analytic_compute, error_compute,
-                 ::Ccz4::fd::DetConformalSpatialMetricCompute,
-                 ::Ccz4::fd::TraceATildeCompute>;
+          db::wrap_tags_in<::Tags::dt, typename system::physical_tags>,
+          tmpl::conditional_t<
+              use_dg_subcell,
+              tmpl::list<
+                  evolution::dg::subcell::Tags::TciStatusCompute<volume_dim>,
+                  evolution::dg::subcell::Tags::MethodOrderCompute<volume_dim>>,
+              tmpl::list<>>>,
+      tmpl::conditional_t<
+          use_dg_subcell,
+          evolution::dg::subcell::Tags::ObserverCoordinatesCompute<
+              volume_dim, Frame::ElementLogical>,
+          ::Events::Tags::ObserverCoordinatesCompute<volume_dim,
+                                                     Frame::ElementLogical>>,
+      tmpl::conditional_t<
+          use_dg_subcell,
+          evolution::dg::subcell::Tags::ObserverCoordinatesCompute<volume_dim,
+                                                                   Frame::Grid>,
+          ::Events::Tags::ObserverCoordinatesCompute<volume_dim, Frame::Grid>>,
+      tmpl::conditional_t<
+          use_dg_subcell,
+          evolution::dg::subcell::Tags::ObserverCoordinatesCompute<
+              volume_dim, Frame::Inertial>,
+          ::Events::Tags::ObserverCoordinatesCompute<volume_dim,
+                                                     Frame::Inertial>>>;
+  using non_tensor_compute_tags = tmpl::list<
+      tmpl::conditional_t<
+          use_dg_subcell,
+          tmpl::list<
+              evolution::dg::subcell::Tags::ObserverMeshCompute<volume_dim>,
+              evolution::dg::subcell::Tags::ObserverInverseJacobianCompute<
+                  volume_dim, Frame::ElementLogical, Frame::Inertial>,
+              evolution::dg::subcell::Tags::
+                  ObserverJacobianAndDetInvJacobianCompute<
+                      volume_dim, Frame::ElementLogical, Frame::Inertial>>,
+          tmpl::list<::Events::Tags::ObserverMeshCompute<volume_dim>,
+                     ::Events::Tags::ObserverInverseJacobianCompute<
+                         volume_dim, Frame::ElementLogical, Frame::Inertial>,
+                     ::Events::Tags::ObserverJacobianCompute<
+                         volume_dim, Frame::ElementLogical, Frame::Inertial>,
+                     ::Events::Tags::ObserverDetInvJacobianCompute<
+                         Frame::ElementLogical, Frame::Inertial>>>,
+      analytic_compute, error_compute,
+      ::Ccz4::fd::DetConformalSpatialMetricCompute,
+      ::Ccz4::fd::TraceATildeCompute>;
 
   struct factory_creation
       : tt::ConformsTo<Options::protocols::FactoryCreation> {
@@ -164,7 +222,7 @@ struct EvolutionMetavars {
                     Ccz4::BoundaryConditions::BoundaryCondition>>>,
         tmpl::pair<LtsTimeStepper, TimeSteppers::lts_time_steppers>,
         tmpl::pair<PhaseChange, PhaseControl::factory_creatable_classes>,
-        // The evolved Variables include chart scratch fields, so step
+        // The evolved Variables include the scratch gradients, so step
         // choosers that measure the evolved variables (error control) or
         // need characteristic-speed compute tags (CFL) are not offered.
         tmpl::pair<
@@ -194,20 +252,62 @@ struct EvolutionMetavars {
   using observed_reduction_data_tags = observers::collect_reduction_data_tags<
       tmpl::at<typename factory_creation::factory_classes, Event>>;
 
+  struct SubcellOptions {
+    using evolved_vars_tags = typename system::variables_tag::tags_list;
+
+    static constexpr bool subcell_enabled = use_dg_subcell;
+    // Finite-difference elements at external boundaries are not supported.
+    static constexpr bool subcell_enabled_at_external_boundary = false;
+
+    // We send `ghost_zone_size` cell-centered grid points for variable
+    // reconstruction, of which we need `ghost_zone_size-1` for reconstruction
+    // to the internal side of the element face, and `ghost_zone_size` for
+    // reconstruction to the external side of the element face.
+    template <typename DbTagsList>
+    static constexpr size_t ghost_zone_size(
+        const db::DataBox<DbTagsList>& box) {
+      return db::get<Ccz4::fd::Tags::Reconstructor>(box).ghost_zone_size();
+    }
+
+    // The ghost data sent by DG elements: the physical fields with zero
+    // gradients, as in the first exchange of the finite-difference elements
+    // (see Ccz4::GradientProjection::subcell_step_actions).
+    using GhostVariables = Ccz4::fd::GhostVariables;
+
+    using DgComputeSubcellNeighborPackagedData =
+        Ccz4::GradientProjection::NeighborPackagedData;
+  };
+
   static_assert(not local_time_stepping and not use_dg_element_collection,
                 "The CCZ4 gradient-projection step actions support only "
                 "global time stepping on DG element arrays.");
-  using step_actions = Ccz4::GradientProjection::step_actions;
+
+  using step_actions =
+      tmpl::conditional_t<use_dg_subcell,
+                          Ccz4::GradientProjection::subcell_step_actions,
+                          Ccz4::GradientProjection::step_actions>;
 
   using dg_registration_list =
       tmpl::list<observers::Actions::RegisterEventsWithObservers>;
 
-  using initialization_actions = tmpl::list<
+  using initialization_actions = tmpl::flatten<tmpl::list<
       Initialization::Actions::InitializeItems<
           Initialization::TimeStepping<EvolutionMetavars, TimeStepperBase>,
           evolution::dg::Initialization::Domain<EvolutionMetavars>,
           Initialization::TimeStepperHistory<EvolutionMetavars>>,
       Initialization::Actions::NonconservativeSystem<system>,
+      // The subcell grid is set without initial data, which
+      // SetInitialData sets on the active grid.
+      tmpl::conditional_t<
+          use_dg_subcell,
+          tmpl::list<
+              evolution::dg::subcell::Actions::SetSubcellGrid<volume_dim,
+                                                              system, true>,
+              Ccz4::GradientProjection::Actions::CheckFiniteDifferenceOptions,
+              Actions::MutateApply<evolution::dg::subcell::SetInterpolators<
+                  volume_dim, Ccz4::fd::Tags::Reconstructor>>,
+              Actions::MutateApply<Ccz4::fd::ResizeTimeDerivatives>>,
+          tmpl::list<>>,
       Ccz4::GradientProjection::Actions::SetInitialData,
       ::Actions::RandomizeVariables<typename system::variables_tag,
                                     RandomizeInitialData>,
@@ -227,7 +327,7 @@ struct EvolutionMetavars {
           evolution::dg::Initialization::SpectralFilters<
               volume_dim, typename system::variables_tag::tags_list>,
           Ccz4::GradientProjection::InitializeLocalOperators>,
-      Parallel::Actions::TerminatePhase>;
+      Parallel::Actions::TerminatePhase>>;
 
   using dg_element_array_component = DgElementArray<
       EvolutionMetavars,
@@ -277,14 +377,21 @@ struct EvolutionMetavars {
                  observers::ObserverWriter<EvolutionMetavars>,
                  dg_element_array_component>;
 
-  using const_global_cache_tags =
-      tmpl::list<Ccz4::fd::Tags::EtaConstant, Ccz4::Tags::DampingFunctionKappa1,
-                 Ccz4::Tags::DampingFunctionKappa2, Ccz4::Tags::Kappa3,
-                 initial_data_tag, domain::Tags::ExternalBoundaryConditions<3>>;
+  using const_global_cache_tags = tmpl::push_back<
+      tmpl::conditional_t<use_dg_subcell,
+                          tmpl::list<Ccz4::fd::Tags::Reconstructor,
+                                     Ccz4::fd::Tags::KreissOligerEpsilon,
+                                     Ccz4::fd::Tags::EvolveLapseAndShift,
+                                     Ccz4::fd::Tags::ConstrainedEvolution>,
+                          tmpl::list<>>,
+      Ccz4::fd::Tags::EtaConstant, Ccz4::Tags::DampingFunctionKappa1,
+      Ccz4::Tags::DampingFunctionKappa2, Ccz4::Tags::Kappa3, initial_data_tag,
+      domain::Tags::ExternalBoundaryConditions<3>>;
 
   static constexpr Options::String help{
       "Evolve the second-order CCZ4 formulation of the Einstein equations "
-      "with the discontinuous Galerkin upwind gradient-projection scheme.\n\n"};
+      "with the discontinuous Galerkin upwind gradient-projection scheme, "
+      "optionally with finite-difference subcells.\n\n"};
 
   static constexpr std::array<Parallel::Phase, 5> default_phase_order{
       {Parallel::Phase::Initialization,

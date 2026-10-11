@@ -1,0 +1,160 @@
+# Distributed under the MIT License.
+# See LICENSE.txt for details.
+
+# Hybrid DG-FD smoke test of second-order CCZ4 with the DG upwind
+# gradient-projection scheme: a sphere of one central cube and one radial
+# layer of six wedges, with analytic Minkowski data on the outer boundary.
+# The cube is not at an external boundary, so it uses finite differences (9
+# cells per dimension, reconstruction ghost zones of width 3); the wedges are
+# at the outer boundary, where finite differences are not allowed, and use DG
+# (5 points per dimension). Three steps are taken. The maps are not
+# equiangular: with an equiangular cube, the autodiff inverse Hessian of the
+# cube's map, which the finite-difference second derivatives use, raises a
+# floating-point exception (its values are finite).
+
+Executable: EvolveCcz4
+Testing:
+  Check: parse;execute
+  Timeout: 120
+  Priority: High
+
+---
+
+Parallelization:
+  # The NumGridPoints weighting requires an inner cube with initial
+  # refinement [1, 1, 1].
+  ElementDistribution: Uniform
+
+ResourceInfo:
+  AvoidGlobalProc0: false
+
+Evolution:
+  InitialTime: 0.0
+  InitialTimeStep: 0.001
+  MinimumTimeStep: 1e-7
+  TimeStepper:
+    AdamsBashforth:
+      Order: 3
+
+PhaseChangeAndTriggers: []
+
+EvolutionSystem:
+  Ccz4:
+    EvolveLapseAndShift: true
+    ConstrainedEvolution: true
+    KreissOligerEpsilon: 0.1
+    EtaConstant: 1.0
+    Kappa1:
+      GaussianPlusConstant:
+        Constant: 0.001
+        Amplitude: 0.0
+        Width: 1.0
+        Center: [0.0, 0.0, 0.0]
+    Kappa2:
+      GaussianPlusConstant:
+        Constant: 0.0
+        Amplitude: 0.0
+        Width: 1.0
+        Center: [0.0, 0.0, 0.0]
+    Kappa3: 0.5
+
+InitialData: &InitialData
+  Ccz4(Minkowski):
+
+RandomizeInitialData: None
+
+PerturbInitialData: None
+
+DomainCreator:
+  Sphere:
+    InnerRadius: 2.0
+    OuterRadius: 4.0
+    Interior:
+      FillWithSphericity: 0.0
+    InitialRefinement: 0
+    InitialGridPoints: 5
+    UseEquiangularMap: false
+    EquatorialCompression: None
+    RadialPartitioning: []
+    RadialDistribution: [Linear]
+    WhichWedges: All
+    TimeDependentMaps: None
+    OuterBoundaryCondition:
+      DirichletAnalytic:
+        AnalyticPrescription: *InitialData
+
+SpatialDiscretization:
+  BoundaryCorrection:
+    UpwindGradientProjection:
+      ExternalDissipationFactor: 1.0
+  DiscontinuousGalerkin:
+    Formulation: StrongInertial
+    Quadrature: GaussLobatto
+    # The only runtime filter offered: the scheme's own top-shell filter is
+    # applied by its step actions and has no options.
+    Filtering:
+      - None:
+          BlocksToFilter: All
+    Subcell:
+      TroubledCellIndicator:
+        PerssonTci:
+          Exponent: 4.0
+          NumHighestModes: 1
+        RdmpTci:
+          Delta0: 1.0e-7
+          Epsilon: 1.0e-3
+        FdToDgTci:
+          NumberOfStepsBetweenTciCalls: 1
+          MinTciCallsAfterRollback: 1
+          MinimumClearTcis: 1
+        AlwaysUseSubcells: false
+        EnableExtensionDirections: false
+        UseHalo: false
+        OnlyDgBlocksAndGroups: None
+      SubcellToDgReconstructionMethod: DimByDim
+      FiniteDifferenceDerivativeOrder: 4
+      FdInterpolationOrder: 4
+  SubcellSolver:
+    Reconstructor:
+      UnlimitedDeg4Prim
+
+EventsAndTriggersAtCheckpoints:
+
+EventsAndTriggersAtSlabs:
+  - Trigger:
+      Slabs:
+        Specified:
+          Values: [3]
+    Events:
+      - Completion
+
+EventsAndDenseTriggers:
+  - Trigger:
+      Times:
+        EvenlySpaced:
+          Interval: 0.001
+          Offset: 0.0
+    Events:
+      # The number of points distinguishes the hybrid (6 x 5^3 + 9^3 = 1479)
+      # from an all-DG (7 x 5^3 = 875) configuration.
+      - ObserveTimeStep:
+          SubfileName: TimeSteps
+          PrintTimeToTerminal: True
+          ObservePerCore: False
+      - ObserveNorms:
+          SubfileName: Norms
+          TensorsToObserve:
+            - Name: Error(Conformal(SpatialMetric))
+              NormType: Max
+              Components: Individual
+            - Name: Error(Lapse)
+              NormType: Max
+              Components: Individual
+
+EventsRunAtCleanup:
+  ObservationValue: -1000.0
+  Events:
+
+Observers:
+  VolumeFileName: "Ccz4GradientProjectionHybridVolume"
+  ReductionFileName: "Ccz4GradientProjectionHybridReductions"

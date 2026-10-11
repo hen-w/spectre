@@ -14,7 +14,6 @@
 #include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/BoundaryConditions/DirichletAnalytic.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
-#include "Evolution/Systems/Ccz4/GradientProjection/PointwiseFields.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Solutions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
@@ -86,9 +85,7 @@ void test_analytic(const Condition& condition, const KerrSchild& solution) {
   const DataVector z{-2.2, 1.9, 3.3};
   const tnsr::I<DataVector, 3> coords{{{x, y, z}}};
   const size_t n = x.size();
-  gp::Tags::ChartW::type w{n};
-  gp::Tags::ChartQ::type q{n};
-  gp::Tags::ChartU::type u{n};
+  gp::Tags::PotentialGradients::type q{n};
   tnsr::ii<DataVector, 3> g{n};
   Scalar<DataVector> phi{n};
   tnsr::ii<DataVector, 3> a_tilde{n};
@@ -100,11 +97,10 @@ void test_analytic(const Condition& condition, const KerrSchild& solution) {
   tnsr::I<DataVector, 3> b{n};
   const tnsr::i<DataVector, 3> normal{n, 0.0};
   const auto result = condition.dg_ghost(
-      make_not_null(&w), make_not_null(&q), make_not_null(&u),
       make_not_null(&g), make_not_null(&phi), make_not_null(&a_tilde),
       make_not_null(&k), make_not_null(&theta), make_not_null(&gamma_hat),
       make_not_null(&lapse), make_not_null(&shift), make_not_null(&b),
-      std::nullopt, normal, coords, time);
+      make_not_null(&q), std::nullopt, normal, coords, time);
   CHECK(not result.has_value());
 
   // The physical exterior fields are the analytic fields.
@@ -121,29 +117,9 @@ void test_analytic(const Condition& condition, const KerrSchild& solution) {
 
   for (size_t s = 0; s < n; ++s) {
     const std::array<double, 3> point{{x[s], y[s], z[s]}};
-    const gp::PotentialVector expected_u = potentials(solution, point, time);
-    for (size_t a = 0; a < gp::number_of_potentials; ++a) {
-      CHECK(u.get(a)[s] == approx(gsl::at(expected_u, a)));
-    }
-    // Decode every exterior velocity field back to the prescribed physical
-    // data. In particular, the five metric velocities are not ATilde itself
-    // on this anisotropic metric.
-    const auto w_point = gp::velocities_at(w, s);
-    const gp::LogMetricChart chart{
-        gp::stf_decode(&expected_u[gp::PotentialIndex::log_metric])};
-    const gp::Matrix3 decoded_a =
-        0.5 * chart.tangent(gp::stf_decode(&w_point[gp::VelocityIndex::a]));
-    for (size_t i = 0; i < 3; ++i) {
-      for (size_t j = i; j < 3; ++j) {
-        CHECK(decoded_a(i, j) == approx(a_tilde.get(i, j)[s]));
-      }
-      CHECK(w.get(gp::VelocityIndex::gamma_hat + i)[s] == gamma_hat.get(i)[s]);
-      CHECK(w.get(gp::VelocityIndex::b + i)[s] == b.get(i)[s]);
-    }
-    CHECK(w.get(gp::VelocityIndex::trace_extrinsic_curvature)[s] == get(k)[s]);
-    CHECK(w.get(gp::VelocityIndex::theta)[s] == get(theta)[s]);
     // The chart gradients against fourth-order finite differences of the
-    // chart potentials of the analytic solution.
+    // chart potentials (H, phi, alpha, beta) of the analytic solution, in
+    // particular q_phi = phi FieldP.
     const double h = 1.0e-3;
     for (size_t i = 0; i < 3; ++i) {
       const auto shifted = [&](const double offset) {

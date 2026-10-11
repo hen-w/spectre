@@ -18,6 +18,9 @@
 #include "Domain/Structure/ElementId.hpp"
 #include "Domain/Structure/SegmentId.hpp"
 #include "Domain/Tags.hpp"
+#include "Evolution/DgSubcell/ActiveGrid.hpp"
+#include "Evolution/DgSubcell/Tags/ActiveGrid.hpp"
+#include "Evolution/DgSubcell/Tags/Coordinates.hpp"
 #include "Framework/ActionTesting.hpp"
 #include "Parallel/Phase.hpp"
 #include "ParallelAlgorithms/Actions/LocalizedPerturbation.hpp"
@@ -243,6 +246,49 @@ void test_spherical_shell_gaussian() {
   CHECK(psi_data[2] == approx(amplitude));
 }
 
+struct SubcellMetavariables {
+  using component_list = tmpl::list<>;
+  struct SubcellOptions {
+    static constexpr bool subcell_enabled = true;
+  };
+};
+
+// The two grids deliberately have different sizes and coordinates. This
+// catches using DG coordinates to perturb fields stored on the subcell grid.
+void test_active_grid_coordinates() {
+  using ActiveGrid = evolution::dg::subcell::ActiveGrid;
+  tnsr::I<DataVector, 3> dg_coords{2, 0.0};
+  get<0>(dg_coords) = DataVector{-1.0, 1.0};
+  tnsr::I<DataVector, 3> fd_coords{4, 0.0};
+  get<0>(fd_coords) = DataVector{-0.75, -0.25, 0.25, 0.75};
+  const Parallel::GlobalCache<SubcellMetavariables> cache{};
+  const tuples::TaggedTuple<> inboxes{};
+  for (const auto active_grid : {ActiveGrid::Dg, ActiveGrid::Subcell}) {
+    const auto& coords = active_grid == ActiveGrid::Dg ? dg_coords : fd_coords;
+    const size_t number_of_points = get<0>(coords).size();
+    const PerturbAction::PerturbationParameters params{
+        {"PsiTag"}, 0.2, 0.7, {0.1, 0.0, 0.0}, std::nullopt};
+    auto box = db::create<db::AddSimpleTags<
+        VariablesTag, domain::Tags::Coordinates<3, Frame::Inertial>,
+        evolution::dg::subcell::Tags::Coordinates<3, Frame::Inertial>,
+        evolution::dg::subcell::Tags::ActiveGrid,
+        PerturbAction::PerturbationParametersTag>>(
+        Variables<tags_list>{number_of_points, 0.0}, dg_coords, fd_coords,
+        active_grid, std::optional{params});
+    PerturbAction::apply(
+        box, inboxes, cache, ElementId<3>{0}, tmpl::list<>{},
+        static_cast<const ElementArray<Metavariables>*>(nullptr));
+    const auto& actual = db::get<VariablesTag>(box);
+    REQUIRE(actual.number_of_grid_points() == number_of_points);
+    for (size_t i = 0; i < number_of_points; ++i) {
+      const double expected =
+          0.2 * std::exp(-std::pow((get<0>(coords)[i] - 0.1) / 0.7, 2));
+      CHECK(get(get<PsiTag>(actual))[i] == approx(expected));
+    }
+    CHECK(get(get<PiTag>(actual)) == DataVector(number_of_points, 0.0));
+  }
+}
+
 }  // namespace
 
 SPECTRE_TEST_CASE("Unit.ParallelAlgorithms.Actions.LocalizedPerturbation",
@@ -251,4 +297,5 @@ SPECTRE_TEST_CASE("Unit.ParallelAlgorithms.Actions.LocalizedPerturbation",
   test_disabled();
   test_localization();
   test_spherical_shell_gaussian();
+  test_active_grid_coordinates();
 }

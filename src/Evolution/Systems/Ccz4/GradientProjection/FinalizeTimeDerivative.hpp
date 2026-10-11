@@ -11,6 +11,7 @@
 #include "DataStructures/Tensor/TypeAliases.hpp"
 #include "Domain/Tags.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/LocalOperators.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/PointwiseFields.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "PointwiseFunctions/GeneralRelativity/Tags.hpp"
@@ -28,11 +29,12 @@ namespace Ccz4::GradientProjection {
  * \brief Fit the potential rates, apply the compatibility correction and
  * convert all rates to the physical fields.
  *
- * \details After all boundary corrections have been lifted, the time
- * derivatives of the chart fields hold the corrected targets
- * \f$w_t^*\f$, \f$q_{i,t}^*\f$ and, in the potential slots,
- * \f$R-S_uu\f$ (the original potential right-hand side with the lifted
- * internal value-jump damping). Then
+ * \details After all boundary corrections have been lifted, `Tags::RhsTargets`
+ * holds the corrected targets \f$w_t^*\f$, \f$q_{i,t}^*\f$ and, in the
+ * potential slots, \f$R-S_uu\f$ (the original potential right-hand side with
+ * the lifted internal value-jump damping). The chart potentials and velocities
+ * are the physical fields with the local \f$H\f$ and \f$a\f$ (see
+ * `local_chart_fields`), and \f$q\f$ the stored gradients. Then
  *
  * 1. \f$r\f$ is the element-local constrained least-squares fit of
  *    `LocalOperators::fit` to the gradient targets \f$q_{i,t}^*\f$ with the
@@ -51,15 +53,14 @@ namespace Ccz4::GradientProjection {
  *    \f$\partial_t\beta^i=fb^i\f$. The compatibility identity in step 2 holds
  *    before this damping replacement;
  * 4. the physical rates are \f$\tilde\gamma_t=\mathcal T_Hr_H\f$,
- *    \f$\phi_t=\phi\,r_\ell\f$,
+ *    \f$\phi_t=r_\phi\f$,
  *    \f$\tilde A_t=\frac12\{\mathcal T_Ha_t+\mathcal S_H[r_H,a]\}\f$,
  *    \f$\alpha_t=r_\alpha\f$, \f$\beta_t=r_\beta\f$, and the
  *    \f$K,\Theta,\hat\Gamma,b\f$ rates are the corresponding components of
  *    \f$w_t\f$.
  *
- * These finalized physical rates are the only rates the time stepper uses for
- * the physical fields; the chart time derivatives are left holding the
- * targets.
+ * These finalized physical rates are the only nonzero rates the time stepper
+ * uses; the rates of the stored gradients stay zero.
  */
 struct FinalizeTimeDerivative : tt::ConformsTo<db::protocols::Mutator> {
   using return_tags =
@@ -73,8 +74,15 @@ struct FinalizeTimeDerivative : tt::ConformsTo<db::protocols::Mutator> {
                  ::Tags::dt<gr::Tags::Shift<DataVector, 3>>,
                  ::Tags::dt<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>>;
   using argument_tags = tmpl::list<
-      Tags::ChartU, Tags::ChartW, Tags::ChartQ, ::Tags::dt<Tags::ChartU>,
-      ::Tags::dt<Tags::ChartW>, ::Tags::dt<Tags::ChartQ>, domain::Tags::Mesh<3>,
+      ::Ccz4::Tags::ConformalMetric<DataVector, 3>,
+      ::Ccz4::Tags::ConformalFactor<DataVector>,
+      ::Ccz4::Tags::ATilde<DataVector, 3>,
+      gr::Tags::TraceExtrinsicCurvature<DataVector>,
+      ::Ccz4::Tags::Theta<DataVector>, ::Ccz4::Tags::GammaHat<DataVector, 3>,
+      gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
+      ::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>, Tags::PotentialGradients,
+      Tags::PotentialRateTarget, Tags::VelocityTarget, Tags::GradientTarget,
+      domain::Tags::Mesh<3>,
       domain::Tags::InverseJacobian<3, Frame::ElementLogical, Frame::Inertial>,
       Tags::LocalOperators, ::Ccz4::Tags::Eta<DataVector>>;
 
@@ -87,11 +95,17 @@ struct FinalizeTimeDerivative : tt::ConformsTo<db::protocols::Mutator> {
       gsl::not_null<tnsr::I<DataVector, 3>*> dt_gamma_hat,
       gsl::not_null<Scalar<DataVector>*> dt_lapse,
       gsl::not_null<tnsr::I<DataVector, 3>*> dt_shift,
-      gsl::not_null<tnsr::I<DataVector, 3>*> dt_b, const Tags::ChartU::type& u,
-      const Tags::ChartW::type& w, const Tags::ChartQ::type& q,
-      const Tags::ChartU::type& dt_u_target,
-      const Tags::ChartW::type& dt_w_target,
-      const Tags::ChartQ::type& dt_q_target, const Mesh<3>& mesh,
+      gsl::not_null<tnsr::I<DataVector, 3>*> dt_b,
+      const tnsr::ii<DataVector, 3>& conformal_metric,
+      const Scalar<DataVector>& conformal_factor,
+      const tnsr::ii<DataVector, 3>& a_tilde,
+      const Scalar<DataVector>& trace_extrinsic_curvature,
+      const Scalar<DataVector>& theta, const tnsr::I<DataVector, 3>& gamma_hat,
+      const Scalar<DataVector>& lapse, const tnsr::I<DataVector, 3>& shift,
+      const tnsr::I<DataVector, 3>& b, const Tags::PotentialGradients::type& q,
+      const Tags::PotentialRateTarget::type& dt_u_target,
+      const Tags::VelocityTarget::type& dt_w_target,
+      const Tags::GradientTarget::type& dt_q_target, const Mesh<3>& mesh,
       const InverseJacobian<DataVector, 3, Frame::ElementLogical,
                             Frame::Inertial>& inverse_jacobian,
       const LocalOperators& local_operators, const Scalar<DataVector>& eta);
@@ -104,13 +118,14 @@ struct FinalizeTimeDerivative : tt::ConformsTo<db::protocols::Mutator> {
  * already contain the volume source \f$-\eta b\f$.
  */
 void finalized_chart_rates(
-    gsl::not_null<Tags::ChartU::type*> u_rate,
-    gsl::not_null<Tags::ChartW::type*> w_rate,
-    gsl::not_null<Tags::ChartQ::type*> fitted_gradient,
-    const Tags::ChartU::type& u, const Tags::ChartW::type& w,
-    const Tags::ChartQ::type& q, const Tags::ChartU::type& dt_u_target,
-    const Tags::ChartW::type& dt_w_target,
-    const Tags::ChartQ::type& dt_q_target, const Mesh<3>& mesh,
+    gsl::not_null<Tags::PotentialRateTarget::type*> u_rate,
+    gsl::not_null<Tags::VelocityTarget::type*> w_rate,
+    gsl::not_null<Tags::GradientTarget::type*> fitted_gradient,
+    const PotentialFields& u, const VelocityFields& w,
+    const Tags::PotentialGradients::type& q,
+    const Tags::PotentialRateTarget::type& dt_u_target,
+    const Tags::VelocityTarget::type& dt_w_target,
+    const Tags::GradientTarget::type& dt_q_target, const Mesh<3>& mesh,
     const InverseJacobian<DataVector, 3, Frame::ElementLogical,
                           Frame::Inertial>& inverse_jacobian,
     const LocalOperators& local_operators, const Scalar<DataVector>& eta,

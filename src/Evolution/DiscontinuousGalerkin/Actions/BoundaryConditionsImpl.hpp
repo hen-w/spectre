@@ -122,9 +122,16 @@ void apply_boundary_condition_on_face(
   using dt_variables_tags = db::wrap_tags_in<::Tags::dt, variables_tags>;
   using dt_variables_tag = db::add_tag_prefix<::Tags::dt, variables_tag>;
   // When computing auxiliary corrections we add the lifted boundary correction
-  // to the evolved variables, not to their time derivatives.
+  // to the evolved variables, not to their time derivatives. Otherwise the
+  // correction is lifted into the system's boundary-correction target, by
+  // default the time derivatives.
   using tag_to_update =
-      tmpl::conditional_t<ComputeAuxiliary, variables_tag, dt_variables_tag>;
+      tmpl::conditional_t<ComputeAuxiliary, variables_tag,
+                          detail::boundary_correction_target_tag<System>>;
+  // The tags of the boundary correction returned by dg_boundary_terms.
+  using boundary_correction_tags = typename tmpl::conditional_t<
+      ComputeAuxiliary, dt_variables_tag,
+      detail::boundary_correction_target_tag<System>>::type::tags_list;
 
   const Mesh<Dim - 1> face_mesh = volume_mesh.slice_away(direction.dimension());
   const size_t number_of_points_on_face = face_mesh.number_of_grid_points();
@@ -153,6 +160,12 @@ void apply_boundary_condition_on_face(
   constexpr bool needs_coordinates = tmpl::list_contains_v<
       typename BoundaryCondition::dg_interior_temporary_tags,
       ::domain::Tags::Coordinates<Dim, Frame::Inertial>>;
+  static_assert(
+      not(uses_time_derivative_condition and
+          detail::has_boundary_correction_target_tag_v<System>),
+      "Time-derivative boundary conditions would modify the time derivatives "
+      "of the evolved variables directly, but this system lifts its boundary "
+      "corrections into a separate target buffer.");
 
   // List that holds the inverse spatial metric if it's needed
   using inverse_spatial_metric_list =
@@ -600,7 +613,7 @@ void apply_boundary_condition_on_face(
           db::get<PackageDataVolumeTags>(*box)...);
     }
 
-    Variables<dt_variables_tags> boundary_corrections_on_face{
+    Variables<boundary_correction_tags> boundary_corrections_on_face{
         number_of_points_on_face};
 
     // Compute boundary correction
@@ -631,31 +644,34 @@ void apply_boundary_condition_on_face(
             get<BoundaryTermsVolumeTags>(*box)...);
       }
     } else {
-      if constexpr (requires {
-                      boundary_correction.template dg_boundary_terms<true>(
-                          make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
-                              boundary_corrections_on_face))...,
-                          get<PackageFieldTags>(internal_packaged_data)...,
-                          get<PackageFieldTags>(external_packaged_data)...,
-                          evolution::dg::InterfaceOrientation::ExternalBoundary,
-                          dg_formulation,
-                          get<BoundaryTermsVolumeTags>(*box)...);
-                    }) {
-        boundary_correction.template dg_boundary_terms<true>(
-            make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
-                boundary_corrections_on_face))...,
-            get<PackageFieldTags>(internal_packaged_data)...,
-            get<PackageFieldTags>(external_packaged_data)...,
-            evolution::dg::InterfaceOrientation::ExternalBoundary,
-            dg_formulation, get<BoundaryTermsVolumeTags>(*box)...);
-      } else {
-        boundary_correction.template dg_boundary_terms<true>(
-            make_not_null(&get<::Tags::dt<EvolvedVariablesTags>>(
-                boundary_corrections_on_face))...,
-            get<PackageFieldTags>(internal_packaged_data)...,
-            get<PackageFieldTags>(external_packaged_data)..., dg_formulation,
-            get<BoundaryTermsVolumeTags>(*box)...);
-      }
+      [&]<typename... CorrectionTags>(tmpl::list<CorrectionTags...> /*meta*/) {
+        if constexpr (requires {
+                        boundary_correction.template dg_boundary_terms<true>(
+                            make_not_null(&get<CorrectionTags>(
+                                boundary_corrections_on_face))...,
+                            get<PackageFieldTags>(internal_packaged_data)...,
+                            get<PackageFieldTags>(external_packaged_data)...,
+                            evolution::dg::InterfaceOrientation::
+                                ExternalBoundary,
+                            dg_formulation,
+                            get<BoundaryTermsVolumeTags>(*box)...);
+                      }) {
+          boundary_correction.template dg_boundary_terms<true>(
+              make_not_null(
+                  &get<CorrectionTags>(boundary_corrections_on_face))...,
+              get<PackageFieldTags>(internal_packaged_data)...,
+              get<PackageFieldTags>(external_packaged_data)...,
+              evolution::dg::InterfaceOrientation::ExternalBoundary,
+              dg_formulation, get<BoundaryTermsVolumeTags>(*box)...);
+        } else {
+          boundary_correction.template dg_boundary_terms<true>(
+              make_not_null(
+                  &get<CorrectionTags>(boundary_corrections_on_face))...,
+              get<PackageFieldTags>(internal_packaged_data)...,
+              get<PackageFieldTags>(external_packaged_data)..., dg_formulation,
+              get<BoundaryTermsVolumeTags>(*box)...);
+        }
+      }(boundary_correction_tags{});
     }
 
     // Lift the boundary correction

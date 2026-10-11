@@ -59,6 +59,7 @@
 #include "Evolution/Systems/Ccz4/GradientProjection/FinalizeTimeDerivative.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Initialize.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/LocalOperators.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/PointwiseFields.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/PrepareChartFields.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/StepActions.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/System.hpp"
@@ -123,7 +124,11 @@ using history_tag = ::Tags::HistoryEvolvedVariables<variables_tag>;
 using Vars = variables_tag::type;
 using DtVars = dt_variables_tag::type;
 using physical_tags = system::physical_tags;
-using chart_tags = system::chart_tags;
+using gradient_tags = tmpl::list<gp::Tags::PotentialGradients>;
+using targets_tag = gp::Tags::RhsTargets;
+using Targets = targets_tag::type;
+using PotentialChart = gp::Tags::PotentialRateTarget::type;
+using VelocityChart = gp::Tags::VelocityTarget::type;
 using PhysicalVars = Variables<physical_tags>;
 using dt_physical_tags = db::wrap_tags_in<::Tags::dt, physical_tags>;
 using DtPhysicalVars = Variables<dt_physical_tags>;
@@ -295,10 +300,9 @@ Variables<Tags> part(const VarsType& vars) {
 }
 
 // The physical state of the given chart fields; it lies on the
-// algebraic-constraint surface. The chart scratch fields hold garbage, which
-// must be overwritten before use.
-Vars physical_from_chart(const gp::Tags::ChartU::type& u,
-                         const gp::Tags::ChartW::type& w) {
+// algebraic-constraint surface. The stored gradients hold large finite values,
+// which must be overwritten before use.
+Vars physical_from_chart(const PotentialChart& u, const VelocityChart& w) {
   const size_t n = get<0>(u).size();
   Vars vars{n, 0.0};
   for (size_t s = 0; s < n; ++s) {
@@ -330,7 +334,7 @@ Vars physical_from_chart(const gp::Tags::ChartU::type& u,
           gsl::at(w_point, gp::VelocityIndex::b + i);
     }
     get(get<Ccz4::Tags::ConformalFactor<DataVector>>(vars))[s] =
-        std::exp(u_point[gp::PotentialIndex::log_conformal_factor]);
+        u_point[gp::PotentialIndex::conformal_factor];
     get(get<gr::Tags::Lapse<DataVector>>(vars))[s] =
         u_point[gp::PotentialIndex::lapse];
     get(get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(vars))[s] =
@@ -338,27 +342,31 @@ Vars physical_from_chart(const gp::Tags::ChartU::type& u,
     get(get<Ccz4::Tags::Theta<DataVector>>(vars))[s] =
         w_point[gp::VelocityIndex::theta];
   }
-  get<gp::Tags::ChartU>(vars) = gp::Tags::ChartU::type{n, 1.0e3};
-  get<gp::Tags::ChartW>(vars) = gp::Tags::ChartW::type{n, -2.0e3};
-  get<gp::Tags::ChartQ>(vars) = gp::Tags::ChartQ::type{n, 3.0e3};
+  get<gp::Tags::PotentialGradients>(vars) =
+      gp::Tags::PotentialGradients::type{n, 3.0e3};
   return vars;
 }
 
-// A smooth periodic perturbation of Minkowski.
+// A smooth periodic perturbation of Minkowski plus a ramp along x, so that
+// the traces on the two x faces of a periodic element genuinely differ (with
+// unequal conformal factors on the two sides).
 Vars initial_state(const tnsr::I<DataVector, 3>& x,
                    const std::array<double, 3>& lengths) {
   const size_t n = get<0>(x).size();
   const DataVector phase = 2.0 * M_PI *
                            (get<0>(x) / lengths[0] + get<1>(x) / lengths[1] -
                             get<2>(x) / lengths[2]);
-  gp::Tags::ChartU::type u{n};
-  gp::Tags::ChartW::type w{n};
+  const DataVector ramp = get<0>(x) / lengths[0];
+  PotentialChart u{n};
+  VelocityChart w{n};
   for (size_t a = 0; a < gp::number_of_potentials; ++a) {
-    u.get(a) = 0.05 * sin(phase + 0.3 * static_cast<double>(a));
+    u.get(a) = 0.05 * sin(phase + 0.3 * static_cast<double>(a)) +
+               0.02 * (1.0 + 0.1 * static_cast<double>(a)) * ramp;
   }
   u.get(gp::PotentialIndex::lapse) += 1.0;
+  u.get(gp::PotentialIndex::conformal_factor) += 1.0;
   for (size_t a = 0; a < gp::number_of_velocities; ++a) {
-    w.get(a) = 0.04 * cos(phase + 0.7 * static_cast<double>(a));
+    w.get(a) = 0.04 * cos(phase + 0.7 * static_cast<double>(a)) - 0.03 * ramp;
   }
   return physical_from_chart(u, w);
 }
@@ -414,13 +422,46 @@ PhysicalVars adams_physical_state(const history_tag::type& history,
   return result;
 }
 
-void check_physical_rates_zero(const DtVars& dt_vars) {
-  tmpl::for_each<physical_tags>(
-      [&dt_vars]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
-        for (const auto& component : get<::Tags::dt<Tag>>(dt_vars)) {
-          CHECK(max(abs(component)) == 0.0);
-        }
-      });
+void check_rates_zero(const DtVars& dt_vars) {
+  double largest = 0.0;
+  for (size_t i = 0; i < dt_vars.size(); ++i) {
+    largest = std::max(largest, std::abs(dt_vars.data()[i]));
+  }
+  CHECK(largest == 0.0);
+}
+
+void check_gradient_rates_zero(const DtVars& dt_vars) {
+  for (const auto& component :
+       get<::Tags::dt<gp::Tags::PotentialGradients>>(dt_vars)) {
+    CHECK(max(abs(component)) == 0.0);
+  }
+}
+
+// The packaged chart fields of the face values of `vars` (evolved
+// variables) with the given normal.
+using PackagedVars = Variables<
+    gp::BoundaryCorrections::UpwindGradientProjection::dg_package_field_tags>;
+PackagedVars package_face(
+    const Vars& face_vars, const tnsr::i<DataVector, 3>& normal,
+    const gp::BoundaryCorrections::UpwindGradientProjection& correction) {
+  PackagedVars packaged{face_vars.number_of_grid_points()};
+  correction.dg_package_data(
+      make_not_null(&get<gp::Tags::PackagedVelocities>(packaged)),
+      make_not_null(&get<gp::Tags::PackagedGradients>(packaged)),
+      make_not_null(&get<gp::Tags::PackagedPotentials>(packaged)),
+      make_not_null(&get<Ccz4::Tags::NormalCovector<DataVector, 3>>(packaged)),
+      get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(face_vars),
+      get<Ccz4::Tags::ConformalFactor<DataVector>>(face_vars),
+      get<Ccz4::Tags::ATilde<DataVector, 3>>(face_vars),
+      get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(face_vars),
+      get<Ccz4::Tags::Theta<DataVector>>(face_vars),
+      get<Ccz4::Tags::GammaHat<DataVector, 3>>(face_vars),
+      get<gr::Tags::Lapse<DataVector>>(face_vars),
+      get<gr::Tags::Shift<DataVector, 3>>(face_vars),
+      get<Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(face_vars),
+      get<gp::Tags::PotentialGradients>(face_vars), normal, std::nullopt,
+      std::nullopt, Direction<3>::upper_xi());
+  return packaged;
 }
 
 // The corrected targets expected from the volume targets: on every face of the
@@ -428,56 +469,44 @@ void check_physical_rates_zero(const DtVars& dt_vars) {
 // element, the interior normal is the outward Euclidean unit covector, and the
 // correction is lifted with the inverse LGL end weight 1 / w_0 = 3 (three
 // points) times the face-normal magnitude 2 / L.
-DtVars expected_corrected_targets(
-    const DtVars& volume_dt, const Vars& vars, const Mesh<3>& mesh,
+Targets expected_corrected_targets(
+    const Targets& volume_targets, const Vars& vars, const Mesh<3>& mesh,
     const std::array<double, 3>& lengths,
     const gp::BoundaryCorrections::UpwindGradientProjection& correction) {
-  using ChartVars = Variables<chart_tags>;
   REQUIRE(mesh.extents() == Index<3>(3));
-  const ChartVars chart = part<chart_tags>(vars);
-  DtVars result = volume_dt;
+  Targets result = volume_targets;
   const size_t last = mesh.extents(0) - 1;
   for (size_t axis = 0; axis < 3; ++axis) {
     for (const double sign : {-1.0, 1.0}) {
       const size_t index = sign > 0.0 ? last : 0;
       const size_t opposite = sign > 0.0 ? 0 : last;
-      const ChartVars interior =
-          data_on_slice(chart, mesh.extents(), axis, index);
-      const ChartVars exterior =
-          data_on_slice(chart, mesh.extents(), axis, opposite);
-      const size_t face_points = interior.number_of_grid_points();
+      const Vars interior_vars =
+          data_on_slice(vars, mesh.extents(), axis, index);
+      const Vars exterior_vars =
+          data_on_slice(vars, mesh.extents(), axis, opposite);
+      const size_t face_points = interior_vars.number_of_grid_points();
       tnsr::i<DataVector, 3> normal{face_points, 0.0};
       normal.get(axis) = sign;
       tnsr::i<DataVector, 3> exterior_normal{face_points, 0.0};
       exterior_normal.get(axis) = -sign;
-      Vars terms{face_points};
+      const PackagedVars interior =
+          package_face(interior_vars, normal, correction);
+      const PackagedVars exterior =
+          package_face(exterior_vars, exterior_normal, correction);
+      Targets terms{face_points};
       correction.dg_boundary_terms<false>(
-          make_not_null(&get<gp::Tags::ChartW>(terms)),
-          make_not_null(&get<gp::Tags::ChartQ>(terms)),
-          make_not_null(&get<gp::Tags::ChartU>(terms)),
-          make_not_null(
-              &get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(terms)),
-          make_not_null(&get<Ccz4::Tags::ConformalFactor<DataVector>>(terms)),
-          make_not_null(&get<Ccz4::Tags::ATilde<DataVector, 3>>(terms)),
-          make_not_null(
-              &get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(terms)),
-          make_not_null(&get<Ccz4::Tags::Theta<DataVector>>(terms)),
-          make_not_null(&get<Ccz4::Tags::GammaHat<DataVector, 3>>(terms)),
-          make_not_null(&get<gr::Tags::Lapse<DataVector>>(terms)),
-          make_not_null(&get<gr::Tags::Shift<DataVector, 3>>(terms)),
-          make_not_null(
-              &get<Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(terms)),
-          get<gp::Tags::ChartW>(interior), get<gp::Tags::ChartQ>(interior),
-          get<gp::Tags::ChartU>(interior), normal,
-          get<gp::Tags::ChartW>(exterior), get<gp::Tags::ChartQ>(exterior),
-          get<gp::Tags::ChartU>(exterior), exterior_normal,
+          make_not_null(&get<gp::Tags::VelocityTarget>(terms)),
+          make_not_null(&get<gp::Tags::GradientTarget>(terms)),
+          make_not_null(&get<gp::Tags::PotentialRateTarget>(terms)),
+          get<gp::Tags::PackagedVelocities>(interior),
+          get<gp::Tags::PackagedGradients>(interior),
+          get<gp::Tags::PackagedPotentials>(interior),
+          get<Ccz4::Tags::NormalCovector<DataVector, 3>>(interior),
+          get<gp::Tags::PackagedVelocities>(exterior),
+          get<gp::Tags::PackagedGradients>(exterior),
+          get<gp::Tags::PackagedPotentials>(exterior),
+          get<Ccz4::Tags::NormalCovector<DataVector, 3>>(exterior),
           dg::Formulation::StrongInertial);
-      tmpl::for_each<physical_tags>(
-          [&terms]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
-            for (const auto& component : get<Tag>(terms)) {
-              CHECK(max(abs(component)) == 0.0);
-            }
-          });
       terms *= -3.0 * 2.0 / gsl::at(lengths, axis);
       add_slice_to_data(make_not_null(&result), terms, mesh.extents(), axis,
                         index);
@@ -578,8 +607,8 @@ void emplace_element(
   for (size_t i = 0; i < 4; ++i) {
     ActionTesting::next_action<component>(runner, id);
   }
-  // Exercise the production initial-data action, including clearing all
-  // scratch slots and assigning every physical field on bricks and wedges.
+  // Exercise the production initial-data action, including clearing the
+  // stored gradients and assigning every physical field on bricks and wedges.
   const auto& vars = get_tag<variables_tag>(*runner, id);
   const auto exact = Minkowski{}.variables(
       get_tag<domain::Tags::Coordinates<3, Frame::Inertial>>(*runner, id), 0.0,
@@ -588,11 +617,11 @@ void emplace_element(
       [&vars, &exact]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
         CHECK_ITERABLE_APPROX(get<Tag>(vars), get<Tag>(exact));
       });
-  tmpl::for_each<chart_tags>([&vars]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
-    for (const auto& component : get<Tag>(vars)) {
-      CHECK(max(abs(component)) == 0.0);
-    }
-  });
+  for (const auto& component : get<gp::Tags::PotentialGradients>(vars)) {
+    CHECK(max(abs(component)) == 0.0);
+  }
+  // The right-hand-side targets exist (empty) after initialization.
+  CHECK(get_tag<targets_tag>(*runner, id).number_of_grid_points() == 0);
 }
 
 // The step actions, without and with a spatially varying Gamma-driver damping
@@ -671,106 +700,99 @@ void test_step_actions(const bool damped) {
 
   ActionTesting::set_phase(make_not_null(&runner), Parallel::Phase::Evolve);
   {
+    // Poison the scratch gradients, the targets and the rates with large
+    // finite values: they must be overwritten before use.
     auto& box =
         ActionTesting::get_databox<component>(make_not_null(&runner), id);
-    db::mutate<gp::Tags::ChartU, gp::Tags::ChartW, gp::Tags::ChartQ>(
-        [](const auto u, const auto w, const auto q) {
-          for (auto& component : *u) {
-            component = 1.0e3;
-          }
-          for (auto& component : *w) {
-            component = -2.0e3;
-          }
+    db::mutate<gp::Tags::PotentialGradients, targets_tag, dt_variables_tag>(
+        [n](const auto q, const auto targets, const auto dt_vars) {
           for (auto& component : *q) {
             component = 3.0e3;
           }
+          *targets = Targets{n, -2.0e3};
+          *dt_vars = DtVars{n, 1.0e3};
         },
         make_not_null(&box));
   }
 
   {
-    INFO("PrepareChartFields overwrites the chart from the physical state");
+    INFO("ComputeVolumeTargets recomputes q and the volume targets");
+    const Vars before = get_tag<variables_tag>(runner, id);
     next();
-    const auto& u = get_tag<gp::Tags::ChartU>(runner, id);
-    gp::Tags::ChartQ::type expected_q{n};
-    gp::potential_gradients(make_not_null(&expected_q), u, mesh,
-                            inverse_jacobian);
-    CHECK_ITERABLE_APPROX(get_tag<gp::Tags::ChartQ>(runner, id), expected_q);
-    CHECK_ITERABLE_APPROX(
-        u.get(gp::PotentialIndex::lapse),
-        get(get_tag<gr::Tags::Lapse<DataVector>>(runner, id)));
-    CHECK_ITERABLE_APPROX(
-        u.get(gp::PotentialIndex::log_conformal_factor),
-        log(get(get_tag<Ccz4::Tags::ConformalFactor<DataVector>>(runner, id))));
-    CHECK_ITERABLE_APPROX(
-        get_tag<gp::Tags::ChartW>(runner, id).get(gp::VelocityIndex::theta),
-        get(get_tag<Ccz4::Tags::Theta<DataVector>>(runner, id)));
+    // The same mutator on a copy of the physical state with unpoisoned
+    // scratch (its arithmetic is tested in Test_PrepareChartFields).
+    Vars expected_vars = before;
+    get<gp::Tags::PotentialGradients>(expected_vars) =
+        gp::Tags::PotentialGradients::type{n, 0.0};
+    DtVars expected_dt{};
+    Targets expected_targets{};
+    gp::ComputeVolumeTargets::apply(
+        make_not_null(&expected_vars), make_not_null(&expected_dt),
+        make_not_null(&expected_targets), mesh, inverse_jacobian,
+        get_tag<Ccz4::Tags::Kappa1>(runner, id),
+        get_tag<Ccz4::Tags::Kappa2>(runner, id), kappa_3,
+        get_tag<Ccz4::Tags::Eta<DataVector>>(runner, id),
+        get_tag<Ccz4::Tags::K0<DataVector>>(runner, id));
+    CHECK(get_tag<variables_tag>(runner, id) == expected_vars);
+    CHECK(get_tag<targets_tag>(runner, id) == expected_targets);
+    // The physical fields are referenced, not modified.
+    CHECK(part<physical_tags>(get_tag<variables_tag>(runner, id)) ==
+          part<physical_tags>(before));
+    check_rates_zero(get_tag<dt_variables_tag>(runner, id));
   }
+  const Targets volume_targets = get_tag<targets_tag>(runner, id);
 
   const TimeStepId time_step_id = get_tag<::Tags::TimeStepId>(runner, id);
   {
-    INFO("ComputeTimeDerivative: volume targets and the single exchange");
+    INFO("ComputeTimeDerivative: the single exchange, no generic volume terms");
     next();
     const auto& inbox =
         ActionTesting::get_inbox_tag<component, inbox_tag>(runner, id);
     REQUIRE(inbox.messages.size() == 1);
     CHECK(inbox.messages.begin()->first == time_step_id);
     CHECK(inbox.messages.begin()->second.size() == 6);
-    const auto& dt_vars = get_tag<dt_variables_tag>(runner, id);
-    check_physical_rates_zero(dt_vars);
-    const auto derivatives = partial_derivatives<system::gradient_variables>(
-        part<system::gradient_variables>(get_tag<variables_tag>(runner, id)),
-        mesh, inverse_jacobian);
-    gp::Tags::ChartW::type dt_w{n};
-    gp::Tags::ChartQ::type dt_q{n};
-    gp::Tags::ChartU::type dt_u{n};
-    gp::volume_targets(
-        make_not_null(&dt_w), make_not_null(&dt_q), make_not_null(&dt_u),
-        get_tag<gp::Tags::ChartU>(runner, id),
-        get_tag<gp::Tags::ChartW>(runner, id),
-        get_tag<gp::Tags::ChartQ>(runner, id),
-        get<gp::DerivChartW>(derivatives), get<gp::DerivChartQ>(derivatives),
-        get_tag<Ccz4::Tags::Kappa1>(runner, id),
-        get_tag<Ccz4::Tags::Kappa2>(runner, id), kappa_3,
-        get_tag<Ccz4::Tags::Eta<DataVector>>(runner, id),
-        get_tag<Ccz4::Tags::K0<DataVector>>(runner, id), Ccz4::fd::System::f);
-    CHECK_ITERABLE_APPROX(get<::Tags::dt<gp::Tags::ChartW>>(dt_vars), dt_w);
-    CHECK_ITERABLE_APPROX(get<::Tags::dt<gp::Tags::ChartQ>>(dt_vars), dt_q);
-    CHECK_ITERABLE_APPROX(get<::Tags::dt<gp::Tags::ChartU>>(dt_vars), dt_u);
+    check_rates_zero(get_tag<dt_variables_tag>(runner, id));
+    // The periodic element has no external face: the targets are unchanged.
+    CHECK(get_tag<targets_tag>(runner, id) == volume_targets);
   }
-  const DtVars volume_dt = get_tag<dt_variables_tag>(runner, id);
 
   {
-    INFO("ApplyBoundaryCorrections lifts the target corrections");
+    INFO("ApplyBoundaryCorrections lifts the corrections into the targets");
     next();
     CHECK(
         ActionTesting::get_inbox_tag<component, inbox_tag>(runner, id).empty());
-    const auto& dt_vars = get_tag<dt_variables_tag>(runner, id);
-    check_physical_rates_zero(dt_vars);
-    const DtVars expected = expected_corrected_targets(
-        volume_dt, get_tag<variables_tag>(runner, id), mesh, element_lengths,
-        correction);
+    check_rates_zero(get_tag<dt_variables_tag>(runner, id));
+    const Targets expected = expected_corrected_targets(
+        volume_targets, get_tag<variables_tag>(runner, id), mesh,
+        element_lengths, correction);
     const auto custom = Approx::custom().epsilon(1.0e-12).scale(1.0);
-    CHECK_VARIABLES_CUSTOM_APPROX(dt_vars, expected, custom);
-    CHECK(get<::Tags::dt<gp::Tags::ChartU>>(dt_vars) !=
-          get<::Tags::dt<gp::Tags::ChartU>>(volume_dt));
+    CHECK_VARIABLES_CUSTOM_APPROX(get_tag<targets_tag>(runner, id), expected,
+                                  custom);
+    // The x faces carry genuine jumps, including of the potentials.
+    CHECK(max(abs(get<gp::Tags::PotentialRateTarget>(
+                      get_tag<targets_tag>(runner, id))
+                      .get(gp::PotentialIndex::conformal_factor) -
+                  get<gp::Tags::PotentialRateTarget>(volume_targets)
+                      .get(gp::PotentialIndex::conformal_factor))) > 1.0e-3);
   }
-  const DtVars corrected_dt = get_tag<dt_variables_tag>(runner, id);
+  const Targets corrected_targets = get_tag<targets_tag>(runner, id);
 
   {
     INFO("FinalizeTimeDerivative writes only the physical rates");
     next();
     const auto& dt_vars = get_tag<dt_variables_tag>(runner, id);
-    using dt_chart_tags = db::wrap_tags_in<::Tags::dt, chart_tags>;
-    CHECK(part<dt_chart_tags>(dt_vars) == part<dt_chart_tags>(corrected_dt));
+    check_gradient_rates_zero(dt_vars);
+    CHECK(get_tag<targets_tag>(runner, id) == corrected_targets);
+    const auto& vars = get_tag<variables_tag>(runner, id);
     const auto finalize = [&](const Scalar<DataVector>& damping) {
       DtPhysicalVars result{n};
       gp::FinalizeTimeDerivative::apply(
           make_not_null(
               &get<::Tags::dt<Ccz4::Tags::ConformalMetric<DataVector, 3>>>(
                   result)),
-          make_not_null(&get<::Tags::dt<Ccz4::Tags::ConformalFactor<DataVector>>>(
-              result)),
+          make_not_null(
+              &get<::Tags::dt<Ccz4::Tags::ConformalFactor<DataVector>>>(
+                  result)),
           make_not_null(
               &get<::Tags::dt<Ccz4::Tags::ATilde<DataVector, 3>>>(result)),
           make_not_null(
@@ -786,13 +808,20 @@ void test_step_actions(const bool damped) {
           make_not_null(
               &get<::Tags::dt<Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>>(
                   result)),
-          get_tag<gp::Tags::ChartU>(runner, id),
-          get_tag<gp::Tags::ChartW>(runner, id),
-          get_tag<gp::Tags::ChartQ>(runner, id),
-          get<::Tags::dt<gp::Tags::ChartU>>(corrected_dt),
-          get<::Tags::dt<gp::Tags::ChartW>>(corrected_dt),
-          get<::Tags::dt<gp::Tags::ChartQ>>(corrected_dt), mesh, inverse_jacobian,
-          operators, damping);
+          get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(vars),
+          get<Ccz4::Tags::ConformalFactor<DataVector>>(vars),
+          get<Ccz4::Tags::ATilde<DataVector, 3>>(vars),
+          get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(vars),
+          get<Ccz4::Tags::Theta<DataVector>>(vars),
+          get<Ccz4::Tags::GammaHat<DataVector, 3>>(vars),
+          get<gr::Tags::Lapse<DataVector>>(vars),
+          get<gr::Tags::Shift<DataVector, 3>>(vars),
+          get<Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(vars),
+          get<gp::Tags::PotentialGradients>(vars),
+          get<gp::Tags::PotentialRateTarget>(corrected_targets),
+          get<gp::Tags::VelocityTarget>(corrected_targets),
+          get<gp::Tags::GradientTarget>(corrected_targets), mesh,
+          inverse_jacobian, operators, damping);
       return result;
     };
     const DtPhysicalVars expected = finalize(eta);
@@ -818,7 +847,7 @@ void test_step_actions(const bool damped) {
   for (size_t step_number = 0; step_number < 3; ++step_number) {
     CAPTURE(step_number);
     if (step_number > 0) {
-      // PrepareChartFields, ComputeTimeDerivative, ApplyBoundaryCorrections,
+      // ComputeVolumeTargets, ComputeTimeDerivative, ApplyBoundaryCorrections,
       // FinalizeTimeDerivative
       for (size_t i = 0; i < 4; ++i) {
         next();
@@ -837,6 +866,10 @@ void test_step_actions(const bool damped) {
           get_tag<::Tags::TimeStepId>(runner, id));
     CHECK(*history.back().value == state);
     CHECK(history.back().derivative == rates);
+    // The recorded rate of the stored gradients is defined and zero.
+    for (size_t entry = 0; entry < history.size(); ++entry) {
+      check_gradient_rates_zero(history[entry].derivative);
+    }
 
     // RunEventsAndDenseTriggers observes the dense output of the physical
     // fields at the trigger time and restores the state and time.
@@ -940,21 +973,30 @@ void advance_time(const gsl::not_null<MockRuntimeSystem*> runner,
   }
 }
 
-// Sets the chart state Minkowski + delta on every element (delta holds the 13
-// velocities and then the 10 potentials, component-major over `total` model
-// points; model_index(e, s) is the model point of point s of element e), runs
-// PrepareChartFields, ComputeTimeDerivative, ApplyBoundaryCorrections and
-// FinalizeTimeDerivative, each on all elements before the next, returns the
-// finalized physical rates and advances time.
+// The constant background state of the linearizations: unit conformal
+// metric, w = 0, and the given conformal factor, lapse and shift.
+struct Background {
+  double conformal_factor = 1.0;
+  double lapse = 1.0;
+  std::array<double, 3> shift{};
+};
+
+// Sets the chart state background + delta on every element (delta holds the
+// 13 velocities and then the 10 potentials, component-major over `total`
+// model points; model_index(e, s) is the model point of point s of element
+// e), runs ComputeVolumeTargets, ComputeTimeDerivative,
+// ApplyBoundaryCorrections and FinalizeTimeDerivative, each on all elements
+// before the next, returns the finalized physical rates and advances time.
 template <typename ModelIndex>
 std::vector<DtPhysicalVars> finalized_rates(
     const gsl::not_null<MockRuntimeSystem*> runner,
     const std::vector<ElementId<3>>& ids, const DataVector& delta,
-    const size_t total, const ModelIndex& model_index) {
+    const size_t total, const ModelIndex& model_index,
+    const Background& background = {}) {
   const size_t n = number_of_points;
   for (size_t e = 0; e < ids.size(); ++e) {
-    gp::Tags::ChartU::type u{n};
-    gp::Tags::ChartW::type w{n};
+    PotentialChart u{n};
+    VelocityChart w{n};
     for (size_t s = 0; s < n; ++s) {
       for (size_t a = 0; a < gp::number_of_velocities; ++a) {
         w.get(a)[s] = delta[a * total + model_index(e, s)];
@@ -964,7 +1006,11 @@ std::vector<DtPhysicalVars> finalized_rates(
             delta[(gp::number_of_velocities + a) * total + model_index(e, s)];
       }
     }
-    u.get(gp::PotentialIndex::lapse) += 1.0;
+    u.get(gp::PotentialIndex::conformal_factor) += background.conformal_factor;
+    u.get(gp::PotentialIndex::lapse) += background.lapse;
+    for (size_t i = 0; i < 3; ++i) {
+      u.get(gp::PotentialIndex::shift + i) += gsl::at(background.shift, i);
+    }
     auto& box = ActionTesting::get_databox<component>(runner, ids[e]);
     db::mutate<variables_tag>(
         [&u, &w](const gsl::not_null<Vars*> vars) {
@@ -972,7 +1018,7 @@ std::vector<DtPhysicalVars> finalized_rates(
         },
         make_not_null(&box));
     runner->force_next_action_to_be<
-        component, ::Actions::MutateApply<gp::PrepareChartFields>>(ids[e]);
+        component, ::Actions::MutateApply<gp::ComputeVolumeTargets>>(ids[e]);
   }
   for (size_t i = 0; i < 4; ++i) {
     for (const auto& id : ids) {
@@ -989,21 +1035,23 @@ std::vector<DtPhysicalVars> finalized_rates(
 }
 
 // The central difference of the finalized physical rates along delta about
-// Minkowski space, mapped to chart rates at the background, in the layout of
-// delta. The difference error is O(epsilon^2) relative to the rates.
+// the background, mapped to chart rates at the background (unit conformal
+// metric), in the layout of delta. The difference error is O(epsilon^2)
+// relative to the rates.
 template <typename ModelIndex>
 DataVector linearized_chart_rates(
     const gsl::not_null<MockRuntimeSystem*> runner,
     const std::vector<ElementId<3>>& ids, const DataVector& delta,
-    const size_t total, const ModelIndex& model_index) {
+    const size_t total, const ModelIndex& model_index,
+    const Background& background_state = {}) {
   const size_t n = number_of_points;
   // Truncation ~1e-10 and rounding ~1e-11 relative to the rates.
   const double epsilon = 3.0e-6;
   const gp::LogMetricChart background{gp::Matrix3(0.0)};
-  auto derivatives =
-      finalized_rates(runner, ids, epsilon * delta, total, model_index);
-  const auto minus =
-      finalized_rates(runner, ids, -epsilon * delta, total, model_index);
+  auto derivatives = finalized_rates(runner, ids, epsilon * delta, total,
+                                     model_index, background_state);
+  const auto minus = finalized_rates(runner, ids, -epsilon * delta, total,
+                                     model_index, background_state);
   DataVector chart_rates(23 * total);
   const size_t potentials = gp::number_of_velocities * total;
   for (size_t e = 0; e < ids.size(); ++e) {
@@ -1040,9 +1088,9 @@ DataVector linearized_chart_rates(
               derivative))[s];
       chart_rates[gp::VelocityIndex::theta * total + m] =
           get(get<::Tags::dt<Ccz4::Tags::Theta<DataVector>>>(derivative))[s];
-      // The background conformal factor is one.
-      chart_rates[potentials +
-                  gp::PotentialIndex::log_conformal_factor * total + m] =
+      // The conformal factor is itself a potential.
+      chart_rates[potentials + gp::PotentialIndex::conformal_factor * total +
+                  m] =
           get(get<::Tags::dt<Ccz4::Tags::ConformalFactor<DataVector>>>(
               derivative))[s];
       chart_rates[potentials + gp::PotentialIndex::lapse * total + m] =
@@ -1129,6 +1177,55 @@ void test_linearized_operator(const gsl::not_null<std::mt19937*> gen) {
   }
 }
 
+// The same linearization about a constant state with a non-unit conformal
+// factor and lapse and a nonzero shift, against the model assembled from the
+// frozen log(phi) symbol conjugated by the scaling of the gradients of phi
+// (and the lapse-weighted damping), for every combination of zero and nonzero
+// kappa_1 and eta. About phi = 1 a missing factor of phi in R_phi, FieldP, P
+// or the normal operator would be invisible.
+void test_linearized_operator_about_background(
+    const gsl::not_null<std::mt19937*> gen) {
+  constexpr size_t refinement_x = 1;
+  constexpr size_t elements_x = 2;
+  const size_t total = number_of_points * elements_x;
+  const std::vector<ElementId<3>> ids{element_id(refinement_x, 0),
+                                      element_id(refinement_x, 1)};
+  const auto model_index = [](const size_t e, const size_t s) {
+    return 3 * e + s % 3 + 3 * elements_x * (s / 3);
+  };
+  const Background background{0.8, 0.7, {{0.05, -0.03, 0.02}}};
+  for (const auto& [kappa_1, eta] : std::array<std::array<double, 2>, 4>{
+           {{{0.0, 0.0}}, {{0.3, 0.0}}, {{0.0, 1.0}}, {{0.3, 1.0}}}}) {
+    CAPTURE(kappa_1);
+    CAPTURE(eta);
+    const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0};
+    const auto creator = brick(refinement_x);
+    MockRuntimeSystem runner{cache(3, creator, correction),
+                             MutableCacheTuple{}};
+    const Slab slab{0.0, 0.03};
+    for (const auto& id : ids) {
+      emplace_element(make_not_null(&runner), creator, id, TimeStepId{},
+                      TimeStepId{true, 0, slab.start()}, slab.duration(),
+                      kappa_1, DataVector{number_of_points, eta}, {});
+    }
+    ActionTesting::set_phase(make_not_null(&runner), Parallel::Phase::Evolve);
+    advance_time(make_not_null(&runner), ids);
+    const DataVector delta = random_vector(gen, 23 * total);
+    const DataVector chart_rates = linearized_chart_rates(
+        make_not_null(&runner), ids, delta, total, model_index, background);
+    const auto expected = pypp::call<DataVector>(
+        "GradientProjectionModel", "linearized_rates_about", delta,
+        element_lengths[0], element_lengths[1], element_lengths[2], kappa_1,
+        eta, Ccz4::fd::System::f, static_cast<double>(elements_x),
+        DataVector{background.conformal_factor, background.lapse,
+                   background.shift[0], background.shift[1],
+                   background.shift[2]});
+    const auto custom =
+        Approx::custom().epsilon(1.0e-8).scale(max(abs(expected)));
+    CHECK_ITERABLE_CUSTOM_APPROX(chart_rates, expected, custom);
+  }
+}
+
 // The six excised wedges of the Sphere with analytic Minkowski data on the
 // inner and outer boundaries: one layer of curved elements with rotated
 // neighbor orientations on the four angular faces of each wedge, and the
@@ -1169,6 +1266,69 @@ void test_sphere_minkowski(const double eta) {
   }
   CAPTURE(largest);
   CHECK(largest < 1.0e-12);
+}
+
+// On the wedges with a perturbed state, the external analytic boundary lift
+// of ComputeTimeDerivative changes the velocity and gradient targets only on
+// the external (radial) face points and never the potential-rate input (an
+// external face has no value jump), and no time derivative.
+void test_external_lift_isolation(const gsl::not_null<std::mt19937*> gen) {
+  const auto creator = sphere();
+  const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0};
+  MockRuntimeSystem runner{cache(3, creator, correction), MutableCacheTuple{}};
+  const auto ids = sphere_elements(make_not_null(&runner), creator, 0.3, 0.4);
+  const size_t n = number_of_points;
+  std::normal_distribution<double> normal(0.0, 1.0e-3);
+  for (const auto& id : ids) {
+    PotentialChart u{n};
+    VelocityChart w{n};
+    for (auto& component : u) {
+      for (auto& value : component) {
+        value = normal(*gen);
+      }
+    }
+    for (auto& component : w) {
+      for (auto& value : component) {
+        value = normal(*gen);
+      }
+    }
+    u.get(gp::PotentialIndex::conformal_factor) += 1.0;
+    u.get(gp::PotentialIndex::lapse) += 1.0;
+    auto& box =
+        ActionTesting::get_databox<component>(make_not_null(&runner), id);
+    db::mutate<variables_tag>(
+        [&u, &w](const gsl::not_null<Vars*> vars) {
+          *vars = physical_from_chart(u, w);
+        },
+        make_not_null(&box));
+    runner.force_next_action_to_be<
+        component, ::Actions::MutateApply<gp::ComputeVolumeTargets>>(id);
+    ActionTesting::next_action<component>(make_not_null(&runner), id);
+  }
+  for (const auto& id : ids) {
+    const Targets volume_targets = get_tag<targets_tag>(runner, id);
+    ActionTesting::next_action<component>(make_not_null(&runner), id);
+    const Targets& targets = get_tag<targets_tag>(runner, id);
+    CHECK(get<gp::Tags::PotentialRateTarget>(targets) ==
+          get<gp::Tags::PotentialRateTarget>(volume_targets));
+    check_rates_zero(get_tag<dt_variables_tag>(runner, id));
+    double largest_external_change = 0.0;
+    for (size_t c = 0; c < targets.number_of_independent_components; ++c) {
+      for (size_t s = 0; s < n; ++s) {
+        const size_t index = c * n + s;
+        const double change =
+            std::abs(targets.data()[index] - volume_targets.data()[index]);
+        // The radial direction of each wedge is the third logical direction.
+        const size_t radial = s / 9;
+        if (radial == 1) {
+          CHECK(change == 0.0);
+        } else {
+          largest_external_change = std::max(largest_external_change, change);
+        }
+      }
+    }
+    CHECK(largest_external_change > 0.0);
+  }
 }
 
 // On the six wedges, the linearization of the actual actions about Minkowski
@@ -1263,7 +1423,9 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.GradientProjection.StepActions",
   test_step_actions(false);
   test_step_actions(true);
   test_linearized_operator(make_not_null(&gen));
+  test_linearized_operator_about_background(make_not_null(&gen));
   test_sphere_minkowski(0.0);
   test_sphere_minkowski(1.0);
   test_sphere_linearized(make_not_null(&gen));
+  test_external_lift_isolation(make_not_null(&gen));
 }

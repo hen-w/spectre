@@ -5,15 +5,12 @@
 
 #include <cstddef>
 
-#include "DataStructures/DataBox/Protocols/Mutator.hpp"
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
-#include "Domain/Tags.hpp"
+#include "DataStructures/Variables.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Tags.hpp"
-#include "Evolution/Systems/Ccz4/Tags.hpp"
-#include "PointwiseFunctions/GeneralRelativity/Tags.hpp"
 #include "Utilities/Gsl.hpp"
-#include "Utilities/ProtocolHelpers.hpp"
 #include "Utilities/TMPL.hpp"
 
 /// \cond
@@ -26,53 +23,59 @@ namespace Ccz4::GradientProjection {
 /// that the chart encoding discards.
 constexpr double chart_trace_tolerance = 1.0e-10;
 
+/// The local chart fields \f$(H,a)\f$ constructed from the physical fields.
+using LocalChartFields =
+    Variables<tmpl::list<Tags::LogConformalMetric, Tags::TransformedATilde>>;
+
 /*!
- * \brief The element-local ordinary gradients \f$D_iu\f$ of a field with the
- * layout of `Tags::ChartU`.
+ * \brief `chart_from_physical`, with an `ERROR` if the state is off the
+ * algebraic-constraint surface by more than `chart_trace_tolerance`.
+ *
+ * \details The encoding of \f$H\f$ and \f$a\f$ discards their Euclidean
+ * traces, \f$\frac12\log\det\tilde\gamma\f$ and
+ * \f$\tilde\gamma^{ij}\tilde A_{ij}\f$; this check guarantees that no
+ * off-constraint information is silently projected away. `context` is
+ * included in the error message.
+ */
+void checked_chart_from_physical(gsl::not_null<PotentialVector*> u,
+                                 gsl::not_null<VelocityVector*> w,
+                                 const PhysicalPointState& state,
+                                 const char* context);
+
+/*!
+ * \brief The local chart fields \f$H=\frac12\log\tilde\gamma\f$ and
+ * \f$a=2\mathcal T_H^{-1}\tilde A\f$ at every grid point, see
+ * `checked_chart_from_physical`.
+ *
+ * \details These are the only transformed fields of the scheme; the other
+ * potentials and velocities are the physical fields themselves.
+ */
+void local_chart_fields(gsl::not_null<LocalChartFields*> chart,
+                        const tnsr::ii<DataVector, 3>& conformal_metric,
+                        const Scalar<DataVector>& conformal_factor,
+                        const tnsr::ii<DataVector, 3>& a_tilde,
+                        const Scalar<DataVector>& lapse);
+
+/*!
+ * \brief Assemble \f$q_i=D_iu=(D_iH,D_i\phi,D_i\alpha,D_i\beta)\f$ from the
+ * ordinary derivatives of the nodal \f$H\f$ and of the physical fields.
+ */
+void assemble_potential_gradients(
+    gsl::not_null<Tags::PotentialGradients::type*> gradients,
+    const TensorMetafunctions::prepend_spatial_index<
+        Tags::LogConformalMetric::type, 3, UpLo::Lo, Frame::Inertial>&
+        d_log_conformal_metric,
+    const tnsr::i<DataVector, 3>& d_conformal_factor,
+    const tnsr::i<DataVector, 3>& d_lapse,
+    const tnsr::iJ<DataVector, 3>& d_shift);
+
+/*!
+ * \brief The element-local ordinary gradients \f$D_iv\f$ of a field \f$v\f$
+ * with the layout of the potentials.
  */
 void potential_gradients(
-    gsl::not_null<Tags::ChartQ::type*> gradients,
-    const Tags::ChartU::type& potentials, const Mesh<3>& mesh,
+    gsl::not_null<Tags::PotentialGradients::type*> gradients,
+    const Tags::PotentialRateTarget::type& potentials, const Mesh<3>& mesh,
     const InverseJacobian<DataVector, 3, Frame::ElementLogical,
                           Frame::Inertial>& inverse_jacobian);
-
-/*!
- * \brief Overwrite the chart fields \f$u,w\f$ from the current physical state
- * and reconstruct \f$q_i=D_iu\f$.
- *
- * \details This runs at the start of every right-hand-side evaluation, so the
- * chart scratch fields (which the time stepper advances mechanically) never
- * carry independently evolved information into a gradient consumer. It is an
- * `ERROR` if the physical state is off the algebraic-constraint surface by
- * more than `chart_trace_tolerance` (the projection after each step and at
- * initialization guarantees roundoff-level traces), so off-constraint data is
- * never silently projected by the encoding.
- */
-struct PrepareChartFields : tt::ConformsTo<db::protocols::Mutator> {
-  using return_tags = tmpl::list<Tags::ChartU, Tags::ChartW, Tags::ChartQ>;
-  using argument_tags = tmpl::list<
-      ::Ccz4::Tags::ConformalMetric<DataVector, 3>,
-      ::Ccz4::Tags::ConformalFactor<DataVector>,
-      ::Ccz4::Tags::ATilde<DataVector, 3>,
-      gr::Tags::TraceExtrinsicCurvature<DataVector>,
-      ::Ccz4::Tags::Theta<DataVector>, ::Ccz4::Tags::GammaHat<DataVector, 3>,
-      gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
-      ::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>, domain::Tags::Mesh<3>,
-      domain::Tags::InverseJacobian<3, Frame::ElementLogical, Frame::Inertial>>;
-
-  static void apply(gsl::not_null<Tags::ChartU::type*> u,
-                    gsl::not_null<Tags::ChartW::type*> w,
-                    gsl::not_null<Tags::ChartQ::type*> q,
-                    const tnsr::ii<DataVector, 3>& conformal_metric,
-                    const Scalar<DataVector>& conformal_factor,
-                    const tnsr::ii<DataVector, 3>& a_tilde,
-                    const Scalar<DataVector>& trace_extrinsic_curvature,
-                    const Scalar<DataVector>& theta,
-                    const tnsr::I<DataVector, 3>& gamma_hat,
-                    const Scalar<DataVector>& lapse,
-                    const tnsr::I<DataVector, 3>& shift,
-                    const tnsr::I<DataVector, 3>& b, const Mesh<3>& mesh,
-                    const InverseJacobian<DataVector, 3, Frame::ElementLogical,
-                                          Frame::Inertial>& inverse_jacobian);
-};
 }  // namespace Ccz4::GradientProjection

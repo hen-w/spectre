@@ -191,14 +191,9 @@ void test(const bool evolve_lapse_and_shift) {
         }
       });
 
-  // Verify auxiliary and boundary fields are untouched by the filter
-  tmpl::for_each<tmpl::append<System::auxiliary_variables_tags,
-                              System::boundary_second_order_tags>>(
-      [&result, &original_variables](auto tag_v) {
-        using tag = tmpl::type_from<decltype(tag_v)>;
-        CHECK_ITERABLE_APPROX(get<tag>(result),
-                              get<tag>(original_variables));
-      });
+  // The stored gradients are untouched by the filter.
+  CHECK(get<::Ccz4::fd::Tags::PotentialGradients>(result) ==
+        get<::Ccz4::fd::Tags::PotentialGradients>(original_variables));
 }
 
 void test_error_when_epsilon_out_of_range() {

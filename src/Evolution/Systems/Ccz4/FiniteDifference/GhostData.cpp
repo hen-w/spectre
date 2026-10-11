@@ -23,36 +23,16 @@ DataVector GhostVariablesImpl<IsAuxiliary>::apply(
   Variables<Ccz4::fd::System::variables_tag_list> vars_to_reconstruct(
       buffer.data(), buffer.size() - rdmp_size);
 
-  // Copy the 9 original evolved variables (always)
-  get<::Ccz4::Tags::ConformalMetric<DataVector, 3>>(vars_to_reconstruct) =
-      get<::Ccz4::Tags::ConformalMetric<DataVector, 3>>(evolved_vars);
-  get<gr::Tags::Lapse<DataVector>>(vars_to_reconstruct) =
-      get<gr::Tags::Lapse<DataVector>>(evolved_vars);
-  get<gr::Tags::Shift<DataVector, 3>>(vars_to_reconstruct) =
-      get<gr::Tags::Shift<DataVector, 3>>(evolved_vars);
-  get<::Ccz4::Tags::ConformalFactor<DataVector>>(vars_to_reconstruct) =
-      get<::Ccz4::Tags::ConformalFactor<DataVector>>(evolved_vars);
-  get<::Ccz4::Tags::ATilde<DataVector, 3>>(vars_to_reconstruct) =
-      get<::Ccz4::Tags::ATilde<DataVector, 3>>(evolved_vars);
-  get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(vars_to_reconstruct) =
-      get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(evolved_vars);
-  get<::Ccz4::Tags::Theta<DataVector>>(vars_to_reconstruct) =
-      get<::Ccz4::Tags::Theta<DataVector>>(evolved_vars);
-  get<::Ccz4::Tags::GammaHat<DataVector, 3>>(vars_to_reconstruct) =
-      get<::Ccz4::Tags::GammaHat<DataVector, 3>>(evolved_vars);
-  get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(vars_to_reconstruct) =
-      get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(evolved_vars);
-
+  // The physical fields (always), then the gradients only when they are
+  // valid (the second finite-difference pass); otherwise they stay zero.
+  tmpl::for_each<System::original_evolved_variables_tags>(
+      [&evolved_vars,
+       &vars_to_reconstruct]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
+        get<Tag>(vars_to_reconstruct) = get<Tag>(evolved_vars);
+      });
   if constexpr (not IsAuxiliary) {
-    // Round 2 (physical pass): also copy the 4 auxiliary fields
-    get<::Ccz4::Tags::FieldA<DataVector, 3>>(vars_to_reconstruct) =
-        get<::Ccz4::Tags::FieldA<DataVector, 3>>(evolved_vars);
-    get<::Ccz4::Tags::FieldB<DataVector, 3>>(vars_to_reconstruct) =
-        get<::Ccz4::Tags::FieldB<DataVector, 3>>(evolved_vars);
-    get<::Ccz4::Tags::FieldD<DataVector, 3>>(vars_to_reconstruct) =
-        get<::Ccz4::Tags::FieldD<DataVector, 3>>(evolved_vars);
-    get<::Ccz4::Tags::FieldP<DataVector, 3>>(vars_to_reconstruct) =
-        get<::Ccz4::Tags::FieldP<DataVector, 3>>(evolved_vars);
+    get<Tags::PotentialGradients>(vars_to_reconstruct) =
+        get<Tags::PotentialGradients>(evolved_vars);
   }
 
   return buffer;

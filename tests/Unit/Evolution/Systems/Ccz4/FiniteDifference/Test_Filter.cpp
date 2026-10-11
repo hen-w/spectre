@@ -3,7 +3,10 @@
 
 #include "Framework/TestingFramework.hpp"
 
+#include <algorithm>
 #include <cstddef>
+#include <iterator>
+#include <random>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -13,15 +16,20 @@
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
 #include "Domain/Structure/Direction.hpp"
+#include "Domain/Structure/DirectionMap.hpp"
+#include "Domain/Structure/DirectionalId.hpp"
 #include "Domain/Structure/DirectionalIdMap.hpp"
 #include "Domain/Structure/ElementId.hpp"
 #include "Evolution/DgSubcell/GhostData.hpp"
 #include "Evolution/DgSubcell/SliceData.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Filter.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Framework/TestHelpers.hpp"
+#include "Helpers/DataStructures/MakeWithRandomValues.hpp"
 #include "Helpers/Evolution/Systems/Ccz4/PrimReconstructor.hpp"
+#include "NumericalAlgorithms/FiniteDifference/Filter.hpp"
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/TMPL.hpp"
@@ -181,19 +189,107 @@ void test(const bool evolve_lapse_and_shift) {
         }
       });
 
-  // Verify auxiliary and boundary fields are untouched by the filter
-  tmpl::for_each<tmpl::append<System::auxiliary_variables_tags,
-                              System::boundary_second_order_tags>>(
-      [&result, &volume_evolved_variables](auto tag_v) {
-        using tag = tmpl::type_from<decltype(tag_v)>;
-        CHECK_ITERABLE_APPROX(get<tag>(result),
-                              get<tag>(volume_evolved_variables));
-      });
+  // The stored gradients are untouched by the filter.
+  CHECK(get<::Ccz4::fd::Tags::PotentialGradients>(result) ==
+        get<::Ccz4::fd::Tags::PotentialGradients>(volume_evolved_variables));
+}
+
+// The CCZ4 filter acts on the physical prefix of the evolved variables (all
+// 25 physical components, or the 18 non-gauge ones) and of the 55-component
+// neighbor ghost data. Compare it bitwise against the generic
+// Kreiss-Oliger filter of standalone copies of those components, and check
+// that the stored gradients are neither filtered nor affect the result.
+void test_physical_prefix_regression(const bool evolve_lapse_and_shift) {
+  CAPTURE(evolve_lapse_and_shift);
+  MAKE_GENERATOR(gen);
+  std::uniform_real_distribution<> dist(-1.0, 1.0);
+  using System = ::Ccz4::fd::System;
+  using AllVariables = Variables<System::variables_tag_list>;
+  constexpr size_t number_of_components =
+      AllVariables::number_of_independent_components;
+  const size_t number_of_filtered_components = evolve_lapse_and_shift ? 25 : 18;
+  const size_t ghost_zone_size = 3;
+  const size_t order = 4;
+  const double epsilon = 0.7;
+  const Mesh<3> mesh{5, Spectral::Basis::FiniteDifference,
+                     Spectral::Quadrature::CellCentered};
+  const size_t number_of_points = mesh.number_of_grid_points();
+  const size_t number_of_ghost_points = ghost_zone_size * 25;
+
+  auto volume_vars = make_with_random_values<AllVariables>(
+      make_not_null(&gen), dist, number_of_points);
+  DirectionalIdMap<3, evolution::dg::subcell::GhostData> ghost_data{};
+  for (const auto& direction : Direction<3>::all_directions()) {
+    const DirectionalId<3> id{direction, ElementId<3>{1}};
+    ghost_data[id] = evolution::dg::subcell::GhostData{1};
+    ghost_data[id].neighbor_ghost_data_for_reconstruction() =
+        make_with_random_values<DataVector>(
+            make_not_null(&gen), dist,
+            DataVector(number_of_components * number_of_ghost_points));
+  }
+
+  // Standalone copies of the filtered components.
+  DataVector filtered_volume(number_of_filtered_components * number_of_points);
+  std::copy(volume_vars.data(),
+            std::next(volume_vars.data(),
+                      static_cast<std::ptrdiff_t>(filtered_volume.size())),
+            filtered_volume.begin());
+  std::vector<DataVector> filtered_ghost_copies{};
+  filtered_ghost_copies.reserve(6);
+  DirectionMap<3, gsl::span<const double>> filtered_ghost_spans{};
+  for (const auto& [id, data] : ghost_data) {
+    const DataVector& all = data.neighbor_ghost_data_for_reconstruction();
+    filtered_ghost_copies.emplace_back(number_of_filtered_components *
+                                       number_of_ghost_points);
+    std::copy(all.begin(),
+              std::next(all.begin(), static_cast<std::ptrdiff_t>(
+                                         filtered_ghost_copies.back().size())),
+              filtered_ghost_copies.back().begin());
+    filtered_ghost_spans.insert(std::pair{
+        id.direction(), gsl::make_span(filtered_ghost_copies.back().data(),
+                                       filtered_ghost_copies.back().size())});
+  }
+  DataVector expected_filtered = filtered_volume;
+  auto expected_span =
+      gsl::make_span(expected_filtered.data(), expected_filtered.size());
+  ::fd::kreiss_oliger_filter(
+      make_not_null(&expected_span),
+      gsl::make_span(filtered_volume.data(), filtered_volume.size()),
+      filtered_ghost_spans, mesh, number_of_filtered_components, order,
+      epsilon);
+
+  for (const double gradient_poison : {0.0, 3.0e3}) {
+    CAPTURE(gradient_poison);
+    for (auto& component :
+         get<::Ccz4::fd::Tags::PotentialGradients>(volume_vars)) {
+      component = gradient_poison;
+    }
+    for (auto& [id, data] : ghost_data) {
+      DataVector& all = data.neighbor_ghost_data_for_reconstruction();
+      for (size_t i = 25 * number_of_ghost_points; i < all.size(); ++i) {
+        all[i] = -gradient_poison;
+      }
+    }
+    AllVariables result = volume_vars;
+    Ccz4::fd::ccz4_kreiss_oliger_filter(make_not_null(&result), volume_vars,
+                                        ghost_data, evolve_lapse_and_shift,
+                                        mesh, order, epsilon);
+    for (size_t i = 0; i < expected_filtered.size(); ++i) {
+      CHECK(result.data()[i] == expected_filtered[i]);
+    }
+    // Everything else (the gauge fields if not evolved, and the stored
+    // gradients) is unchanged.
+    for (size_t i = expected_filtered.size(); i < result.size(); ++i) {
+      CHECK(result.data()[i] == volume_vars.data()[i]);
+    }
+  }
 }
 
 SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Fd.Filters",
                   "[Unit][Evolution]") {
   test(true);
   test(false);
+  test_physical_prefix_regression(true);
+  test_physical_prefix_regression(false);
 }
 }  // namespace

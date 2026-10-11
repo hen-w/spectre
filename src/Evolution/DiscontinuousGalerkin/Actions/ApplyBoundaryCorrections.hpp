@@ -891,7 +891,23 @@ struct ApplyBoundaryCorrections {
   using variables_tag = typename system::variables_tag;
   using FilterTagList = typename variables_tag::tags_list;
   using dt_variables_tag = db::add_tag_prefix<::Tags::dt, variables_tag>;
-  using DtVariables = typename dt_variables_tag::type;
+  // The global-time-stepping corrections are lifted into this tag, by default
+  // the time derivatives of the evolved variables.
+  using correction_target_tag =
+      evolution::dg::Actions::detail::boundary_correction_target_tag<system>;
+  static constexpr bool lifts_into_separate_targets =
+      not std::is_same_v<correction_target_tag, dt_variables_tag>;
+  static_assert(not lifts_into_separate_targets or
+                    (not local_time_stepping and not DenseOutput and
+                     not ComputeAuxiliary),
+                "Lifting boundary corrections into a separate target buffer "
+                "is supported only for the global time stepping physical "
+                "pass.");
+  // The boundary correction of a mortar and its lift.
+  using DtVariables =
+      typename tmpl::conditional_t<ComputeAuxiliary or local_time_stepping,
+                                   dt_variables_tag,
+                                   correction_target_tag>::type;
   using derived_boundary_corrections =
       tmpl::at<typename Metavariables::factory_creation::factory_classes,
                evolution::BoundaryCorrection>;
@@ -911,10 +927,10 @@ struct ApplyBoundaryCorrections {
 
   // For auxiliary corrections in GTS mode, we write to variables_tag
   // (to store the corrected auxiliary variable into the evolved state),
-  // not to dt_variables_tag.
+  // not to the correction target.
   using tag_to_update =
       tmpl::conditional_t<ComputeAuxiliary or local_time_stepping,
-                          variables_tag, dt_variables_tag>;
+                          variables_tag, correction_target_tag>;
   using mortar_data_tag =
       tmpl::conditional_t<local_time_stepping,
                           evolution::dg::Tags::MortarDataHistory<volume_dim>,
@@ -1413,8 +1429,20 @@ struct ApplyBoundaryCorrections {
                 }
                 return dt_boundary_correction_on_mortar;
               }();
-              // The auxiliary boundary correction is not filtered currently
-              if constexpr (not DenseOutput and not ComputeAuxiliary) {
+              // The auxiliary boundary correction is not filtered currently.
+              // A correction lifted into separate targets has no evolved
+              // variable layout to filter.
+              if constexpr (lifts_into_separate_targets) {
+                if (boundary_filter_active) {
+                  ERROR(
+                      "A boundary-correction filter cannot be applied when "
+                      "the boundary corrections are lifted into a separate "
+                      "target buffer; use the None filter.");
+                }
+                (void)face_inv_jac_grid_to_inertial;
+                (void)face_jac_grid_to_inertial;
+                (void)filter_ptr;
+              } else if constexpr (not DenseOutput and not ComputeAuxiliary) {
                 // Filter the boundary correction on the mortar before it is
                 // lifted into the volume.
                 if (boundary_filter_active) {

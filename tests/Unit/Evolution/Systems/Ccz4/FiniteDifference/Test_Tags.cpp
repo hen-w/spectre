@@ -16,6 +16,8 @@ struct ArbitraryFrame;
 
 template <typename DataType, size_t Dim, typename Frame>
 void test_simple_tags() {
+  TestHelpers::db::test_simple_tag<Ccz4::fd::Tags::PotentialGradients>(
+      "PotentialGradients");
   TestHelpers::db::test_simple_tag<Ccz4::fd::Tags::Reconstructor>(
       "Reconstructor");
   TestHelpers::db::test_simple_tag<Ccz4::fd::Tags::EvolveLapseAndShift>(

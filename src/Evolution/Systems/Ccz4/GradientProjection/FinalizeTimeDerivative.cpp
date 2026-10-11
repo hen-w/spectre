@@ -19,13 +19,14 @@
 
 namespace Ccz4::GradientProjection {
 void finalized_chart_rates(
-    const gsl::not_null<Tags::ChartU::type*> u_rate,
-    const gsl::not_null<Tags::ChartW::type*> w_rate,
-    const gsl::not_null<Tags::ChartQ::type*> fitted_gradient,
-    const Tags::ChartU::type& u, const Tags::ChartW::type& w,
-    const Tags::ChartQ::type& q, const Tags::ChartU::type& dt_u_target,
-    const Tags::ChartW::type& dt_w_target,
-    const Tags::ChartQ::type& dt_q_target, const Mesh<3>& mesh,
+    const gsl::not_null<Tags::PotentialRateTarget::type*> u_rate,
+    const gsl::not_null<Tags::VelocityTarget::type*> w_rate,
+    const gsl::not_null<Tags::GradientTarget::type*> fitted_gradient,
+    const PotentialFields& u, const VelocityFields& w,
+    const Tags::PotentialGradients::type& q,
+    const Tags::PotentialRateTarget::type& dt_u_target,
+    const Tags::VelocityTarget::type& dt_w_target,
+    const Tags::GradientTarget::type& dt_q_target, const Mesh<3>& mesh,
     const InverseJacobian<DataVector, 3, Frame::ElementLogical,
                           Frame::Inertial>& inverse_jacobian,
     const LocalOperators& local_operators, const Scalar<DataVector>& eta,
@@ -78,8 +79,9 @@ void finalized_chart_rates(
       gsl::at(correction_input, a) =
           gsl::at(gradient_defect_term, a) + gsl::at(nonlinear_term, a);
     }
-    const VelocityVector correction =
-        apply_rhs_inverse(u_s[PotentialIndex::lapse], correction_input, f);
+    const VelocityVector correction = apply_rhs_inverse(
+        u_s[PotentialIndex::lapse], u_s[PotentialIndex::conformal_factor],
+        correction_input, f);
     for (size_t a = 0; a < number_of_velocities; ++a) {
       w_rate->get(a)[s] = dt_w_target.get(a)[s] + gsl::at(correction, a);
     }
@@ -103,17 +105,30 @@ void FinalizeTimeDerivative::apply(
     const gsl::not_null<Scalar<DataVector>*> dt_lapse,
     const gsl::not_null<tnsr::I<DataVector, 3>*> dt_shift,
     const gsl::not_null<tnsr::I<DataVector, 3>*> dt_b,
-    const Tags::ChartU::type& u, const Tags::ChartW::type& w,
-    const Tags::ChartQ::type& q, const Tags::ChartU::type& dt_u_target,
-    const Tags::ChartW::type& dt_w_target,
-    const Tags::ChartQ::type& dt_q_target, const Mesh<3>& mesh,
+    const tnsr::ii<DataVector, 3>& conformal_metric,
+    const Scalar<DataVector>& conformal_factor,
+    const tnsr::ii<DataVector, 3>& a_tilde,
+    const Scalar<DataVector>& trace_extrinsic_curvature,
+    const Scalar<DataVector>& theta, const tnsr::I<DataVector, 3>& gamma_hat,
+    const Scalar<DataVector>& lapse, const tnsr::I<DataVector, 3>& shift,
+    const tnsr::I<DataVector, 3>& b, const Tags::PotentialGradients::type& q,
+    const Tags::PotentialRateTarget::type& dt_u_target,
+    const Tags::VelocityTarget::type& dt_w_target,
+    const Tags::GradientTarget::type& dt_q_target, const Mesh<3>& mesh,
     const InverseJacobian<DataVector, 3, Frame::ElementLogical,
                           Frame::Inertial>& inverse_jacobian,
     const LocalOperators& local_operators, const Scalar<DataVector>& eta) {
   const size_t number_of_points = mesh.number_of_grid_points();
-  Tags::ChartU::type u_rate{number_of_points};
-  Tags::ChartW::type w_rate{number_of_points};
-  Tags::ChartQ::type fitted_gradient{number_of_points};
+  LocalChartFields local_chart{number_of_points};
+  local_chart_fields(make_not_null(&local_chart), conformal_metric,
+                     conformal_factor, a_tilde, lapse);
+  const PotentialFields u{get<Tags::LogConformalMetric>(local_chart),
+                          conformal_factor, lapse, shift};
+  const VelocityFields w{get<Tags::TransformedATilde>(local_chart),
+                         trace_extrinsic_curvature, theta, gamma_hat, b};
+  Tags::PotentialRateTarget::type u_rate{number_of_points};
+  Tags::VelocityTarget::type w_rate{number_of_points};
+  Tags::GradientTarget::type fitted_gradient{number_of_points};
   finalized_chart_rates(make_not_null(&u_rate), make_not_null(&w_rate),
                         make_not_null(&fitted_gradient), u, w, q, dt_u_target,
                         dt_w_target, dt_q_target, mesh, inverse_jacobian,
@@ -139,9 +154,7 @@ void FinalizeTimeDerivative::apply(
         dt_a_tilde->get(i, j)[s] = a_tilde_rate(i, j);
       }
     }
-    get(*dt_conformal_factor)[s] =
-        std::exp(u_s[PotentialIndex::log_conformal_factor]) *
-        r_s[PotentialIndex::log_conformal_factor];
+    get(*dt_conformal_factor)[s] = r_s[PotentialIndex::conformal_factor];
     get(*dt_lapse)[s] = r_s[PotentialIndex::lapse];
     get(*dt_trace_extrinsic_curvature)[s] =
         w_rate_s[VelocityIndex::trace_extrinsic_curvature];

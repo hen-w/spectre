@@ -35,7 +35,7 @@ namespace {
 using full_list = Ccz4::fd::System::variables_tag_list;
 using nine_list = Ccz4::filter_detail::ccz4_vars_list<Frame::Inertial>;
 using trailing_list =
-    tmpl::list_difference<full_list, nine_list>;  // aux + boundary tags
+    tmpl::list_difference<full_list, nine_list>;  // the stored gradients
 
 constexpr size_t ell_max = 4;
 constexpr size_t num_modes_to_kill = 2;
@@ -149,7 +149,7 @@ void test_filter(const size_t radial_extents,
       radial_extents);
 
   {
-    INFO("Trailing auxiliary and boundary variables are bitwise untouched");
+    INFO("The trailing stored gradients are bitwise untouched");
     tmpl::for_each<trailing_list>([&full_vars,
                                    &original_full_vars]<typename Tag>(
                                       const tmpl::type_<Tag> /*meta*/) {
@@ -212,11 +212,10 @@ void test_filter(const size_t radial_extents,
   }
 }
 
-// No filter may modify the trailing auxiliary and boundary second-order
-// variables: Filters::runtime::FilteredTags restricts the Hypercube
-// exponential filter to the 9 original variables (matching the tag list
-// of the legacy filter action in EvolveCcz4.hpp). Random data, so an
-// unrestricted filter fails the bitwise pass-through checks.
+// No filter may modify the trailing stored gradients:
+// Filters::runtime::FilteredTags restricts the Hypercube exponential filter
+// to the 9 physical variables. Random data, so an unrestricted filter fails
+// the bitwise pass-through checks.
 template <typename Generator>
 void test_hypercube_exp_passthrough(const gsl::not_null<Generator*> generator) {
   INFO("hypercube_exp_passthrough");

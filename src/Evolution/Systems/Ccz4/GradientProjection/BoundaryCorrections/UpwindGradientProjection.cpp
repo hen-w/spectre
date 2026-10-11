@@ -17,15 +17,12 @@
 #include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/NormalOperator.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/PointwiseFields.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/PrepareChartFields.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
 #include "Utilities/ErrorHandling/Error.hpp"
 #include "Utilities/Gsl.hpp"
 
 namespace Ccz4::GradientProjection::BoundaryCorrections {
-namespace {
-// The scalar jump penalty in the Euclidean-normal convention.
-constexpr double scalar_penalty = 1.0;
-}  // namespace
 
 UpwindGradientProjection::UpwindGradientProjection(
     const double external_dissipation_factor)
@@ -45,32 +42,45 @@ void UpwindGradientProjection::pup(PUP::er& p) {
 }
 
 double UpwindGradientProjection::dg_package_data(
-    const gsl::not_null<Tags::ChartW::type*> packaged_w,
-    const gsl::not_null<Tags::ChartQ::type*> packaged_q,
-    const gsl::not_null<Tags::ChartU::type*> packaged_u,
+    const gsl::not_null<Tags::PackagedVelocities::type*> packaged_w,
+    const gsl::not_null<Tags::PackagedGradients::type*> packaged_q,
+    const gsl::not_null<Tags::PackagedPotentials::type*> packaged_u,
     const gsl::not_null<tnsr::i<DataVector, 3>*> packaged_normal_covector,
-    const Tags::ChartW::type& w, const Tags::ChartQ::type& q,
-    const Tags::ChartU::type& u,
-    const tnsr::ii<DataVector, 3>& /*conformal_metric*/,
-    const Scalar<DataVector>& /*conformal_factor*/,
-    const tnsr::ii<DataVector, 3>& /*a_tilde*/,
-    const Scalar<DataVector>& /*trace_extrinsic_curvature*/,
-    const Scalar<DataVector>& /*theta*/,
-    const tnsr::I<DataVector, 3>& /*gamma_hat*/,
-    const Scalar<DataVector>& /*lapse*/,
-    const tnsr::I<DataVector, 3>& /*shift*/,
-    const tnsr::I<DataVector, 3>& /*b*/,
+    const tnsr::ii<DataVector, 3>& conformal_metric,
+    const Scalar<DataVector>& conformal_factor,
+    const tnsr::ii<DataVector, 3>& a_tilde,
+    const Scalar<DataVector>& trace_extrinsic_curvature,
+    const Scalar<DataVector>& theta, const tnsr::I<DataVector, 3>& gamma_hat,
+    const Scalar<DataVector>& lapse, const tnsr::I<DataVector, 3>& shift,
+    const tnsr::I<DataVector, 3>& b, const Tags::PotentialGradients::type& q,
     const tnsr::i<DataVector, 3>& normal_covector,
     const std::optional<tnsr::I<DataVector, 3>>& /*mesh_velocity*/,
     const std::optional<Scalar<DataVector>>& /*normal_dot_mesh_velocity*/,
     const Direction<3>& /*face_direction*/) const {
-  *packaged_w = w;
   *packaged_q = q;
-  *packaged_u = u;
   *packaged_normal_covector = normal_covector;
   double largest_speed = 0.0;
-  for (size_t s = 0; s < get<0>(u).size(); ++s) {
-    const PotentialVector u_s = potentials_at(u, s);
+  for (size_t s = 0; s < get(lapse).size(); ++s) {
+    PhysicalPointState state{};
+    for (size_t i = 0; i < 3; ++i) {
+      for (size_t j = 0; j < 3; ++j) {
+        state.conformal_metric(i, j) = conformal_metric.get(i, j)[s];
+        state.a_tilde(i, j) = a_tilde.get(i, j)[s];
+      }
+      gsl::at(state.gamma_hat, i) = gamma_hat.get(i)[s];
+      gsl::at(state.shift, i) = shift.get(i)[s];
+      gsl::at(state.b, i) = b.get(i)[s];
+    }
+    state.conformal_factor = get(conformal_factor)[s];
+    state.trace_extrinsic_curvature = get(trace_extrinsic_curvature)[s];
+    state.theta = get(theta)[s];
+    state.lapse = get(lapse)[s];
+    PotentialVector u_s{};
+    VelocityVector w_s{};
+    checked_chart_from_physical(make_not_null(&u_s), make_not_null(&w_s), state,
+                                "face");
+    set_potentials_at(packaged_u, s, u_s);
+    set_velocities_at(packaged_w, s, w_s);
     const LogMetricChart chart{stf_decode(&u_s[PotentialIndex::log_metric])};
     largest_speed =
         std::max(largest_speed,
@@ -85,24 +95,16 @@ double UpwindGradientProjection::dg_package_data(
 
 template <bool ForExternalBoundary>
 void UpwindGradientProjection::dg_boundary_terms(
-    const gsl::not_null<Tags::ChartW::type*> w_correction,
-    const gsl::not_null<Tags::ChartQ::type*> q_correction,
-    const gsl::not_null<Tags::ChartU::type*> u_correction,
-    const gsl::not_null<tnsr::ii<DataVector, 3>*> conformal_metric_correction,
-    const gsl::not_null<Scalar<DataVector>*> conformal_factor_correction,
-    const gsl::not_null<tnsr::ii<DataVector, 3>*> a_tilde_correction,
-    const gsl::not_null<Scalar<DataVector>*>
-        trace_extrinsic_curvature_correction,
-    const gsl::not_null<Scalar<DataVector>*> theta_correction,
-    const gsl::not_null<tnsr::I<DataVector, 3>*> gamma_hat_correction,
-    const gsl::not_null<Scalar<DataVector>*> lapse_correction,
-    const gsl::not_null<tnsr::I<DataVector, 3>*> shift_correction,
-    const gsl::not_null<tnsr::I<DataVector, 3>*> b_correction,
-    const Tags::ChartW::type& w_int, const Tags::ChartQ::type& q_int,
-    const Tags::ChartU::type& u_int,
+    const gsl::not_null<Tags::VelocityTarget::type*> w_correction,
+    const gsl::not_null<Tags::GradientTarget::type*> q_correction,
+    const gsl::not_null<Tags::PotentialRateTarget::type*> u_correction,
+    const Tags::PackagedVelocities::type& w_int,
+    const Tags::PackagedGradients::type& q_int,
+    const Tags::PackagedPotentials::type& u_int,
     const tnsr::i<DataVector, 3>& normal_covector_int,
-    const Tags::ChartW::type& w_ext, const Tags::ChartQ::type& q_ext,
-    const Tags::ChartU::type& u_ext,
+    const Tags::PackagedVelocities::type& w_ext,
+    const Tags::PackagedGradients::type& q_ext,
+    const Tags::PackagedPotentials::type& u_ext,
     const tnsr::i<DataVector, 3>& /*normal_covector_ext*/,
     const dg::Formulation dg_formulation) const {
   if (dg_formulation != dg::Formulation::StrongInertial) {
@@ -110,6 +112,9 @@ void UpwindGradientProjection::dg_boundary_terms(
   }
   const double dissipation_factor =
       ForExternalBoundary ? external_dissipation_factor_ : 1.0;
+  // An analytic exterior state need not match outgoing fields. Penalizing
+  // their jumps would impose extra boundary data beyond ordinary upwinding.
+  constexpr double scalar_penalty = ForExternalBoundary ? 0.0 : 1.0;
   const size_t number_of_points = get<0>(u_int).size();
   for (size_t s = 0; s < number_of_points; ++s) {
     const PotentialVector u_int_s = potentials_at(u_int, s);
@@ -176,47 +181,23 @@ void UpwindGradientProjection::dg_boundary_terms(
     set_gradients_at(q_correction, s, correction_q);
     set_potentials_at(u_correction, s, correction_u);
   }
-  // The physical fields receive no boundary correction.
-  for (auto& component : *conformal_metric_correction) {
-    component = 0.0;
-  }
-  get(*conformal_factor_correction) = 0.0;
-  for (auto& component : *a_tilde_correction) {
-    component = 0.0;
-  }
-  get(*trace_extrinsic_curvature_correction) = 0.0;
-  get(*theta_correction) = 0.0;
-  for (auto& component : *gamma_hat_correction) {
-    component = 0.0;
-  }
-  get(*lapse_correction) = 0.0;
-  for (auto& component : *shift_correction) {
-    component = 0.0;
-  }
-  for (auto& component : *b_correction) {
-    component = 0.0;
-  }
 }
 
 // NOLINTNEXTLINE
 PUP::able::PUP_ID UpwindGradientProjection::my_PUP_ID = 0;
 
-#define INSTANTIATE(EXTERNAL)                                                 \
-  template void UpwindGradientProjection::dg_boundary_terms<EXTERNAL>(        \
-      gsl::not_null<Tags::ChartW::type*>, gsl::not_null<Tags::ChartQ::type*>, \
-      gsl::not_null<Tags::ChartU::type*>,                                     \
-      gsl::not_null<tnsr::ii<DataVector, 3>*>,                                \
-      gsl::not_null<Scalar<DataVector>*>,                                     \
-      gsl::not_null<tnsr::ii<DataVector, 3>*>,                                \
-      gsl::not_null<Scalar<DataVector>*>, gsl::not_null<Scalar<DataVector>*>, \
-      gsl::not_null<tnsr::I<DataVector, 3>*>,                                 \
-      gsl::not_null<Scalar<DataVector>*>,                                     \
-      gsl::not_null<tnsr::I<DataVector, 3>*>,                                 \
-      gsl::not_null<tnsr::I<DataVector, 3>*>, const Tags::ChartW::type&,      \
-      const Tags::ChartQ::type&, const Tags::ChartU::type&,                   \
-      const tnsr::i<DataVector, 3>&, const Tags::ChartW::type&,               \
-      const Tags::ChartQ::type&, const Tags::ChartU::type&,                   \
-      const tnsr::i<DataVector, 3>&, dg::Formulation) const;
+#define INSTANTIATE(EXTERNAL)                                               \
+  template void UpwindGradientProjection::dg_boundary_terms<EXTERNAL>(      \
+      gsl::not_null<Tags::VelocityTarget::type*>,                           \
+      gsl::not_null<Tags::GradientTarget::type*>,                           \
+      gsl::not_null<Tags::PotentialRateTarget::type*>,                      \
+      const Tags::PackagedVelocities::type&,                                \
+      const Tags::PackagedGradients::type&,                                 \
+      const Tags::PackagedPotentials::type&, const tnsr::i<DataVector, 3>&, \
+      const Tags::PackagedVelocities::type&,                                \
+      const Tags::PackagedGradients::type&,                                 \
+      const Tags::PackagedPotentials::type&, const tnsr::i<DataVector, 3>&, \
+      dg::Formulation) const;
 INSTANTIATE(false)
 INSTANTIATE(true)
 #undef INSTANTIATE

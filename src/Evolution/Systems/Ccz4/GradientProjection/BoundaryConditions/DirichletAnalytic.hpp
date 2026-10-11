@@ -29,19 +29,19 @@ struct Time;
 /// Boundary conditions of the CCZ4 gradient-projection scheme.
 namespace Ccz4::GradientProjection::BoundaryConditions {
 /*!
- * \brief Exterior data from an analytic solution, converted to the chart.
+ * \brief Exterior data from an analytic solution.
  *
  * \details The analytic physical fields and their analytic first derivatives
  * (`FieldA`, `FieldB`, `FieldD`, `FieldP` of `Ccz4WrappedGr`) are evaluated at
- * the face. The exterior chart fields are \f$u^+=(H,\log\phi,\alpha,\beta)\f$,
- * \f$w^+=(2\mathcal T_H^{-1}\tilde A,K,\Theta,\hat\Gamma,b)\f$ and the exact
- * chain-rule gradients \f$q_{H,i}=\mathcal T_H^{-1}(\partial_i\tilde\gamma)
+ * the face. The exterior physical fields are the analytic fields, and the
+ * exterior gradients are the exact chain-rule gradients
+ * \f$q_{H,i}=\mathcal T_H^{-1}(\partial_i\tilde\gamma)
  * =\mathcal T_H^{-1}(2\,\mathrm{FieldD}_i)\f$,
- * \f$q_{\ell,i}=\mathrm{FieldP}_i\f$,
+ * \f$q_{\phi,i}=\phi\,\mathrm{FieldP}_i\f$,
  * \f$q_{\alpha,i}=\alpha\,\mathrm{FieldA}_i\f$, \f$q_{\beta,i}{}^j=
- * \mathrm{FieldB}_i{}^j\f$. The exterior physical fields are the analytic
- * fields. The boundary correction then applies the same upwind and scalar
- * penalty target correction as on internal faces.
+ * \mathrm{FieldB}_i{}^j\f$. The boundary correction packages the exterior
+ * chart fields from these and applies the same upwind and scalar penalty target
+ * correction as on internal faces.
  */
 class DirichletAnalytic final
     : public ::Ccz4::BoundaryConditions::BoundaryCondition {
@@ -53,7 +53,7 @@ class DirichletAnalytic final
   };
   using options = tmpl::list<AnalyticPrescription>;
   static constexpr Options::String help{
-      "Exterior chart fields of the CCZ4 gradient-projection scheme from an "
+      "Exterior fields of the CCZ4 gradient-projection scheme from an "
       "analytic solution."};
 
   DirichletAnalytic() = default;
@@ -87,9 +87,6 @@ class DirichletAnalytic final
   using dg_gridless_tags = tmpl::list<::Tags::Time>;
 
   std::optional<std::string> dg_ghost(
-      gsl::not_null<Tags::ChartW::type*> w,
-      gsl::not_null<Tags::ChartQ::type*> q,
-      gsl::not_null<Tags::ChartU::type*> u,
       gsl::not_null<tnsr::ii<DataVector, 3>*> conformal_metric,
       gsl::not_null<Scalar<DataVector>*> conformal_factor,
       gsl::not_null<tnsr::ii<DataVector, 3>*> a_tilde,
@@ -99,6 +96,7 @@ class DirichletAnalytic final
       gsl::not_null<Scalar<DataVector>*> lapse,
       gsl::not_null<tnsr::I<DataVector, 3>*> shift,
       gsl::not_null<tnsr::I<DataVector, 3>*> b,
+      gsl::not_null<Tags::PotentialGradients::type*> q,
       const std::optional<tnsr::I<DataVector, 3>>& face_mesh_velocity,
       const tnsr::i<DataVector, 3>& normal_covector,
       const tnsr::I<DataVector, 3>& coords, double time) const;
@@ -108,20 +106,15 @@ class DirichletAnalytic final
 };
 
 /*!
- * \brief Fill the chart fields \f$(u,w,q)\f$ at the given points from physical
- * fields and their analytic first derivatives, see `DirichletAnalytic`.
+ * \brief The gradients \f$q\f$ at the given points from the physical fields
+ * and their analytic first derivatives, see `DirichletAnalytic`.
  */
-void chart_fields_from_analytic(
-    gsl::not_null<Tags::ChartW::type*> w, gsl::not_null<Tags::ChartQ::type*> q,
-    gsl::not_null<Tags::ChartU::type*> u,
-    const tnsr::ii<DataVector, 3>& conformal_metric,
-    const Scalar<DataVector>& conformal_factor,
-    const tnsr::ii<DataVector, 3>& a_tilde,
-    const Scalar<DataVector>& trace_extrinsic_curvature,
-    const Scalar<DataVector>& theta, const tnsr::I<DataVector, 3>& gamma_hat,
-    const Scalar<DataVector>& lapse, const tnsr::I<DataVector, 3>& shift,
-    const tnsr::I<DataVector, 3>& b, const tnsr::i<DataVector, 3>& field_a,
-    const tnsr::iJ<DataVector, 3>& field_b,
-    const tnsr::ijj<DataVector, 3>& field_d,
-    const tnsr::i<DataVector, 3>& field_p);
+void gradients_from_analytic(gsl::not_null<Tags::PotentialGradients::type*> q,
+                             const tnsr::ii<DataVector, 3>& conformal_metric,
+                             const Scalar<DataVector>& conformal_factor,
+                             const Scalar<DataVector>& lapse,
+                             const tnsr::i<DataVector, 3>& field_a,
+                             const tnsr::iJ<DataVector, 3>& field_b,
+                             const tnsr::ijj<DataVector, 3>& field_d,
+                             const tnsr::i<DataVector, 3>& field_p);
 }  // namespace Ccz4::GradientProjection::BoundaryConditions

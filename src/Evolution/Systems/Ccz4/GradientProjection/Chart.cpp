@@ -281,7 +281,7 @@ std::array<double, 2> chart_from_physical(
     gsl::at(*u, PotentialIndex::log_metric + c) = gsl::at(encoded_h, c);
     gsl::at(*w, VelocityIndex::a + c) = gsl::at(encoded_a, c);
   }
-  (*u)[PotentialIndex::log_conformal_factor] = std::log(state.conformal_factor);
+  (*u)[PotentialIndex::conformal_factor] = state.conformal_factor;
   (*u)[PotentialIndex::lapse] = state.lapse;
   (*w)[VelocityIndex::trace_extrinsic_curvature] =
       state.trace_extrinsic_curvature;
@@ -321,13 +321,14 @@ PotentialVector potential_rhs(const LogMetricChart& chart,
   for (size_t i = 0; i < 3; ++i) {
     conformal_factor_advection +=
         gsl::at(u, PotentialIndex::shift + i) *
-        gsl::at(gsl::at(q, i), PotentialIndex::log_conformal_factor);
+        gsl::at(gsl::at(q, i), PotentialIndex::conformal_factor);
     lapse_advection += gsl::at(u, PotentialIndex::shift + i) *
                        gsl::at(gsl::at(q, i), PotentialIndex::lapse);
   }
   const double trace_k = w[VelocityIndex::trace_extrinsic_curvature];
-  result[PotentialIndex::log_conformal_factor] =
-      conformal_factor_advection + (lapse * trace_k - divergence) / 3.0;
+  result[PotentialIndex::conformal_factor] =
+      conformal_factor_advection + u[PotentialIndex::conformal_factor] *
+                                       (lapse * trace_k - divergence) / 3.0;
   result[PotentialIndex::lapse] =
       lapse_advection - 2.0 * lapse * (trace_k - 2.0 * w[VelocityIndex::theta]);
   for (size_t i = 0; i < 3; ++i) {
@@ -338,7 +339,7 @@ PotentialVector potential_rhs(const LogMetricChart& chart,
 }
 
 PotentialVector potential_rhs_potential_derivative(
-    const LogMetricChart& chart, const PotentialVector& /*u*/,
+    const LogMetricChart& chart, const PotentialVector& u,
     const VelocityVector& w, const GradientVector& q,
     const PotentialVector& delta_u) {
   const Matrix3 metric = chart.metric();
@@ -368,13 +369,19 @@ PotentialVector potential_rhs_potential_derivative(
   for (size_t i = 0; i < 3; ++i) {
     conformal_factor_advection +=
         gsl::at(delta_u, PotentialIndex::shift + i) *
-        gsl::at(gsl::at(q, i), PotentialIndex::log_conformal_factor);
+        gsl::at(gsl::at(q, i), PotentialIndex::conformal_factor);
     lapse_advection += gsl::at(delta_u, PotentialIndex::shift + i) *
                        gsl::at(gsl::at(q, i), PotentialIndex::lapse);
   }
   const double trace_k = w[VelocityIndex::trace_extrinsic_curvature];
-  result[PotentialIndex::log_conformal_factor] =
-      conformal_factor_advection + delta_lapse * trace_k / 3.0;
+  const double divergence = q[0][PotentialIndex::shift] +
+                            q[1][PotentialIndex::shift + 1] +
+                            q[2][PotentialIndex::shift + 2];
+  result[PotentialIndex::conformal_factor] =
+      conformal_factor_advection +
+      delta_u[PotentialIndex::conformal_factor] *
+          (u[PotentialIndex::lapse] * trace_k - divergence) / 3.0 +
+      u[PotentialIndex::conformal_factor] * trace_k * delta_lapse / 3.0;
   result[PotentialIndex::lapse] =
       lapse_advection -
       2.0 * delta_lapse * (trace_k - 2.0 * w[VelocityIndex::theta]);
@@ -383,6 +390,7 @@ PotentialVector potential_rhs_potential_derivative(
 }
 
 VelocityVector apply_rhs_inverse(const double lapse,
+                                 const double conformal_factor,
                                  const PotentialVector& delta_rhs,
                                  const double f) {
   VelocityVector result{};
@@ -390,8 +398,8 @@ VelocityVector apply_rhs_inverse(const double lapse,
     gsl::at(result, VelocityIndex::a + a) =
         -gsl::at(delta_rhs, PotentialIndex::log_metric + a) / lapse;
   }
-  const double delta_k =
-      3.0 * delta_rhs[PotentialIndex::log_conformal_factor] / lapse;
+  const double delta_k = 3.0 * delta_rhs[PotentialIndex::conformal_factor] /
+                         (lapse * conformal_factor);
   result[VelocityIndex::trace_extrinsic_curvature] = delta_k;
   result[VelocityIndex::theta] =
       delta_rhs[PotentialIndex::lapse] / (4.0 * lapse) + 0.5 * delta_k;

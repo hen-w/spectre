@@ -1,35 +1,157 @@
 // Distributed under the MIT License.
 // See LICENSE.txt for details.
 
+#include <algorithm>
 #include <cstddef>
+#include <iterator>
+#include <random>
 #include <utility>
+#include <vector>
 
 #include "DataStructures/DataBox/PrefixHelpers.hpp"
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
 #include "Domain/Structure/Direction.hpp"
+#include "Domain/Structure/DirectionMap.hpp"
+#include "Domain/Structure/DirectionalId.hpp"
 #include "Domain/Structure/DirectionalIdMap.hpp"
 #include "Domain/Structure/Element.hpp"
 #include "Domain/Structure/ElementId.hpp"
 #include "Evolution/DgSubcell/GhostData.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Derivatives.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/System.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Framework/TestCreation.hpp"
 #include "Framework/TestHelpers.hpp"
 #include "Framework/TestingFramework.hpp"
+#include "Helpers/DataStructures/MakeWithRandomValues.hpp"
 #include "Helpers/Evolution/Systems/Ccz4/PrimReconstructor.hpp"
+#include "NumericalAlgorithms/FiniteDifference/PartialDerivatives.hpp"
+#include "NumericalAlgorithms/FiniteDifference/SecondPartialDerivatives.hpp"
 #include "NumericalAlgorithms/LinearOperators/PartialDerivatives.hpp"
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
 #include "PointwiseFunctions/GeneralRelativity/Tags.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/TMPL.hpp"
 
+namespace {
+// The CCZ4 derivative wrappers differentiate the physical prefix of the
+// evolved variables (and of the neighbor ghost data, which carry the same
+// 55 components). Compare them bitwise against the generic finite-difference
+// derivatives of standalone copies of the 25 physical components, and check
+// that the stored gradients (in the volume and the ghost data) do not affect
+// the result.
+void test_physical_prefix_regression() {
+  MAKE_GENERATOR(gen);
+  std::uniform_real_distribution<> dist(-1.0, 1.0);
+  using System = Ccz4::fd::System;
+  using AllVariables = Variables<System::variables_tag_list>;
+  using PhysicalVariables = Variables<System::original_evolved_variables_tags>;
+  constexpr size_t number_of_physical_components =
+      PhysicalVariables::number_of_independent_components;
+  constexpr size_t number_of_components =
+      AllVariables::number_of_independent_components;
+  const size_t ghost_zone_size = 3;
+  const size_t fd_order = 4;
+  const Mesh<3> mesh{5, Spectral::Basis::FiniteDifference,
+                     Spectral::Quadrature::CellCentered};
+  const size_t number_of_points = mesh.number_of_grid_points();
+  const size_t number_of_ghost_points = ghost_zone_size * 25;
+
+  const auto inverse_jacobian = make_with_random_values<
+      InverseJacobian<DataVector, 3, Frame::ElementLogical, Frame::Inertial>>(
+      make_not_null(&gen), dist, number_of_points);
+  const auto inverse_hessian = make_with_random_values<
+      InverseHessian<DataVector, 3, Frame::ElementLogical, Frame::Inertial>>(
+      make_not_null(&gen), dist, number_of_points);
+  auto volume_vars = make_with_random_values<AllVariables>(
+      make_not_null(&gen), dist, number_of_points);
+  DirectionalIdMap<3, evolution::dg::subcell::GhostData> ghost_data{};
+  for (const auto& direction : Direction<3>::all_directions()) {
+    const DirectionalId<3> id{direction, ElementId<3>{1}};
+    ghost_data[id] = evolution::dg::subcell::GhostData{1};
+    ghost_data[id].neighbor_ghost_data_for_reconstruction() =
+        make_with_random_values<DataVector>(
+            make_not_null(&gen), dist,
+            DataVector(number_of_components * number_of_ghost_points));
+  }
+
+  // Standalone copies of the physical components.
+  DataVector physical_volume_copy(number_of_physical_components *
+                                  number_of_points);
+  std::copy(volume_vars.data(),
+            std::next(volume_vars.data(),
+                      static_cast<std::ptrdiff_t>(physical_volume_copy.size())),
+            physical_volume_copy.begin());
+  std::vector<DataVector> physical_ghost_copies{};
+  DirectionMap<3, gsl::span<const double>> physical_ghost_spans{};
+  physical_ghost_copies.reserve(6);
+  for (const auto& [id, data] : ghost_data) {
+    const DataVector& all = data.neighbor_ghost_data_for_reconstruction();
+    physical_ghost_copies.emplace_back(number_of_physical_components *
+                                       number_of_ghost_points);
+    std::copy(all.begin(),
+              std::next(all.begin(), static_cast<std::ptrdiff_t>(
+                                         physical_ghost_copies.back().size())),
+              physical_ghost_copies.back().begin());
+    physical_ghost_spans.insert(std::pair{
+        id.direction(), gsl::make_span(physical_ghost_copies.back().data(),
+                                       physical_ghost_copies.back().size())});
+  }
+
+  using deriv_tags = db::wrap_tags_in<Tags::deriv, System::gradients_tags,
+                                      tmpl::size_t<3>, Frame::Inertial>;
+  using second_deriv_tags =
+      db::wrap_tags_in<Tags::second_deriv, System::gradients_tags,
+                       tmpl::size_t<3>, Frame::Inertial>;
+  Variables<deriv_tags> expected_derivs{number_of_points};
+  ::fd::partial_derivatives<System::gradients_tags>(
+      make_not_null(&expected_derivs),
+      gsl::make_span(physical_volume_copy.data(), physical_volume_copy.size()),
+      physical_ghost_spans, mesh, number_of_physical_components, fd_order,
+      inverse_jacobian);
+  Variables<second_deriv_tags> expected_second_derivs{number_of_points};
+  ::fd::second_partial_derivatives<System::gradients_tags>(
+      make_not_null(&expected_second_derivs),
+      gsl::make_span(physical_volume_copy.data(), physical_volume_copy.size()),
+      physical_ghost_spans, mesh, number_of_physical_components, fd_order,
+      inverse_jacobian, inverse_hessian);
+
+  for (const double gradient_poison : {0.0, 3.0e3}) {
+    CAPTURE(gradient_poison);
+    for (auto& component :
+         get<Ccz4::fd::Tags::PotentialGradients>(volume_vars)) {
+      component = gradient_poison;
+    }
+    for (auto& [id, data] : ghost_data) {
+      DataVector& all = data.neighbor_ghost_data_for_reconstruction();
+      for (size_t i = number_of_physical_components * number_of_ghost_points;
+           i < all.size(); ++i) {
+        all[i] = -gradient_poison;
+      }
+    }
+    Variables<deriv_tags> derivs{number_of_points};
+    Ccz4::fd::spacetime_derivatives(make_not_null(&derivs), volume_vars,
+                                    ghost_data, fd_order, mesh,
+                                    inverse_jacobian);
+    CHECK(derivs == expected_derivs);
+    Variables<second_deriv_tags> second_derivs{number_of_points};
+    Ccz4::fd::second_spacetime_derivatives(
+        make_not_null(&second_derivs), volume_vars, ghost_data, fd_order, mesh,
+        inverse_jacobian, inverse_hessian);
+    CHECK(second_derivs == expected_second_derivs);
+  }
+}
+}  // namespace
+
 // [[TimeOut, 10]]
 SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.FiniteDifference.Derivatives",
                   "[Unit][Evolution]") {
+  test_physical_prefix_regression();
+
   const size_t points_per_dimension = 5;
   const size_t ghost_zone_size = 3;
   const size_t fd_deriv_order = 4;

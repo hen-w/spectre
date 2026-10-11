@@ -8,6 +8,7 @@ set(LIBRARY "Test_EvolutionDg")
 
 set(LIBRARY_SOURCES
   Actions/Test_ApplyBoundaryCorrections.cpp
+  Actions/Test_AuxiliaryGhostData.cpp
   Actions/Test_BoundaryConditions.cpp
   Actions/Test_ComputeTimeDerivative.cpp
   Actions/Test_NormalCovectorAndMagnitude.cpp
@@ -42,6 +43,7 @@ target_link_libraries(
   CoordinateMaps
   DataStructures
   DataStructuresHelpers
+  DgSubcell
   DiscontinuousGalerkin
   Domain
   DomainCreators

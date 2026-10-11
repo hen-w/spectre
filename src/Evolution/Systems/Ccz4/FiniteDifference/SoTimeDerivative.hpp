@@ -7,6 +7,7 @@
 
 #include "DataStructures/DataBox/AsAccess.hpp"
 #include "DataStructures/DataBox/DataBox.hpp"
+#include "DataStructures/DataBox/MetavariablesTag.hpp"
 #include "DataStructures/DataBox/PrefixHelpers.hpp"
 #include "DataStructures/DataBox/Prefixes.hpp"
 #include "DataStructures/DataVector.hpp"
@@ -15,19 +16,19 @@
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
 #include "DataStructures/VectorImpl.hpp"
+#include "Domain/FunctionsOfTime/Tags.hpp"
+#include "Domain/Tags.hpp"
 #include "Evolution/DgSubcell/Tags/Coordinates.hpp"
 #include "Evolution/DgSubcell/Tags/GhostDataForReconstruction.hpp"
 #include "Evolution/DgSubcell/Tags/Jacobians.hpp"
 #include "Evolution/DgSubcell/Tags/Mesh.hpp"
-#include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
-#include "Evolution/Systems/Ccz4/BoundaryConditions/Sommerfeld.hpp"
 #include "Evolution/Systems/Ccz4/Christoffel.hpp"
 #include "Evolution/Systems/Ccz4/DerivChristoffel.hpp"
 #include "Evolution/Systems/Ccz4/DerivLapse.hpp"
 #include "Evolution/Systems/Ccz4/DerivZ4Constraint.hpp"
-#include "Evolution/Systems/Ccz4/FiniteDifference/BoundaryConditionGhostData.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Characteristics.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Derivatives.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Ricci.hpp"
 #include "Evolution/Systems/Ccz4/RicciScalarPlusDivergenceZ4Constraint.hpp"
@@ -36,6 +37,7 @@
 #include "Evolution/Systems/Ccz4/TempTags.hpp"
 #include "Evolution/Systems/Ccz4/TimeDerivative.hpp"
 #include "Evolution/Systems/Ccz4/Z4Constraint.hpp"
+#include "Time/Tags/Time.hpp"
 #include "Utilities/CallWithDynamicType.hpp"
 #include "Utilities/ConstantExpressions.hpp"
 #include "Utilities/ContainerHelpers.hpp"
@@ -51,9 +53,6 @@
  */
 namespace Ccz4::fd {
 namespace detail {
-// Update the time derivative at outermost interior points in a sphere domain
-// according to Sommerfeld boundary conditions.
-
 // Calculate the time derivative of the evolved variables for the second-order
 // Ccz4 system. There is quite some overlap between this apply() funcion
 // and the apply() function in the first-order Ccz4 system. However,
@@ -532,9 +531,7 @@ static void apply(
 
 /*!
  * \brief Compute the RHS of the second-order CCZ4 formulation of Einstein's
- * equations \cite Dumbser2017okk with finite differencing. Also
- * update the time derivative at outermost interior points in a sphere domain
- * if Sommerfeld boundary conditions are applied.
+ * equations \cite Dumbser2017okk with finite differencing.
  *
  * \details The evolution equations are equations 4(a) - 4(i) of
  * \cite Dumbser2017okk Equations 13 - 27 define identities
@@ -543,7 +540,10 @@ static void apply(
  * \note Different from the first-order system, the lapse
  * and the conformal factor are evolved instead of their natural logs.
  * The four auxiliary varialbels \f$A_i\f$, \f$B_k{}^{i}\f$,
- * \f$D_{kij}\f$, and \f$P_i\f$ are NOT evolved.
+ * \f$D_{kij}\f$, and \f$P_i\f$ are NOT evolved. The stored gradients
+ * `Tags::PotentialGradients` are neither used nor evolved: their time
+ * derivative is zero. Finite-difference elements at external boundaries are
+ * not supported.
  */
 struct SoTimeDerivative {
   template <typename DbTagsList>
@@ -570,22 +570,11 @@ struct SoTimeDerivative {
         evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertial<Dim>>(
         *box);
 
-    constexpr bool subcell_enabled_at_external_boundary =
-        std::decay_t<decltype(db::get<Parallel::Tags::Metavariables>(
-            *box))>::SubcellOptions::subcell_enabled_at_external_boundary;
-
-    const Element<3>& element = db::get<domain::Tags::Element<3>>(*box);
-
-    const Ccz4::fd::Reconstructor& recons =
-        db::get<Ccz4::fd::Tags::Reconstructor>(*box);
-
-    // If the element has external boundaries and subcell is enabled for
-    // boundary elements, compute FD ghost data with a given boundary condition.
-    if constexpr (subcell_enabled_at_external_boundary) {
-      if (not element.external_boundaries().empty()) {
-        fd::BoundaryConditionGhostData::apply(box, element, recons);
-      }
-    }
+    static_assert(
+        not std::decay_t<decltype(db::get<Parallel::Tags::Metavariables>(
+            *box))>::SubcellOptions::subcell_enabled_at_external_boundary,
+        "Finite-difference elements at external boundaries are not "
+        "supported.");
 
     const bool evolve_lapse_and_shift =
         get<::Ccz4::fd::Tags::EvolveLapseAndShift>(*box);
@@ -643,8 +632,6 @@ struct SoTimeDerivative {
 
     // calculate the four auxiliary fields in eq. 6
     // auxiliary variables NOT evolved in SO-CCZ4
-    // These are stored into the evolved variables so that observation compute
-    // tags (e.g. ConstraintEnergyCompute) see consistent values.
     const auto& lapse = get<gr::Tags::Lapse<DataVector>>(evolved_vars);
     auto field_a = ::tenex::evaluate<ti::i>(d_lapse(ti::i) / lapse());
 
@@ -924,148 +911,13 @@ struct SoTimeDerivative {
                   cell_centered_Ccz4_derivs),
               shifting_shift, evolve_lapse_and_shift);
 
-          // Zero dt for fields not evolved in the FD path
-          tmpl::for_each<tmpl::append<System::auxiliary_variables_tags,
-                                      System::boundary_second_order_tags>>(
-              [&dt_vars_ptr](auto tag_v) {
-                using Tag = tmpl::type_from<decltype(tag_v)>;
-                for (size_t i = 0; i < ::Tags::dt<Tag>::type::size(); ++i) {
-                  get<::Tags::dt<Tag>>(*dt_vars_ptr)[i] = 0.0;
-                }
-              });
-
+          // The stored gradients are not evolved.
+          for (auto& component :
+               get<::Tags::dt<Tags::PotentialGradients>>(*dt_vars_ptr)) {
+            component = 0.0;
+          }
         },
         box);
-
-    // Store auxiliary fields into evolved variables so that observation
-    // compute tags (e.g. ConstraintEnergyCompute) see consistent values
-    // on the subcell grid.
-    db::mutate<evolved_vars_tag>(
-        [&](const auto evolved_vars_ptr) {
-          get<::Ccz4::Tags::FieldA<DataVector, Dim>>(*evolved_vars_ptr) =
-              std::move(field_a);
-          get<::Ccz4::Tags::FieldB<DataVector, Dim>>(*evolved_vars_ptr) =
-              field_b;
-          get<::Ccz4::Tags::FieldD<DataVector, Dim>>(*evolved_vars_ptr) =
-              std::move(field_d);
-          get<::Ccz4::Tags::FieldP<DataVector, Dim>>(*evolved_vars_ptr) =
-              std::move(field_p);
-        },
-        box);
-
-    // handling Sommerfeld BCs
-    // WARNING: We assume a complete sphere domain (all wedges)
-    if constexpr (not subcell_enabled_at_external_boundary) {
-      return;
-    }
-    if (element.external_boundaries().empty()) {
-      return;
-    }
-
-    const auto& external_bcs =
-        db::get<domain::Tags::ExternalBoundaryConditions<Dim>>(*box).at(
-            element.id().block_id());
-
-    for (const auto& direction : element.external_boundaries()) {
-      if (dynamic_cast<const Ccz4::BoundaryConditions::Sommerfeld*>(
-              external_bcs.at(direction).get()) == nullptr) {
-        return;  // no need to check more, as we do not allow mixed BCs
-      }
-      if (direction != Direction<Dim>::upper_zeta()) {
-        ERROR(
-            "Sommerfeld BCs are only implemented assuming"
-            " the outer boundary is in the upper zeta direction, but the "
-            "current "
-            "external boundary is in direction "
-            << direction);
-      }
-    }
-
-    const size_t num_face_pts =
-        subcell_mesh.extents(0) * subcell_mesh.extents(1);
-
-    // Handling Sommerfeld BCs
-    if (dynamic_cast<const Ccz4::BoundaryConditions::Sommerfeld*>(
-            external_bcs.at(Direction<Dim>::upper_zeta()).get()) != nullptr) {
-      db::mutate<dt_variables_tag>(
-          [&](const auto dt_vars_ptr, const auto& inertial_coords,
-              const auto& evolved_vars) {
-            ASSERT(inertial_coords.get(0).size() ==
-                           subcell_mesh.number_of_grid_points() and
-                       inertial_coords.get(1).size() ==
-                           subcell_mesh.number_of_grid_points() and
-                       inertial_coords.get(2).size() ==
-                           subcell_mesh.number_of_grid_points(),
-                   "Inertial coords size ["
-                       << inertial_coords.get(0).size() << ", "
-                       << inertial_coords.get(1).size() << ", "
-                       << inertial_coords.get(2).size()
-                       << "] does not match number of subcell points "
-                       << subcell_mesh.number_of_grid_points());
-
-            std::array<DataVector, Dim> outermost_inertial_coords{};
-            for (size_t i = 0; i < Dim; ++i) {
-              make_const_view<DataVector>(
-                  make_not_null(&outermost_inertial_coords.at(i)),
-                  inertial_coords.get(i),
-                  (subcell_mesh.extents(2) - 1) * num_face_pts, num_face_pts);
-            }
-            const DataVector outermost_radial_coords =
-                sqrt(square(outermost_inertial_coords[0]) +
-                     square(outermost_inertial_coords[1]) +
-                     square(outermost_inertial_coords[2]));
-
-            // modify the time derivatives at the outermost interior points
-            // per Sommerfeld BCs
-            // Alternative: maybe modify the time derivatives at the outermost
-            // n pts where n is the ghost zone size?
-            tmpl::for_each<Ccz4::fd::System::gradients_tags>(
-                [&]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
-                  const auto& var = get<Tag>(evolved_vars);
-                  const auto& d_var = get<
-                      ::Tags::deriv<Tag, tmpl::size_t<Dim>, Frame::Inertial>>(
-                      cell_centered_Ccz4_derivs);
-                  auto& dt_var = get<::Tags::dt<Tag>>(*dt_vars_ptr);
-
-                  for (size_t tensor_index = 0;
-                       tensor_index < Tag::type::size(); ++tensor_index) {
-                    DataVector outermost_var{};
-                    make_const_view<DataVector>(
-                        make_not_null(&outermost_var), var[tensor_index],
-                        (subcell_mesh.extents(2) - 1) * num_face_pts,
-                        num_face_pts);
-
-                    std::array<DataVector, Dim> outermost_d_var{};
-                    for (size_t i = 0; i < Dim; ++i) {
-                      make_const_view<DataVector>(
-                          make_not_null(&outermost_d_var.at(i)),
-                          d_var[Dim * tensor_index + i],
-                          (subcell_mesh.extents(2) - 1) * num_face_pts,
-                          num_face_pts);
-                    }
-
-                    const DataVector outermost_dr_var =
-                        (outermost_inertial_coords[0] * outermost_d_var[0] +
-                         outermost_inertial_coords[1] * outermost_d_var[1] +
-                         outermost_inertial_coords[2] * outermost_d_var[2]) /
-                        outermost_radial_coords;
-                    DataVector outermost_dt_var{};
-                    outermost_dt_var.set_data_ref(
-                        dt_var[tensor_index].data() +
-                            (subcell_mesh.extents(2) - 1) * num_face_pts,
-                        num_face_pts);
-                    outermost_dt_var =
-                        outermost_var * (-1.0 / outermost_radial_coords) -
-                        outermost_dr_var;
-                  }
-                });
-          },
-          box,
-          db::get<
-              evolution::dg::subcell::Tags::Coordinates<Dim, Frame::Inertial>>(
-              *box),
-          db::get<evolved_vars_tag>(*box));
-    }
   }
 };
 }  // namespace Ccz4::fd

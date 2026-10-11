@@ -32,12 +32,9 @@ class not_null;
 
 namespace Ccz4::fd {
 
-/// Tags reconstructed to faces: 9 original evolved + 4 auxiliary.
-/// Boundary second-order tags are not reconstructed (always zero at internal
-/// interfaces).
-using tags_list_for_reconstruct =
-    tmpl::append<System::original_evolved_variables_tags,
-                 System::auxiliary_variables_tags>;
+/// Tags reconstructed to faces: the physical fields and the gradients
+/// (all evolved variables).
+using tags_list_for_reconstruct = System::variables_tag_list;
 
 template <typename TagsList, typename Reconstructor>
 void reconstruct_work(

@@ -8,6 +8,7 @@
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/ResizeTimeDerivatives.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "PointwiseFunctions/GeneralRelativity/Tags.hpp"
 #include "Utilities/Gsl.hpp"
@@ -61,16 +62,11 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Fd.ResizeTimeDerivatives",
   CHECK(get<::Tags::dt<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>>(
             dt_vars) == tnsr::I<DataVector, 3>{DataVector{num_pts, 0.0}});
 
-  // Verify auxiliary and boundary dt fields are also zero
-  const DataVector zero_dv(num_pts, 0.0);
-  tmpl::for_each<tmpl::append<System::auxiliary_variables_tags,
-                              System::boundary_second_order_tags>>(
-      [&dt_vars, &zero_dv](auto tag_v) {
-        using tag = tmpl::type_from<decltype(tag_v)>;
-        for (const auto& component : get<::Tags::dt<tag>>(dt_vars)) {
-          CHECK_ITERABLE_APPROX(component, zero_dv);
-        }
-      });
+  // The stored gradients' time derivative is also zero.
+  for (const auto& component :
+       get<::Tags::dt<Tags::PotentialGradients>>(dt_vars)) {
+    CHECK(component == DataVector(num_pts, 0.0));
+  }
 }
 
 }  // namespace

@@ -17,10 +17,15 @@
 #include "DataStructures/DataBox/TagName.hpp"
 #include "DataStructures/DataBox/ValidateSelection.hpp"
 #include "DataStructures/DataVector.hpp"
+#include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
 #include "DataStructures/VariablesTag.hpp"
 #include "Domain/Structure/ElementId.hpp"
 #include "Domain/Tags.hpp"
+#include "Evolution/DgSubcell/ActiveGrid.hpp"
+#include "Evolution/DgSubcell/Tags/ActiveGrid.hpp"
+#include "Evolution/DgSubcell/Tags/Coordinates.hpp"
+#include "Evolution/DiscontinuousGalerkin/UsingSubcell.hpp"
 #include "Options/Auto.hpp"
 #include "Options/Context.hpp"
 #include "Options/String.hpp"
@@ -165,7 +170,16 @@ struct LocalizedPerturbation {
                          << " components but the domain is " << Dim
                          << "-dimensional.");
     const auto& coords =
-        db::get<domain::Tags::Coordinates<Dim, Frame::Inertial>>(box);
+        [&box]() -> const tnsr::I<DataVector, Dim, Frame::Inertial>& {
+      if constexpr (evolution::dg::using_subcell_v<Metavariables>) {
+        if (db::get<evolution::dg::subcell::Tags::ActiveGrid>(box) ==
+            evolution::dg::subcell::ActiveGrid::Subcell) {
+          return db::get<evolution::dg::subcell::Tags::Coordinates<
+              Dim, Frame::Inertial>>(box);
+        }
+      }
+      return db::get<domain::Tags::Coordinates<Dim, Frame::Inertial>>(box);
+    }();
     // Compute r_squared = |x - center|^2
     DataVector r_squared(get<0>(coords).size(), 0.0);
     for (size_t d = 0; d < Dim; ++d) {

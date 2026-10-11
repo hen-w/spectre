@@ -12,6 +12,8 @@
 #include "DataStructures/Tensor/EagerMath/DeterminantAndInverse.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/PointwiseFields.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/Tags.hpp"
 #include "NumericalAlgorithms/Spectral/Basis.hpp"
 #include "NumericalAlgorithms/Spectral/LogicalCoordinates.hpp"
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
@@ -126,8 +128,8 @@ inline gp::Matrix3 log_metric_with_spectrum(
 
 /*!
  * \brief An admissible chart state: anisotropic log-metric with entries of
- * size `h_scale`, lapse and conformal factor in the given ranges, shift of size
- * `shift_scale`, velocities and gradients of size `field_scale`.
+ * size `h_scale`, lapse and (physical) conformal factor in the given ranges,
+ * shift of size `shift_scale`, velocities and gradients of size `field_scale`.
  */
 struct RandomState {
   gp::PotentialVector u{};
@@ -147,7 +149,7 @@ inline RandomState random_state(
   for (size_t a = 0; a < 5; ++a) {
     gsl::at(result.u, a) = h_scale * normal(*gen);
   }
-  result.u[gp::PotentialIndex::log_conformal_factor] = std::log(phi(*gen));
+  result.u[gp::PotentialIndex::conformal_factor] = phi(*gen);
   result.u[gp::PotentialIndex::lapse] = lapse(*gen);
   for (size_t i = 0; i < 3; ++i) {
     gsl::at(result.u, gp::PotentialIndex::shift + i) =
@@ -175,6 +177,77 @@ inline std::array<double, 3> random_unit_vector(
   }
   return result;
 }
+/*!
+ * \brief Owning chart data at a set of points: the local \f$H\f$, \f$a\f$, the
+ * other potentials and velocities as physical fields, and the physical
+ * conformal metric \f$e^{2H}\f$ and \f$\tilde A=\frac12\mathcal T_Ha\f$
+ * consistent with them; `potentials()` and `velocities()` are the views used
+ * by the production code.
+ */
+struct ChartData {
+  explicit ChartData(const size_t number_of_points)
+      : log_conformal_metric(number_of_points),
+        conformal_factor(number_of_points),
+        lapse(number_of_points),
+        shift(number_of_points),
+        a(number_of_points),
+        trace_extrinsic_curvature(number_of_points),
+        theta(number_of_points),
+        gamma_hat(number_of_points),
+        b(number_of_points),
+        conformal_metric(number_of_points),
+        a_tilde(number_of_points) {}
+
+  gp::Tags::LogConformalMetric::type log_conformal_metric;
+  Scalar<DataVector> conformal_factor;
+  Scalar<DataVector> lapse;
+  tnsr::I<DataVector, 3> shift;
+  gp::Tags::TransformedATilde::type a;
+  Scalar<DataVector> trace_extrinsic_curvature;
+  Scalar<DataVector> theta;
+  tnsr::I<DataVector, 3> gamma_hat;
+  tnsr::I<DataVector, 3> b;
+  tnsr::ii<DataVector, 3> conformal_metric;
+  tnsr::ii<DataVector, 3> a_tilde;
+
+  gp::PotentialFields potentials() const {
+    return {log_conformal_metric, conformal_factor, lapse, shift};
+  }
+  gp::VelocityFields velocities() const {
+    return {a, trace_extrinsic_curvature, theta, gamma_hat, b};
+  }
+
+  void set(const size_t point, const gp::PotentialVector& u,
+           const gp::VelocityVector& w) {
+    for (size_t c = 0; c < 5; ++c) {
+      log_conformal_metric.get(c)[point] =
+          gsl::at(u, gp::PotentialIndex::log_metric + c);
+      a.get(c)[point] = gsl::at(w, gp::VelocityIndex::a + c);
+    }
+    get(conformal_factor)[point] = u[gp::PotentialIndex::conformal_factor];
+    get(lapse)[point] = u[gp::PotentialIndex::lapse];
+    get(trace_extrinsic_curvature)[point] =
+        w[gp::VelocityIndex::trace_extrinsic_curvature];
+    get(theta)[point] = w[gp::VelocityIndex::theta];
+    for (size_t i = 0; i < 3; ++i) {
+      shift.get(i)[point] = gsl::at(u, gp::PotentialIndex::shift + i);
+      gamma_hat.get(i)[point] = gsl::at(w, gp::VelocityIndex::gamma_hat + i);
+      b.get(i)[point] = gsl::at(w, gp::VelocityIndex::b + i);
+    }
+    const gp::LogMetricChart chart{
+        gp::stf_decode(&u[gp::PotentialIndex::log_metric])};
+    const gp::Matrix3 g = chart.metric();
+    const gp::Matrix3 physical_a_tilde =
+        0.5 * chart.tangent(gp::stf_decode(&w[gp::VelocityIndex::a]));
+    for (size_t i = 0; i < 3; ++i) {
+      for (size_t j = i; j < 3; ++j) {
+        conformal_metric.get(i, j)[point] = g(i, j);
+        a_tilde.get(i, j)[point] = physical_a_tilde(i, j);
+      }
+    }
+  }
+};
+
 /// Geometry of an element: an affine map, or a curved polynomial map whose
 // mass matrix is not separable.
 struct Geometry {
@@ -215,6 +288,24 @@ inline Geometry make_geometry(const std::array<size_t, 3>& extents,
   result.inverse_jacobian = det_and_inverse.second;
   result.exact_volume = widths[0] * widths[1] * widths[2];
   return result;
+}
+
+/// Lagrange interpolation weights at `target` for five nodes (independent of
+/// the production finite-difference reconstruction stencils).
+inline std::array<double, 5> lagrange_weights(
+    const std::array<double, 5>& nodes, const double target) {
+  std::array<double, 5> weights{};
+  for (size_t m = 0; m < 5; ++m) {
+    double weight = 1.0;
+    for (size_t l = 0; l < 5; ++l) {
+      if (l != m) {
+        weight *= (target - gsl::at(nodes, l)) /
+                  (gsl::at(nodes, m) - gsl::at(nodes, l));
+      }
+    }
+    gsl::at(weights, m) = weight;
+  }
+  return weights;
 }
 
 }  // namespace TestHelpers::Ccz4GradientProjection

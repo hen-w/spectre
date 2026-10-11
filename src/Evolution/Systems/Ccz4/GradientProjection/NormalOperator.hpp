@@ -22,14 +22,16 @@ using NormalSubspaceVector = std::array<double, number_of_normal_components>;
  * \f$A_n=n_iA^i\f$ for a covector \f$n_i\f$ (any normalization; the map is
  * linear in \f$n\f$), let \f$v=\beta^in_i\f$, \f$\nu^i=g^{ij}n_j\f$,
  * \f$\mathrm{tf}_gX=X-g\,\mathrm{tr}(g^{-1}X)/3\f$,
- * \f$N_{ij}=n_{(i}g_{j)k}\hat\Gamma^k\f$, \f$C_{ij}=n_{(i}q_{\ell,j)}\f$,
+ * \f$N_{ij}=n_{(i}g_{j)k}\hat\Gamma^k\f$,
+ * \f$C_{ij}=n_{(i}q_{\phi,j)}/\phi\f$,
  * \f$L^\alpha_{ij}=n_{(i}q_{\alpha,j)}\f$ and
  * \f$U=\phi^2\mathrm{tf}_g[\alpha(N+C)-L^\alpha]\f$. Then
  * \f{align*}{
  * (A_nY)_a&=va-\alpha\phi^2\nu^iq_{H,i}+2\mathcal T_H^{-1}U,\\
- * (A_nY)_K&=vK+\alpha\phi^2(n_i\hat\Gamma^i+4\nu^iq_{\ell,i})
+ * (A_nY)_K&=vK+\alpha\phi^2(n_i\hat\Gamma^i+4\nu^iq_{\phi,i}/\phi)
  *   -\phi^2\nu^iq_{\alpha,i},\\
- * (A_nY)_\Theta&=v\Theta+\alpha\phi^2(n_i\hat\Gamma^i/2+2\nu^iq_{\ell,i}),\\
+ * (A_nY)_\Theta&=v\Theta+\alpha\phi^2(n_i\hat\Gamma^i/2
+ *   +2\nu^iq_{\phi,i}/\phi),\\
  * (A_nY)_{\hat\Gamma}^k&=(A_nY)_b^k=v\hat\Gamma^k
  *   +\alpha\nu^k(2\Theta-4K/3)+\nu^iB_i{}^k+\nu^kB_i{}^i/3,\\
  * (A_nY)_{q_i}&=n_iR(u,w,q),
@@ -38,7 +40,11 @@ using NormalSubspaceVector = std::array<double, number_of_normal_components>;
  * (\f$R_\beta=fb\f$). This function returns \f$FY=((A_nY)_w,R(u,w,q))\f$; the
  * full action is \f$A_nY=J(FY)\f$ with \f$J(w,r)=(w,n\otimes r)\f$. The
  * \f$\hat\Gamma\f$ and \f$b\f$ rows include the curl ordering of the volume
- * equations.
+ * equations. With \f$S\f$ multiplying the three gradients \f$q_{\phi,i}\f$ by
+ * \f$\phi\f$, \f$A_n=SA_n^{\log\phi}S^{-1}\f$ in terms of the operator
+ * \f$A_n^{\log\phi}\f$ of the potentials with \f$\log\phi\f$ in place of
+ * \f$\phi\f$ at the same state. It is an `ERROR` if \f$\phi\f$ is not
+ * positive.
  */
 NormalSubspaceVector normal_flux(const LogMetricChart& chart,
                                  const PotentialVector& u,
@@ -84,7 +90,10 @@ void apply_normal_matrix(gsl::not_null<VelocityVector*> result_w,
  *    Because \f$M\f$ is quadratic in the normal through
  *    \f$q=n\otimes r\f$, \f$M(n')=D(mM(\hat n))D^{-1}\f$ with
  *    \f$D=\mathrm{diag}(1_w,m^{-1}1_r)\f$ and \f$\hat n=n'/m\f$, and the
- *    advection speed becomes \f$\hat v=\beta^in_i/m\f$.
+ *    advection speed becomes \f$\hat v=\beta^in_i/m\f$. The scalar potential
+ *    rate is normalized to the rate \f$R_\phi/\phi\f$ of \f$\log\phi\f$
+ *    (denoted \f$\ell\f$ below), so that the characteristic algebra is that
+ *    of \f$A_n^{\log\phi}\f$ (see `normal_flux`).
  * 2. In this isotropic frame the symbol splits, relative to \f$\hat n\f$ and a
  *    fixed orthonormal tangent basis, into two transverse-traceless pairs,
  *    two five-component vector sectors and one nine-component scalar sector.
@@ -115,7 +124,8 @@ void apply_normal_matrix(gsl::not_null<VelocityVector*> result_w,
  * zeros. For a physical-unit normal \f$n/s\f$ with
  * \f$s=\phi m\f$ all speeds and the absolute matrix scale by \f$1/s\f$.
  *
- * It is an `ERROR` if \f$f\f$ is not positive, if a nonzero characteristic
+ * It is an `ERROR` if \f$f\f$, \f$\alpha\f$ or \f$\phi\f$ is not positive, if
+ * a nonzero characteristic
  * speed vanishes to within a relative tolerance (a sonic point, where
  * \f$A_n\f$ is not diagonalizable) or if the longitudinal shift speed collides
  * with a light-cone or 1+log speed (where the puncture gauge loses strong
@@ -186,7 +196,8 @@ void apply_absolute_normal_matrix(gsl::not_null<VelocityVector*> result_w,
 
 /// The largest characteristic speed magnitude of \f$A_n\f$, evaluated from
 /// the analytic speeds without the degeneracy checks of
-/// `NormalCharacteristics`. It is an `ERROR` if \f$f\f$ is not positive.
+/// `NormalCharacteristics`. It is an `ERROR` if \f$f\f$ or \f$\phi\f$ is not
+/// positive.
 double largest_characteristic_speed(const LogMetricChart& chart,
                                     const PotentialVector& u,
                                     const std::array<double, 3>& normal,

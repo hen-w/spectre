@@ -13,13 +13,14 @@ spectre_target_sources(
   Chart.cpp
   Filter.cpp
   FinalizeTimeDerivative.cpp
+  FiniteDifferenceGradients.cpp
   Initialize.cpp
   Instantiations.cpp
   LocalOperators.cpp
+  NeighborPackagedData.cpp
   NormalOperator.cpp
   PrepareChartFields.cpp
   TimeDerivative.cpp
-  VolumeTerms.cpp
   )
 
 spectre_target_headers(
@@ -31,12 +32,15 @@ spectre_target_headers(
   Chart.hpp
   Filter.hpp
   FinalizeTimeDerivative.hpp
+  FiniteDifferenceGradients.hpp
   Initialize.hpp
   LocalOperators.hpp
+  NeighborPackagedData.hpp
   NormalOperator.hpp
   PointwiseFields.hpp
   PrepareChartFields.hpp
   StepActions.hpp
+  SubcellStepActions.hpp
   System.hpp
   Tags.hpp
   TimeDerivative.hpp
@@ -48,10 +52,12 @@ target_link_libraries(
   Blaze
   Ccz4
   DataStructures
+  DgSubcell
   Domain
   DomainStructure
   ErrorHandling
   Evolution
+  FiniteDifference
   GeneralRelativity
   GeneralRelativitySolutions
   LinearOperators

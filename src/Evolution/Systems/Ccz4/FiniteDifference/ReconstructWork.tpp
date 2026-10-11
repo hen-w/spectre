@@ -46,10 +46,9 @@ void reconstruct_work(
   const size_t neighbor_num_pts =
       ghost_zone_size * subcell_mesh.extents().slice_away(0).product();
 
-  // Ghost data is stored as Variables<variables_tag_list> (17 tags), but we
-  // only reconstruct the 13 non-boundary tags.  We track the offset into
-  // the neighbor data buffer via vars_in_neighbor_count, which counts
-  // independent components of tags_list_for_reconstruct.
+  // Ghost data is stored as Variables<variables_tag_list>. We track the
+  // offset into the neighbor data buffer via vars_in_neighbor_count, which
+  // counts independent components of tags_list_for_reconstruct.
   size_t vars_in_neighbor_count = 0;
   tmpl::for_each<tags_list_for_reconstruct>([&](auto tag_v) {
     using tag = tmpl::type_from<decltype(tag_v)>;
@@ -140,8 +139,8 @@ void reconstruct_fd_neighbor_work(
   Index<3> ghost_data_extents = subcell_mesh.extents();
   ghost_data_extents[direction_to_reconstruct.dimension()] = ghost_zone_size;
 
-  // Ghost data buffer is Variables<variables_tag_list> (17 tags).  We
-  // interpret only the first 13 non-boundary tags via set_data_ref.
+  // The ghost data buffer is a Variables<variables_tag_list>, viewed via
+  // set_data_ref.
   Variables<tags_list_for_reconstruct> neighbor_vars{};
   {
     ASSERT(ghost_data.contains(mortar_id),

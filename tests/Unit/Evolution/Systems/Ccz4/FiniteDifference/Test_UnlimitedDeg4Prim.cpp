@@ -80,9 +80,9 @@ DirectionalIdMap<3, GhostData> compute_ghost_data(
   return ghost_data;
 }
 
-// Fill Variables<variables_tag_list> with a linear function of coordinates.
-// Only fills tags_list_for_reconstruct (13 tags); boundary second-order tags
-// stay zero.  Linear data is exact for the degree-4 unlimited reconstructor.
+// Fill Variables<variables_tag_list> (the physical fields and the stored
+// gradients, all of which are reconstructed) with a linear function of
+// coordinates. Linear data is exact for the degree-4 unlimited reconstructor.
 Variables<System::variables_tag_list> linear_solution(
     const tnsr::I<DataVector, 3, Frame::ElementLogical>& coords) {
   Variables<System::variables_tag_list> vars{get<0>(coords).size(), 0.0};

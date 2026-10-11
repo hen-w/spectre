@@ -8,6 +8,7 @@
 #include "Domain/Creators/RegisterDerivedWithCharm.hpp"
 #include "Domain/Creators/TimeDependence/RegisterDerivedWithCharm.hpp"
 #include "Domain/FunctionsOfTime/RegisterDerivedWithCharm.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/RegisterDerivedWithCharm.hpp"
 #include "Parallel/CharmMain.tpp"
 #include "PointwiseFunctions/ConstraintDamping/RegisterDerivedWithCharm.hpp"
 #include "Utilities/Serialization/RegisterDerivedClassesWithCharm.hpp"
@@ -21,6 +22,7 @@ extern "C" void CkRegisterMainModule() {
       {&domain::creators::register_derived_with_charm,
        &domain::creators::time_dependence::register_derived_with_charm,
        &domain::FunctionsOfTime::register_derived_with_charm,
+       &Ccz4::fd::register_derived_with_charm,
        &ConstraintDamping::register_derived_with_charm,
        &register_factory_classes_with_charm<metavariables>},
       {});

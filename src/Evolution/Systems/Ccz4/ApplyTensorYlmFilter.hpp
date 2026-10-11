@@ -233,9 +233,8 @@ class TensorYlmFilter : public Filters::Filter {
     using type = bool;
     static constexpr Options::String help = {
         "If true, do not apply the YLM angular filter on radial slices that "
-        "coincide with external boundary faces. This preserves boundary data "
-        "consistency for boundary conditions like "
-        "ConstraintsRadiationPreserving."};
+        "coincide with external boundary faces, so that the boundary data "
+        "seen by the boundary conditions are unfiltered."};
   };
   using options =
       tmpl::list<NumModesToKill, HalfPower, BlocksToFilter,

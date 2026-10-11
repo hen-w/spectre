@@ -28,14 +28,15 @@ constexpr size_t number_of_normal_components =
 
 /*!
  * \brief Component offsets of the chart potentials
- * \f$u=(H_0,\ldots,H_4,\ell,\alpha,\beta^1,\beta^2,\beta^3)\f$.
+ * \f$u=(H_0,\ldots,H_4,\phi,\alpha,\beta^1,\beta^2,\beta^3)\f$.
  *
  * \f$H=\frac12\log\tilde\gamma\f$ is stored in the symmetric trace-free basis
- * of `stf_encode`, \f$\ell=\log\phi\f$.
+ * of `stf_encode`; \f$\phi\f$, \f$\alpha\f$ and \f$\beta\f$ are the
+ * physical conformal factor, lapse and shift.
  */
 namespace PotentialIndex {
 constexpr size_t log_metric = 0;
-constexpr size_t log_conformal_factor = 5;
+constexpr size_t conformal_factor = 5;
 constexpr size_t lapse = 6;
 constexpr size_t shift = 7;
 }  // namespace PotentialIndex
@@ -198,8 +199,9 @@ struct PhysicalPointState {
  * velocities \f$w\f$.
  *
  * \details The potentials are \f$H=\frac12\log\tilde\gamma\f$ from the library
- * eigendecomposition, \f$\ell=\log\phi\f$, \f$a=2\mathcal T_H^{-1}\tilde
- * A\f$. The encodings of \f$H\f$ and \f$a\f$ discard their Euclidean traces
+ * eigendecomposition, \f$\phi\f$, \f$\alpha\f$, \f$\beta\f$ and
+ * \f$a=2\mathcal T_H^{-1}\tilde A\f$. The encodings of \f$H\f$ and \f$a\f$
+ * discard their Euclidean traces
  * \f$\mathrm{tr}H=\frac12\log\det\tilde\gamma\f$ and
  * \f$\mathrm{tr}\,a=\tilde\gamma^{ij}\tilde A_{ij}\f$, which vanish on the
  * algebraic-constraint surface; they are returned (in this order) so callers
@@ -219,12 +221,13 @@ std::array<double, 2> chart_from_physical(gsl::not_null<PotentialVector*> u,
  * \f{align*}{
  * W_{ij}&=g_{jk}B_i{}^k+g_{ik}B_j{}^k-\tfrac23g_{ij}d,\\
  * R_H&=-\alpha a+\beta^iq_{H,i}+\mathcal T_H^{-1}W,\\
- * R_\ell&=\beta^iq_{\ell,i}+(\alpha K-d)/3,\\
+ * R_\phi&=\beta^iq_{\phi,i}+\phi(\alpha K-d)/3,\\
  * R_\alpha&=\beta^iq_{\alpha,i}-2\alpha(K-2\Theta),\\
  * R_\beta&=fb.
  * \f}
- * For fixed \f$u\f$ this is linear in \f$(w,q)\f$ with no constant term, so
- * \f$L\,y=R(u,y,0)\f$ and \f$\sum_jE_jx_j=R(u,0,x)\f$.
+ * The lapse rate assumes \f$K_0=0\f$. For fixed \f$u\f$ this is linear in
+ * \f$(w,q)\f$ with no constant term, so \f$L\,y=R(u,y,0)\f$ and
+ * \f$\sum_jE_jx_j=R(u,0,x)\f$.
  */
 PotentialVector potential_rhs(const LogMetricChart& chart,
                               const PotentialVector& u, const VelocityVector& w,
@@ -239,7 +242,8 @@ PotentialVector potential_rhs(const LogMetricChart& chart,
  * \delta R_H&=-\delta\alpha\,a+\delta\beta^iq_{H,i}
  * +\mathcal T_H^{-1}\left(W(\mathcal T_H\delta H)
  * -\mathcal S_H[\delta H,\mathcal T_H^{-1}W]\right),\\
- * \delta R_\ell&=\delta\beta^iq_{\ell,i}+\delta\alpha K/3,\\
+ * \delta R_\phi&=\delta\beta^iq_{\phi,i}+\delta\phi(\alpha K-d)/3
+ * +\phi K\delta\alpha/3,\\
  * \delta R_\alpha&=\delta\beta^iq_{\alpha,i}-2\delta\alpha(K-2\Theta),\qquad
  * \delta R_\beta=0,
  * \f}
@@ -254,12 +258,12 @@ PotentialVector potential_rhs_potential_derivative(
  * \brief Apply \f$P=(L;Z)^{-1}(I_{10};0)\f$ to a potential-rate increment.
  *
  * \details Explicitly, \f$\delta a=-\delta R_H/\alpha\f$,
- * \f$\delta K=3\delta R_\ell/\alpha\f$,
+ * \f$\delta K=3\delta R_\phi/(\alpha\phi)\f$,
  * \f$\delta\Theta=\delta R_\alpha/(4\alpha)+\delta K/2\f$,
  * \f$\delta b=\delta\hat\Gamma=\delta R_\beta/f\f$, so that \f$LP=I\f$ (with
  * the Gamma-driver parameter \f$f\f$ of `potential_rhs`) and \f$ZP=0\f$ with
  * \f$Zw=\hat\Gamma-b\f$.
  */
-VelocityVector apply_rhs_inverse(double lapse, const PotentialVector& delta_rhs,
-                                 double f);
+VelocityVector apply_rhs_inverse(double lapse, double conformal_factor,
+                                 const PotentialVector& delta_rhs, double f);
 }  // namespace Ccz4::GradientProjection

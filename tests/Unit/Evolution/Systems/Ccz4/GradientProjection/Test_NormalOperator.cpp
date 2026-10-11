@@ -151,6 +151,7 @@ std::vector<Case> cases(const gsl::not_null<std::mt19937*> gen,
   std::vector<Case> result{};
   helpers::RandomState minkowski{};
   minkowski.u[gp::PotentialIndex::lapse] = 1.0;
+  minkowski.u[gp::PotentialIndex::conformal_factor] = 1.0;
   for (size_t axis = 0; axis < 3; ++axis) {
     std::array<double, 3> normal{};
     gsl::at(normal, axis) = 1.0;
@@ -382,8 +383,7 @@ void test_normalization_conversion(const std::vector<Case>& all_cases,
     const gp::LogMetricChart chart{
         gp::stf_decode(&state.u[gp::PotentialIndex::log_metric])};
     const gp::NormalCharacteristics characteristics{chart, state.u, normal, f};
-    const double phi =
-        std::exp(state.u[gp::PotentialIndex::log_conformal_factor]);
+    const double phi = state.u[gp::PotentialIndex::conformal_factor];
     const gp::Matrix3 inverse_metric = chart.inverse_metric();
     double norm_squared = 0.0;
     for (size_t i = 0; i < 3; ++i) {
@@ -462,7 +462,7 @@ void test_near_collisions(const double f) {
         gsl::at(u, gp::PotentialIndex::log_metric + a) = gsl::at(h, a);
       }
     }
-    u[gp::PotentialIndex::log_conformal_factor] = std::log(phi);
+    u[gp::PotentialIndex::conformal_factor] = phi;
     const std::array<double, 3> normal =
         flat ? std::array<double, 3>{{1.0, 0.0, 0.0}} : oblique;
     const gp::LogMetricChart chart{
@@ -499,7 +499,7 @@ void test_degeneracies(const double f) {
                              const double shift_x) {
     gp::PotentialVector u{};
     u[gp::PotentialIndex::lapse] = lapse;
-    u[gp::PotentialIndex::log_conformal_factor] = std::log(phi);
+    u[gp::PotentialIndex::conformal_factor] = phi;
     u[gp::PotentialIndex::shift] = shift_x;
     return u;
   };
@@ -536,6 +536,7 @@ void test_gamma_driver_parameter() {
   const gp::LogMetricChart flat{gp::Matrix3{}};
   gp::PotentialVector minkowski{};
   minkowski[gp::PotentialIndex::lapse] = 1.0;
+  minkowski[gp::PotentialIndex::conformal_factor] = 1.0;
   const std::array<double, 3> normal{{0.0, 1.0, 0.0}};
   CHECK_THROWS_WITH(
       (gp::NormalCharacteristics{flat, minkowski, normal, 0.75}),
@@ -552,6 +553,98 @@ void test_gamma_driver_parameter() {
         gp::largest_characteristic_speed(flat, minkowski, normal, f),
         Catch::Matchers::ContainsSubstring(
             "The Gamma-driver parameter f must be positive"));
+  }
+}
+
+// The physical-phi operator against the frozen log(phi) operator at the same
+// state: A_n = S A_n^log S^-1 and |A_n| = S |A_n^log| S^-1 with S multiplying
+// the three gradients of phi by phi, for random anisotropic metrics, shifts
+// and conformal factors including small ones.
+void test_phi_similarity(const gsl::not_null<std::mt19937*> gen,
+                         const double f) {
+  for (size_t sample = 0; sample < 12; ++sample) {
+    const std::array<double, 2> phi_range =
+        sample < 4 ? std::array<double, 2>{{0.05, 0.2}}
+                   : std::array<double, 2>{{0.5, 2.0}};
+    helpers::RandomState state{};
+    std::array<double, 3> normal{};
+    do {
+      state =
+          helpers::random_state(gen, 0.4, 0.2, 0.2, {{0.4, 1.5}}, phi_range);
+      normal = helpers::random_unit_vector(gen);
+    } while (transform_condition(gp::NormalCharacteristics{
+                 gp::LogMetricChart{
+                     gp::stf_decode(&state.u[gp::PotentialIndex::log_metric])},
+                 state.u, normal, f}) > 1.0e5);
+    const double phi = state.u[gp::PotentialIndex::conformal_factor];
+    CAPTURE(phi);
+    gp::PotentialVector u_log = state.u;
+    u_log[gp::PotentialIndex::conformal_factor] = std::log(phi);
+    const gp::LogMetricChart chart{
+        gp::stf_decode(&state.u[gp::PotentialIndex::log_metric])};
+    const auto similar = [phi](const Square& log_matrix) {
+      Square result = log_matrix;
+      for (size_t row = 0; row < n43; ++row) {
+        for (size_t column = 0; column < n43; ++column) {
+          const auto scale = [phi](const size_t index) {
+            return index >= gp::number_of_velocities and
+                           (index - gp::number_of_velocities) % 10 ==
+                               gp::PotentialIndex::conformal_factor
+                       ? phi
+                       : 1.0;
+          };
+          result[row * n43 + column] *= scale(row) / scale(column);
+        }
+      }
+      return result;
+    };
+    const Square actual = assemble([&](const auto result_w, const auto result_q,
+                                       const auto& w, const auto& q) {
+      gp::apply_normal_matrix(result_w, result_q, chart, state.u, normal, w, q,
+                              f);
+    });
+    const Square expected = similar(to_square(pypp::call<DataVector>(
+        module, "normal_matrix_log", to_data_vector(u_log),
+        to_data_vector(normal), f)));
+    CHECK(max_abs_difference(actual, expected) < 1e-12 * max_abs(expected));
+    const Square actual_absolute =
+        assemble([&](const auto result_w, const auto result_q, const auto& w,
+                     const auto& q) {
+          gp::apply_absolute_normal_matrix(result_w, result_q, chart, state.u,
+                                           normal, w, q, f);
+        });
+    const gp::NormalCharacteristics characteristics{chart, state.u, normal, f};
+    const Square expected_absolute = similar(to_square(pypp::call<DataVector>(
+        module, "absolute_normal_matrix_log_schur", to_data_vector(u_log),
+        to_data_vector(normal), f)));
+    CHECK(max_abs_difference(actual_absolute, expected_absolute) <
+          1.0e-12 * transform_condition(characteristics) *
+              max_abs(expected_absolute));
+  }
+}
+
+// The conformal factor is no longer positive by construction: the normal
+// operator, its characteristic decomposition and speeds reject it.
+void test_conformal_factor_positivity(const double f) {
+  const gp::LogMetricChart flat{gp::Matrix3{}};
+  const std::array<double, 3> normal{{0.0, 1.0, 0.0}};
+  for (const double phi : {0.0, -0.3}) {
+    CAPTURE(phi);
+    gp::PotentialVector u{};
+    u[gp::PotentialIndex::lapse] = 1.0;
+    u[gp::PotentialIndex::conformal_factor] = phi;
+    CHECK_THROWS_WITH(
+        (gp::NormalCharacteristics{flat, u, normal, f}),
+        Catch::Matchers::ContainsSubstring("The conformal factor must be "
+                                           "positive"));
+    CHECK_THROWS_WITH(
+        gp::largest_characteristic_speed(flat, u, normal, f),
+        Catch::Matchers::ContainsSubstring("The conformal factor must be "
+                                           "positive"));
+    CHECK_THROWS_WITH(gp::normal_flux(flat, u, normal, gp::VelocityVector{},
+                                      gp::GradientVector{}, f),
+                      Catch::Matchers::ContainsSubstring(
+                          "The conformal factor must be positive"));
   }
 }
 }  // namespace
@@ -572,6 +665,8 @@ SPECTRE_TEST_CASE(
     test_normalization_conversion(all_cases, f);
     test_near_collisions(f);
     test_degeneracies(f);
+    test_phi_similarity(make_not_null(&gen), f);
+    test_conformal_factor_positivity(f);
   }
   test_gamma_driver_parameter();
 }

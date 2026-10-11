@@ -4,7 +4,6 @@
 #include "Evolution/Systems/Ccz4/GradientProjection/TimeDerivative.hpp"
 
 #include <array>
-#include <cmath>
 #include <cstddef>
 #include <utility>
 
@@ -14,37 +13,31 @@
 #include "Evolution/Systems/Ccz4/FiniteDifference/SoTimeDerivative.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/PointwiseFields.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/PrepareChartFields.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Evolution/Systems/Ccz4/TempTags.hpp"
+#include "NumericalAlgorithms/LinearOperators/PartialDerivatives.tpp"
+#include "NumericalAlgorithms/Spectral/Mesh.hpp"
 #include "PointwiseFunctions/GeneralRelativity/Tags.hpp"
 #include "Utilities/ConstantExpressions.hpp"
+#include "Utilities/ErrorHandling/Error.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/TMPL.hpp"
 
 namespace Ccz4::GradientProjection {
-KernelInputs kernel_inputs(const Tags::ChartU::type& u,
-                           const Tags::ChartW::type& w,
-                           const Tags::ChartQ::type& q,
-                           const DerivChartW::type& d_w,
-                           const DerivChartQ::type& d_q) {
-  const size_t number_of_points = get<0>(u).size();
+KernelInputs kernel_inputs(const PotentialFields& u,
+                           const Tags::TransformedATilde::type& a,
+                           const Tags::PotentialGradients::type& q,
+                           const DerivTransformedATilde::type& d_a,
+                           const DerivPotentialGradients::type& d_q) {
+  const size_t number_of_points = get(u.lapse).size();
   KernelInputs result{};
   const auto allocate = [number_of_points](auto& tensor) {
     for (auto& component : tensor) {
       component = DataVector{number_of_points};
     }
   };
-  allocate(result.conformal_metric);
-  allocate(result.conformal_factor);
-  allocate(result.a_tilde);
-  allocate(result.trace_extrinsic_curvature);
-  allocate(result.theta);
-  allocate(result.gamma_hat);
-  allocate(result.lapse);
-  allocate(result.shift);
-  allocate(result.b);
   allocate(result.field_a);
-  allocate(result.field_b);
   allocate(result.field_d);
   allocate(result.field_p);
   allocate(result.d_field_a);
@@ -52,52 +45,39 @@ KernelInputs kernel_inputs(const Tags::ChartU::type& u,
   allocate(result.d_field_d);
   allocate(result.d_field_p);
   allocate(result.d_a_tilde);
-  allocate(result.d_trace_extrinsic_curvature);
-  allocate(result.d_theta);
-  allocate(result.d_gamma_hat);
-  allocate(result.d_b);
+  // FieldB is the shift gradient itself.
+  for (size_t i = 0; i < 3; ++i) {
+    for (size_t k = 0; k < 3; ++k) {
+      result.field_b.get(i, k).set_data_ref(
+          // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+          const_cast<double*>(q.get(i, PotentialIndex::shift + k).data()),
+          number_of_points);
+    }
+  }
 
   for (size_t s = 0; s < number_of_points; ++s) {
     const PotentialVector u_s = potentials_at(u, s);
-    const VelocityVector w_s = velocities_at(w, s);
     const GradientVector q_s = gradients_at(q, s);
     const LogMetricChart chart{stf_decode(&u_s[PotentialIndex::log_metric])};
-    const Matrix3 metric = chart.metric();
-    const Matrix3 a = stf_decode(&w_s[VelocityIndex::a]);
-    const Matrix3 a_tilde = 0.5 * chart.tangent(a);
+    std::array<double, 5> a_s{};
+    for (size_t c = 0; c < 5; ++c) {
+      gsl::at(a_s, c) = a.get(c)[s];
+    }
+    const Matrix3 a_matrix = stf_decode(a_s.data());
     const double lapse = u_s[PotentialIndex::lapse];
+    const double conformal_factor = u_s[PotentialIndex::conformal_factor];
     std::array<Matrix3, 3> q_h{};
     for (size_t i = 0; i < 3; ++i) {
       gsl::at(q_h, i) =
           stf_decode(&gsl::at(q_s, i)[PotentialIndex::log_metric]);
     }
 
-    for (size_t i = 0; i < 3; ++i) {
-      for (size_t j = i; j < 3; ++j) {
-        result.conformal_metric.get(i, j)[s] = metric(i, j);
-        result.a_tilde.get(i, j)[s] = a_tilde(i, j);
-      }
-    }
-    get(result.conformal_factor)[s] =
-        std::exp(u_s[PotentialIndex::log_conformal_factor]);
-    get(result.lapse)[s] = lapse;
-    get(result.trace_extrinsic_curvature)[s] =
-        w_s[VelocityIndex::trace_extrinsic_curvature];
-    get(result.theta)[s] = w_s[VelocityIndex::theta];
-    for (size_t i = 0; i < 3; ++i) {
-      result.shift.get(i)[s] = gsl::at(u_s, PotentialIndex::shift + i);
-      result.gamma_hat.get(i)[s] = gsl::at(w_s, VelocityIndex::gamma_hat + i);
-      result.b.get(i)[s] = gsl::at(w_s, VelocityIndex::b + i);
-    }
-
     // Auxiliary fields.
     for (size_t i = 0; i < 3; ++i) {
       const PotentialVector& q_i = gsl::at(q_s, i);
       result.field_a.get(i)[s] = q_i[PotentialIndex::lapse] / lapse;
-      result.field_p.get(i)[s] = q_i[PotentialIndex::log_conformal_factor];
-      for (size_t k = 0; k < 3; ++k) {
-        result.field_b.get(i, k)[s] = gsl::at(q_i, PotentialIndex::shift + k);
-      }
+      result.field_p.get(i)[s] =
+          q_i[PotentialIndex::conformal_factor] / conformal_factor;
       const Matrix3 field_d = 0.5 * chart.tangent(gsl::at(q_h, i));
       for (size_t j = 0; j < 3; ++j) {
         for (size_t k = j; k < 3; ++k) {
@@ -121,8 +101,13 @@ KernelInputs kernel_inputs(const Tags::ChartU::type& u,
             gsl::at(q_s, i)[PotentialIndex::lapse] *
                 gsl::at(q_s, j)[PotentialIndex::lapse] / square(lapse);
         result.d_field_p.get(i, j)[s] =
-            0.5 * (dq(i, j, PotentialIndex::log_conformal_factor) +
-                   dq(j, i, PotentialIndex::log_conformal_factor));
+            0.5 *
+                (dq(i, j, PotentialIndex::conformal_factor) +
+                 dq(j, i, PotentialIndex::conformal_factor)) /
+                conformal_factor -
+            gsl::at(q_s, i)[PotentialIndex::conformal_factor] *
+                gsl::at(q_s, j)[PotentialIndex::conformal_factor] /
+                square(conformal_factor);
         for (size_t k = 0; k < 3; ++k) {
           result.d_field_b.get(i, j, k)[s] =
               0.5 * (dq(i, j, PotentialIndex::shift + k) +
@@ -146,27 +131,19 @@ KernelInputs kernel_inputs(const Tags::ChartU::type& u,
       }
     }
 
-    // Derivatives of the chart velocities.
+    // The derivative of the curvature from that of the nodal a.
     for (size_t k = 0; k < 3; ++k) {
-      std::array<double, 5> d_a{};
+      std::array<double, 5> d_a_k{};
       for (size_t c = 0; c < 5; ++c) {
-        gsl::at(d_a, c) = d_w.get(k, VelocityIndex::a + c)[s];
+        gsl::at(d_a_k, c) = d_a.get(k, c)[s];
       }
       const Matrix3 d_a_tilde =
-          0.5 * (chart.tangent(stf_decode(d_a.data())) +
-                 chart.second_derivative(gsl::at(q_h, k), a));
+          0.5 * (chart.tangent(stf_decode(d_a_k.data())) +
+                 chart.second_derivative(gsl::at(q_h, k), a_matrix));
       for (size_t i = 0; i < 3; ++i) {
         for (size_t j = i; j < 3; ++j) {
           result.d_a_tilde.get(k, i, j)[s] = d_a_tilde(i, j);
         }
-      }
-      result.d_trace_extrinsic_curvature.get(k)[s] =
-          d_w.get(k, VelocityIndex::trace_extrinsic_curvature)[s];
-      result.d_theta.get(k)[s] = d_w.get(k, VelocityIndex::theta)[s];
-      for (size_t i = 0; i < 3; ++i) {
-        result.d_gamma_hat.get(k, i)[s] =
-            d_w.get(k, VelocityIndex::gamma_hat + i)[s];
-        result.d_b.get(k, i)[s] = d_w.get(k, VelocityIndex::b + i)[s];
       }
     }
   }
@@ -174,12 +151,16 @@ KernelInputs kernel_inputs(const Tags::ChartU::type& u,
 }
 
 KernelRates kernel_rates(const KernelInputs& inputs,
+                         const tnsr::ii<DataVector, 3>& conformal_metric,
+                         const tnsr::ii<DataVector, 3>& a_tilde,
+                         const PotentialFields& u, const VelocityFields& w,
+                         const VelocityDerivatives& d_w,
                          const Scalar<DataVector>& kappa_1,
                          const Scalar<DataVector>& kappa_2,
                          const double kappa_3, const Scalar<DataVector>& eta,
                          const Scalar<DataVector>& k_0, const double f) {
   constexpr size_t Dim = 3;
-  const size_t number_of_points = get(inputs.lapse).size();
+  const size_t number_of_points = get(u.lapse).size();
 
   using TempVars = Variables<tmpl::list<
       ::Ccz4::Tags::ConformalFactorSquared<DataVector>,
@@ -259,15 +240,15 @@ KernelRates kernel_rates(const KernelInputs& inputs,
          grad_spatial_z4_constraint,
          ricci_scalar_plus_divergence_z4_constraint] = temp_vars;
 
-  tnsr::ii<DataVector, Dim> dt_conformal_metric(number_of_points);
-  Scalar<DataVector> dt_lapse(number_of_points);
-  tnsr::I<DataVector, Dim> dt_shift(number_of_points);
-  Scalar<DataVector> dt_conformal_factor(number_of_points);
-  tnsr::ii<DataVector, Dim> dt_a_tilde(number_of_points);
-  Scalar<DataVector> dt_trace_extrinsic_curvature(number_of_points);
-  Scalar<DataVector> dt_theta(number_of_points);
-  tnsr::I<DataVector, Dim> dt_gamma_hat(number_of_points);
-  tnsr::I<DataVector, Dim> dt_b(number_of_points);
+  KernelRates rates{tnsr::ii<DataVector, Dim>(number_of_points),
+                    Scalar<DataVector>(number_of_points),
+                    tnsr::ii<DataVector, Dim>(number_of_points),
+                    Scalar<DataVector>(number_of_points),
+                    Scalar<DataVector>(number_of_points),
+                    tnsr::I<DataVector, Dim>(number_of_points),
+                    Scalar<DataVector>(number_of_points),
+                    tnsr::I<DataVector, Dim>(number_of_points),
+                    tnsr::I<DataVector, Dim>(number_of_points)};
 
   constexpr double c = 1.0;
   constexpr double cleaning_speed = 1.0;
@@ -275,11 +256,12 @@ KernelRates kernel_rates(const KernelInputs& inputs,
   constexpr bool shifting_shift = false;
   constexpr bool evolve_lapse_and_shift = true;
   ::Ccz4::fd::detail::apply<Dim>(
-      make_not_null(&dt_conformal_metric), make_not_null(&dt_lapse),
-      make_not_null(&dt_shift), make_not_null(&dt_conformal_factor),
-      make_not_null(&dt_a_tilde), make_not_null(&dt_trace_extrinsic_curvature),
-      make_not_null(&dt_theta), make_not_null(&dt_gamma_hat),
-      make_not_null(&dt_b), make_not_null(&conformal_factor_squared),
+      make_not_null(&rates.conformal_metric), make_not_null(&rates.lapse),
+      make_not_null(&rates.shift), make_not_null(&rates.conformal_factor),
+      make_not_null(&rates.a_tilde),
+      make_not_null(&rates.trace_extrinsic_curvature),
+      make_not_null(&rates.theta), make_not_null(&rates.gamma_hat),
+      make_not_null(&rates.b), make_not_null(&conformal_factor_squared),
       make_not_null(&det_conformal_spatial_metric),
       make_not_null(&inv_conformal_spatial_metric),
       make_not_null(&inv_spatial_metric), make_not_null(&inv_a_tilde),
@@ -321,36 +303,33 @@ KernelRates kernel_rates(const KernelInputs& inputs,
       make_not_null(&grad_spatial_z4_constraint),
       make_not_null(&ricci_scalar_plus_divergence_z4_constraint), c,
       cleaning_speed, one_over_relaxation_time, eta, f, kappa_1, kappa_2,
-      kappa_3, k_0, inputs.conformal_metric, inputs.lapse, inputs.shift,
-      inputs.conformal_factor, inputs.a_tilde, inputs.trace_extrinsic_curvature,
-      inputs.theta, inputs.gamma_hat, inputs.b, inputs.field_a, inputs.field_b,
-      inputs.field_d, inputs.field_p, inputs.d_field_a, inputs.d_field_b,
-      inputs.d_field_d, inputs.d_field_p, inputs.d_a_tilde,
-      inputs.d_trace_extrinsic_curvature, inputs.d_theta, inputs.d_gamma_hat,
-      inputs.d_b, shifting_shift, evolve_lapse_and_shift);
+      kappa_3, k_0, conformal_metric, u.lapse, u.shift, u.conformal_factor,
+      a_tilde, w.trace_extrinsic_curvature, w.theta, w.gamma_hat, w.b,
+      inputs.field_a, inputs.field_b, inputs.field_d, inputs.field_p,
+      inputs.d_field_a, inputs.d_field_b, inputs.d_field_d, inputs.d_field_p,
+      inputs.d_a_tilde, d_w.trace_extrinsic_curvature, d_w.theta, d_w.gamma_hat,
+      d_w.b, shifting_shift, evolve_lapse_and_shift);
 
-  return {std::move(dt_a_tilde), std::move(dt_trace_extrinsic_curvature),
-          std::move(dt_theta), std::move(dt_gamma_hat), std::move(dt_b)};
+  return rates;
 }
 
-void volume_targets(const gsl::not_null<Tags::ChartW::type*> dt_w,
-                    const gsl::not_null<Tags::ChartQ::type*> dt_q,
-                    const gsl::not_null<Tags::ChartU::type*> dt_u,
-                    const Tags::ChartU::type& u, const Tags::ChartW::type& w,
-                    const Tags::ChartQ::type& q, const DerivChartW::type& d_w,
-                    const DerivChartQ::type& d_q,
+void volume_targets(const gsl::not_null<Tags::VelocityTarget::type*> dt_w,
+                    const gsl::not_null<Tags::GradientTarget::type*> dt_q,
+                    const gsl::not_null<Tags::PotentialRateTarget::type*> dt_u,
+                    const tnsr::ii<DataVector, 3>& conformal_metric,
+                    const tnsr::ii<DataVector, 3>& a_tilde,
+                    const PotentialFields& u, const VelocityFields& w,
+                    const Tags::PotentialGradients::type& q,
+                    const VelocityDerivatives& d_w,
+                    const DerivPotentialGradients::type& d_q,
                     const Scalar<DataVector>& kappa_1,
                     const Scalar<DataVector>& kappa_2, const double kappa_3,
                     const Scalar<DataVector>& eta,
                     const Scalar<DataVector>& k_0, const double f) {
-  const size_t number_of_points = get<0>(u).size();
-  const KernelRates rates = kernel_rates(
-      kernel_inputs(u, w, q, d_w, d_q), kappa_1, kappa_2, kappa_3, eta, k_0, f);
-  const auto& dt_a_tilde = rates.a_tilde;
-  const auto& dt_trace_extrinsic_curvature = rates.trace_extrinsic_curvature;
-  const auto& dt_theta = rates.theta;
-  const auto& dt_gamma_hat = rates.gamma_hat;
-  const auto& dt_b = rates.b;
+  const size_t number_of_points = get(u.lapse).size();
+  const KernelRates rates =
+      kernel_rates(kernel_inputs(u, w.a, q, d_w.a, d_q), conformal_metric,
+                   a_tilde, u, w, d_w, kappa_1, kappa_2, kappa_3, eta, k_0, f);
 
   for (size_t s = 0; s < number_of_points; ++s) {
     const PotentialVector u_s = potentials_at(u, s);
@@ -363,7 +342,7 @@ void volume_targets(const gsl::not_null<Tags::ChartW::type*> dt_w,
     Matrix3 physical_a_tilde_rate{};
     for (size_t i = 0; i < 3; ++i) {
       for (size_t j = 0; j < 3; ++j) {
-        physical_a_tilde_rate(i, j) = dt_a_tilde.get(i, j)[s];
+        physical_a_tilde_rate(i, j) = rates.a_tilde.get(i, j)[s];
       }
     }
     const std::array<double, 5> a_rate = stf_encode(chart.inverse_tangent(
@@ -386,8 +365,8 @@ void volume_targets(const gsl::not_null<Tags::ChartW::type*> dt_w,
       dt_w->get(VelocityIndex::a + c_index)[s] = gsl::at(a_rate, c_index);
     }
     dt_w->get(VelocityIndex::trace_extrinsic_curvature)[s] =
-        get(dt_trace_extrinsic_curvature)[s];
-    dt_w->get(VelocityIndex::theta)[s] = get(dt_theta)[s];
+        get(rates.trace_extrinsic_curvature)[s];
+    dt_w->get(VelocityIndex::theta)[s] = get(rates.theta)[s];
     for (size_t k = 0; k < 3; ++k) {
       double ordering = 0.0;
       for (size_t i = 0; i < 3; ++i) {
@@ -395,24 +374,15 @@ void volume_targets(const gsl::not_null<Tags::ChartW::type*> dt_w,
       }
       ordering /= 6.0;
       dt_w->get(VelocityIndex::gamma_hat + k)[s] =
-          dt_gamma_hat.get(k)[s] + ordering;
-      dt_w->get(VelocityIndex::b + k)[s] = dt_b.get(k)[s] + ordering;
+          rates.gamma_hat.get(k)[s] + ordering;
+      dt_w->get(VelocityIndex::b + k)[s] = rates.b.get(k)[s] + ordering;
     }
 
     // Gradient targets R_u q_i + R(u, D_i w, D_i q).
     for (size_t i = 0; i < 3; ++i) {
-      VelocityVector d_i_w{};
-      for (size_t a_index = 0; a_index < number_of_velocities; ++a_index) {
-        gsl::at(d_i_w, a_index) = d_w.get(i, a_index)[s];
-      }
-      GradientVector d_i_q{};
-      for (size_t j = 0; j < 3; ++j) {
-        for (size_t a_index = 0; a_index < number_of_potentials; ++a_index) {
-          gsl::at(gsl::at(d_i_q, j), a_index) = d_q.get(i, j, a_index)[s];
-        }
-      }
       const PotentialVector principal =
-          potential_rhs(chart, u_s, d_i_w, d_i_q, f);
+          potential_rhs(chart, u_s, velocity_derivatives_at(d_w, i, s),
+                        gradient_derivatives_at(d_q, i, s), f);
       const PotentialVector lower_order = potential_rhs_potential_derivative(
           chart, u_s, w_s, q_s, gsl::at(q_s, i));
       for (size_t a_index = 0; a_index < number_of_potentials; ++a_index) {
@@ -424,5 +394,106 @@ void volume_targets(const gsl::not_null<Tags::ChartW::type*> dt_w,
       dt_u->get(a_index)[s] = gsl::at(rhs, a_index);
     }
   }
+}
+
+void ComputeVolumeTargets::apply(
+    const gsl::not_null<typename variables_tag::type*> evolved_variables,
+    const gsl::not_null<typename dt_variables_tag::type*> dt_evolved_variables,
+    const gsl::not_null<typename Tags::RhsTargets::type*> targets,
+    const Mesh<3>& mesh,
+    const InverseJacobian<DataVector, 3, Frame::ElementLogical,
+                          Frame::Inertial>& inverse_jacobian,
+    const Scalar<DataVector>& kappa_1, const Scalar<DataVector>& kappa_2,
+    const double kappa_3, const Scalar<DataVector>& eta,
+    const Scalar<DataVector>& k_0) {
+  if (max(abs(get(k_0))) != 0.0) {
+    ERROR(
+        "The CCZ4 gradient-projection scheme requires K0 = 0: its potential "
+        "right-hand side and the lapse rate recovered from it omit K0. Got "
+        "max|K0| = "
+        << max(abs(get(k_0))));
+  }
+  using ConformalFactor = ::Ccz4::Tags::ConformalFactor<DataVector>;
+  using curvature_tags =
+      tmpl::list<gr::Tags::TraceExtrinsicCurvature<DataVector>,
+                 ::Ccz4::Tags::Theta<DataVector>,
+                 ::Ccz4::Tags::GammaHat<DataVector, 3>>;
+  using gauge_tags =
+      tmpl::list<gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
+                 ::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>;
+  const size_t number_of_points = mesh.number_of_grid_points();
+  const auto& vars = *evolved_variables;
+  const auto& conformal_metric =
+      get<::Ccz4::Tags::ConformalMetric<DataVector, 3>>(vars);
+  const auto& conformal_factor = get<ConformalFactor>(vars);
+  const auto& a_tilde = get<::Ccz4::Tags::ATilde<DataVector, 3>>(vars);
+  const auto& lapse = get<gr::Tags::Lapse<DataVector>>(vars);
+
+  // 1. The local nodal H and a.
+  LocalChartFields chart{number_of_points};
+  local_chart_fields(make_not_null(&chart), conformal_metric, conformal_factor,
+                     a_tilde, lapse);
+  const auto d_chart =
+      partial_derivatives<typename LocalChartFields::tags_list>(
+          chart, mesh, inverse_jacobian);
+
+  // 2. The gradients of the potentials, differentiating the physical fields
+  // in place.
+  const auto d_conformal_factor =
+      partial_derivatives<tmpl::list<ConformalFactor>>(
+          vars.template reference_subset<tmpl::list<ConformalFactor>>(), mesh,
+          inverse_jacobian);
+  const auto d_gauge = partial_derivatives<gauge_tags>(
+      vars.template reference_subset<gauge_tags>(), mesh, inverse_jacobian);
+  auto& gradients = get<Tags::PotentialGradients>(*evolved_variables);
+  assemble_potential_gradients(
+      make_not_null(&gradients),
+      get<::Tags::deriv<Tags::LogConformalMetric, tmpl::size_t<3>,
+                        Frame::Inertial>>(d_chart),
+      get<::Tags::deriv<ConformalFactor, tmpl::size_t<3>, Frame::Inertial>>(
+          d_conformal_factor),
+      get<::Tags::deriv<gr::Tags::Lapse<DataVector>, tmpl::size_t<3>,
+                        Frame::Inertial>>(d_gauge),
+      get<::Tags::deriv<gr::Tags::Shift<DataVector, 3>, tmpl::size_t<3>,
+                        Frame::Inertial>>(d_gauge));
+
+  // 3. The remaining derivatives.
+  const auto d_curvature = partial_derivatives<curvature_tags>(
+      vars.template reference_subset<curvature_tags>(), mesh, inverse_jacobian);
+  const auto d_gradients = partial_derivatives<
+      tmpl::list<Tags::PotentialGradients>>(
+      vars.template reference_subset<tmpl::list<Tags::PotentialGradients>>(),
+      mesh, inverse_jacobian);
+
+  // 4. The volume targets.
+  const PotentialFields u{get<Tags::LogConformalMetric>(chart),
+                          conformal_factor, lapse,
+                          get<gr::Tags::Shift<DataVector, 3>>(vars)};
+  const VelocityFields w{
+      get<Tags::TransformedATilde>(chart),
+      get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(vars),
+      get<::Ccz4::Tags::Theta<DataVector>>(vars),
+      get<::Ccz4::Tags::GammaHat<DataVector, 3>>(vars),
+      get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(vars)};
+  const VelocityDerivatives d_w{
+      get<DerivTransformedATilde>(d_chart),
+      get<::Tags::deriv<gr::Tags::TraceExtrinsicCurvature<DataVector>,
+                        tmpl::size_t<3>, Frame::Inertial>>(d_curvature),
+      get<::Tags::deriv<::Ccz4::Tags::Theta<DataVector>, tmpl::size_t<3>,
+                        Frame::Inertial>>(d_curvature),
+      get<::Tags::deriv<::Ccz4::Tags::GammaHat<DataVector, 3>, tmpl::size_t<3>,
+                        Frame::Inertial>>(d_curvature),
+      get<::Tags::deriv<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>,
+                        tmpl::size_t<3>, Frame::Inertial>>(d_gauge)};
+  targets->initialize(number_of_points);
+  volume_targets(make_not_null(&get<Tags::VelocityTarget>(*targets)),
+                 make_not_null(&get<Tags::GradientTarget>(*targets)),
+                 make_not_null(&get<Tags::PotentialRateTarget>(*targets)),
+                 conformal_metric, a_tilde, u, w, gradients, d_w,
+                 get<DerivPotentialGradients>(d_gradients), kappa_1, kappa_2,
+                 kappa_3, eta, k_0, ::Ccz4::fd::System::f);
+
+  // 5. Only FinalizeTimeDerivative writes physical rates.
+  dt_evolved_variables->initialize(number_of_points, 0.0);
 }
 }  // namespace Ccz4::GradientProjection

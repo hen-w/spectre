@@ -36,10 +36,15 @@ namespace Ccz4::GradientProjection::BoundaryCorrections {
  * scalar jump penalty and the internal value-jump input of the potential
  * mean.
  *
- * \details Each element packages its chart fields \f$(w,q_1,q_2,q_3,u)\f$
- * (53 scalars per point) and its outward Euclidean unit normal covector
- * \f$n\f$. At each face point the coefficient state is the chart average
- * \f$u_*=(u^-+u^+)/2\f$ and \f$[Y]=Y^+-Y^-\f$ with \f$Y=(w,q)\f$. With the
+ * \details Each element packages the chart fields \f$(w,q_1,q_2,q_3,u)\f$
+ * (53 scalars per point) of its face values and its outward Euclidean unit
+ * normal covector \f$n\f$: \f$H\f$ and \f$a\f$ are constructed from the
+ * physical face values (an `ERROR` off the algebraic-constraint surface, see
+ * `Ccz4::GradientProjection::checked_chart_from_physical`), \f$q\f$ is the
+ * stored gradient and the other components are the physical fields. At each
+ * face point the coefficient state is the chart average
+ * \f$u_*=(u^-+u^+)/2\f$ (the arithmetic mean of \f$H\f$ and of the physical
+ * \f$\phi,\alpha,\beta\f$) and \f$[Y]=Y^+-Y^-\f$ with \f$Y=(w,q)\f$. With the
  * normal principal matrix \f$A_n(u_*)\f$ (see
  * `Ccz4::GradientProjection::normal_flux`) and its spectral absolute value
  * (see `Ccz4::GradientProjection::NormalCharacteristics`) the target rates
@@ -50,14 +55,16 @@ namespace Ccz4::GradientProjection::BoundaryCorrections {
  * \f]
  * where \f$\mathcal L_f\f$ is the strong-form lift with the Euclidean normal
  * magnitude and the normal matrix uses the Gamma-driver parameter
- * `Ccz4::fd::System::f`. On internal faces the potential slots receive
- * \f$\frac12\mathcal L_f(u^+-u^-)\f$, so that after lifting they hold
- * \f$R-S_uu\f$; on external faces they receive nothing.
+ * `Ccz4::fd::System::f`. The corrections are written to the targets of
+ * `Ccz4::GradientProjection::Tags::RhsTargets`. On internal faces the
+ * potential slots receive \f$\frac12\mathcal L_f(u^+-u^-)\f$, so that after
+ * lifting they hold \f$R-S_uu\f$; on external faces they receive nothing.
+ * Only the local normal is used; the packaged neighbor normal is ignored.
  *
  * On external faces the exterior state comes from the boundary condition and
- * the dissipative part \f$|A_n|+\sigma I\f$ is multiplied by the option
- * `ExternalDissipationFactor` (0: central, 1: standard, 2: doubled radial
- * dissipation); the central part \f$A_n\f$ is unchanged.
+ * the scalar jump penalty is omitted. The dissipative part \f$|A_n|\f$ is
+ * multiplied by `ExternalDissipationFactor` (0: central, 1: ordinary upwind,
+ * 2: doubled dissipation); the central part \f$A_n\f$ is unchanged.
  *
  * Only the strong formulation is supported. The physical fields receive no
  * correction: their rates are computed from the corrected targets by
@@ -68,15 +75,15 @@ class UpwindGradientProjection final : public evolution::BoundaryCorrection {
   struct ExternalDissipationFactor {
     using type = double;
     static constexpr Options::String help = {
-        "The factor multiplying |A_n| + sigma I on external boundaries: 0 is "
-        "central, 1 standard, 2 doubled dissipation."};
+        "The factor multiplying |A_n| on external boundaries: 0 is "
+        "central, 1 ordinary upwind, 2 doubled dissipation."};
     static type lower_bound() { return 0.0; }
   };
 
   using options = tmpl::list<ExternalDissipationFactor>;
   static constexpr Options::String help = {
       "Full upwind correction of the CCZ4 gradient-projection targets with a "
-      "unit scalar jump penalty."};
+      "unit scalar jump penalty on internal faces only."};
 
   UpwindGradientProjection() = default;
   explicit UpwindGradientProjection(double external_dissipation_factor);
@@ -101,7 +108,8 @@ class UpwindGradientProjection final : public evolution::BoundaryCorrection {
   }
 
   using dg_package_field_tags =
-      tmpl::list<Tags::ChartW, Tags::ChartQ, Tags::ChartU,
+      tmpl::list<Tags::PackagedVelocities, Tags::PackagedGradients,
+                 Tags::PackagedPotentials,
                  ::Ccz4::Tags::NormalCovector<DataVector, 3>>;
   using dg_package_data_temporary_tags = tmpl::list<>;
   using dg_package_data_volume_tags = tmpl::list<>;
@@ -111,24 +119,20 @@ class UpwindGradientProjection final : public evolution::BoundaryCorrection {
   using dg_auxiliary_package_data_volume_tags = tmpl::list<>;
   using dg_auxiliary_boundary_terms_volume_tags = tmpl::list<>;
 
-  /// Packages the chart fields and the normal. Returns the largest
-  /// characteristic speed magnitude at the interior face state.
+  /// Packages the chart fields of the face values and the normal. Returns
+  /// the largest characteristic speed magnitude at the face state.
   double dg_package_data(
-      gsl::not_null<Tags::ChartW::type*> packaged_w,
-      gsl::not_null<Tags::ChartQ::type*> packaged_q,
-      gsl::not_null<Tags::ChartU::type*> packaged_u,
+      gsl::not_null<Tags::PackagedVelocities::type*> packaged_w,
+      gsl::not_null<Tags::PackagedGradients::type*> packaged_q,
+      gsl::not_null<Tags::PackagedPotentials::type*> packaged_u,
       gsl::not_null<tnsr::i<DataVector, 3>*> packaged_normal_covector,
-      const Tags::ChartW::type& w, const Tags::ChartQ::type& q,
-      const Tags::ChartU::type& u,
-      const tnsr::ii<DataVector, 3>& /*conformal_metric*/,
-      const Scalar<DataVector>& /*conformal_factor*/,
-      const tnsr::ii<DataVector, 3>& /*a_tilde*/,
-      const Scalar<DataVector>& /*trace_extrinsic_curvature*/,
-      const Scalar<DataVector>& /*theta*/,
-      const tnsr::I<DataVector, 3>& /*gamma_hat*/,
-      const Scalar<DataVector>& /*lapse*/,
-      const tnsr::I<DataVector, 3>& /*shift*/,
-      const tnsr::I<DataVector, 3>& /*b*/,
+      const tnsr::ii<DataVector, 3>& conformal_metric,
+      const Scalar<DataVector>& conformal_factor,
+      const tnsr::ii<DataVector, 3>& a_tilde,
+      const Scalar<DataVector>& trace_extrinsic_curvature,
+      const Scalar<DataVector>& theta, const tnsr::I<DataVector, 3>& gamma_hat,
+      const Scalar<DataVector>& lapse, const tnsr::I<DataVector, 3>& shift,
+      const tnsr::I<DataVector, 3>& b, const Tags::PotentialGradients::type& q,
       const tnsr::i<DataVector, 3>& normal_covector,
       const std::optional<tnsr::I<DataVector, 3>>& /*mesh_velocity*/,
       const std::optional<Scalar<DataVector>>& /*normal_dot_mesh_velocity*/,
@@ -136,23 +140,16 @@ class UpwindGradientProjection final : public evolution::BoundaryCorrection {
 
   template <bool ForExternalBoundary>
   void dg_boundary_terms(
-      gsl::not_null<Tags::ChartW::type*> w_correction,
-      gsl::not_null<Tags::ChartQ::type*> q_correction,
-      gsl::not_null<Tags::ChartU::type*> u_correction,
-      gsl::not_null<tnsr::ii<DataVector, 3>*> conformal_metric_correction,
-      gsl::not_null<Scalar<DataVector>*> conformal_factor_correction,
-      gsl::not_null<tnsr::ii<DataVector, 3>*> a_tilde_correction,
-      gsl::not_null<Scalar<DataVector>*> trace_extrinsic_curvature_correction,
-      gsl::not_null<Scalar<DataVector>*> theta_correction,
-      gsl::not_null<tnsr::I<DataVector, 3>*> gamma_hat_correction,
-      gsl::not_null<Scalar<DataVector>*> lapse_correction,
-      gsl::not_null<tnsr::I<DataVector, 3>*> shift_correction,
-      gsl::not_null<tnsr::I<DataVector, 3>*> b_correction,
-      const Tags::ChartW::type& w_int, const Tags::ChartQ::type& q_int,
-      const Tags::ChartU::type& u_int,
+      gsl::not_null<Tags::VelocityTarget::type*> w_correction,
+      gsl::not_null<Tags::GradientTarget::type*> q_correction,
+      gsl::not_null<Tags::PotentialRateTarget::type*> u_correction,
+      const Tags::PackagedVelocities::type& w_int,
+      const Tags::PackagedGradients::type& q_int,
+      const Tags::PackagedPotentials::type& u_int,
       const tnsr::i<DataVector, 3>& normal_covector_int,
-      const Tags::ChartW::type& w_ext, const Tags::ChartQ::type& q_ext,
-      const Tags::ChartU::type& u_ext,
+      const Tags::PackagedVelocities::type& w_ext,
+      const Tags::PackagedGradients::type& q_ext,
+      const Tags::PackagedPotentials::type& u_ext,
       const tnsr::i<DataVector, 3>& /*normal_covector_ext*/,
       dg::Formulation dg_formulation) const;
 

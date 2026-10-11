@@ -14,16 +14,13 @@ spectre_target_sources(
   Derivatives.cpp
   UnlimitedDeg4Prim.cpp
   EnforceConstrainedEvolution.cpp
-  EnforceTracelessDerivConformalMetric.cpp
   EnforceTracelessDtConformalMetric.cpp
   EventInstantiation.cpp
   Filter.cpp
   GhostData.cpp
-  NeighborPackagedData.cpp
   RadiationCharacteristics.cpp
   Reconstructor.cpp
   RegisterDerivedWithCharm.cpp
-  VolumeTerms.cpp
   )
 
 spectre_target_headers(
@@ -31,7 +28,6 @@ spectre_target_headers(
   INCLUDE_DIRECTORY ${CMAKE_SOURCE_DIR}/src
   HEADERS
   ApplyFilter.hpp
-  BoundaryConditionGhostData.hpp
   Characteristics.hpp
   ConstraintCharacteristics.hpp
   Derivatives.hpp
@@ -39,14 +35,11 @@ spectre_target_headers(
   ReconstructWork.hpp
   UnlimitedDeg4Prim.hpp
   EnforceConstrainedEvolution.hpp
-  EnforceTracelessDerivConformalMetric.hpp
   EnforceTracelessDtConformalMetric.hpp
   Filter.hpp
   ConstraintEnergyCompute.hpp
   GhostData.hpp
   HamiltonianConstraintCompute.hpp
-  NeighborPackagedData.hpp
-  LdgTimeDerivative.hpp
   MomentumConstraintCompute.hpp
   RadiationCharacteristics.hpp
   Reconstructor.hpp
@@ -59,8 +52,6 @@ spectre_target_headers(
   System.hpp
   Tags.hpp
   TraceATildeCompute.hpp
-  UpdateAuxiliaryVariables.hpp
-  UpdateAuxiliaryVariablesFd.hpp
   )
 
 target_link_libraries(
@@ -80,4 +71,3 @@ target_link_libraries(
   )
 
 add_subdirectory(../BoundaryConditions ${CMAKE_CURRENT_BINARY_DIR}/BoundaryConditions)
-add_subdirectory(../BoundaryCorrections ${CMAKE_CURRENT_BINARY_DIR}/BoundaryCorrections)

@@ -9,7 +9,11 @@ set(LIBRARY_SOURCES
   Test_Chart.cpp
   Test_Filter.cpp
   Test_FinalizeTimeDerivative.cpp
+  Test_FiniteDifferenceGradients.cpp
+  Test_HybridStepActions.cpp
+  Test_Initialize.cpp
   Test_LocalOperators.cpp
+  Test_NeighborPackagedData.cpp
   Test_NormalOperator.cpp
   Test_PrepareChartFields.cpp
   Test_StepActions.cpp
@@ -23,8 +27,10 @@ target_link_libraries(
   PRIVATE
   Ccz4
   Ccz4GradientProjection
+  ConstraintDamping
   CoordinateMaps
   DataStructures
+  DgSubcell
   DiscontinuousGalerkin
   Domain
   DomainBoundaryConditions

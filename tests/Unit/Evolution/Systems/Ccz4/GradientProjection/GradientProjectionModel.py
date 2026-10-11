@@ -3,13 +3,19 @@
 
 """Linear model of the gradient-projection scheme on a periodic brick.
 
-The semi-discrete operator about Minkowski space on a periodic chain of
-identical affine LGL elements along x (one element along y and z), assembled
-from the frozen Cartesian CCZ4 symbol with the Gamma-driver parameter f
-(beta_t = f b), with tensor-product central derivatives and jump lifts. Fields
-are the chart velocities (a_STF[5], K, Theta, Gamma[3], b[3]) followed by the
-chart potentials (H_STF[5], log phi, lapse, shift[3]), component-major; the
-grid index is x fastest, with the x index running over the elements in order.
+The semi-discrete operator about Minkowski space (or, for `linearized_rates`,
+about a constant state with unit conformal metric, conformal factor phi,
+lapse alpha and shift beta) on a periodic chain of identical affine LGL
+elements along x (one element along y and z), assembled from the frozen
+Cartesian CCZ4 symbol with the Gamma-driver parameter f (beta_t = f b), with
+tensor-product central derivatives and jump lifts. Fields are the chart
+velocities (a_STF[5], K, Theta, Gamma[3], b[3]) followed by the chart
+potentials (H_STF[5], phi, lapse, shift[3]), component-major; the grid index
+is x fastest, with the x index running over the elements in order. About
+Minkowski space (phi = 1) a perturbation of phi is one of log(phi). The
+symbol about a general constant state is the frozen log(phi) symbol of
+GradientProjectionReference conjugated by the scaling of the gradients of
+phi by phi, independently of the physical-phi formulas.
 
 The operator takes the full upwind first-order target with a unit scalar jump
 penalty and the curl ordering term, fits the potential rates by the
@@ -22,6 +28,8 @@ rate r_beta.
 
 import numpy as np
 from numpy.polynomial import legendre
+
+import GradientProjectionReference as reference
 
 _EYE = np.eye(3)
 _STF = np.zeros((5, 3, 3))
@@ -84,6 +92,31 @@ def _symbol(f):
     return c, b, d, e
 
 
+def _background_symbol(f, phi, alpha, beta):
+    """The frozen symbol about the constant state (H = 0, phi, alpha, beta)
+    with w = q = 0, from the frozen log(phi) normal matrices conjugated by the
+    scaling S of the gradients of phi."""
+    u_log = np.r_[np.zeros(5), np.log(phi), alpha, beta]
+    scaling = reference.phi_similarity(phi)
+    inverse_scaling = np.linalg.inv(scaling)
+    normals = [
+        scaling
+        @ reference.curved_normal_log_impl(u_log, _EYE[i], f)
+        @ inverse_scaling
+        for i in range(3)
+    ]
+    c = np.array([normals[i][:13, :13] for i in range(3)])
+    b = np.array(
+        [
+            [normals[i][:13, 13 + 10 * j : 23 + 10 * j] for j in range(3)]
+            for i in range(3)
+        ]
+    )
+    d = normals[0][13:23, :13]
+    e = np.array([normals[0][13:23, 13 + 10 * j : 23 + 10 * j] for j in range(3)])
+    return c, b, d, e
+
+
 def _normal_matrix(c, b, d, e, normal):
     """The 43x43 first-order normal matrix acting on (v, q_1, q_2, q_3)."""
     a = np.zeros((43, 43))
@@ -124,18 +157,20 @@ def _absolute(matrix, f):
     return result
 
 
-def _source(kappa, eta):
-    """Linearized damping terms with kappa_1 = kappa, kappa_2 = 0 and the
-    volume source -eta b of the b rate."""
+def _source(kappa, eta, alpha=1.0):
+    """Linearized damping terms with kappa_1 = kappa, kappa_2 = 0 about a
+    constant state with unit conformal metric and lapse alpha (each damping
+    term carries one factor of the lapse), and the volume source -eta b of
+    the b rate."""
     result = np.zeros((43, 43))
-    result[5, 6] = -3.0 * kappa
-    result[6, 6] = -2.0 * kappa
+    result[5, 6] = -3.0 * alpha * kappa
+    result[6, 6] = -2.0 * alpha * kappa
     for i in range(3):
         for row in (7 + i, 10 + i):
-            result[row, 7 + i] -= kappa
+            result[row, 7 + i] -= alpha * kappa
             for j in range(3):
                 result[row, 13 + 10 * j : 18 + 10 * j] += (
-                    2.0 * kappa * _STF[:, i, j]
+                    2.0 * alpha * kappa * _STF[:, i, j]
                 )
         result[10 + i, 10 + i] -= eta
     return result
@@ -188,9 +223,12 @@ def _along(axis, operator, identities):
     return np.kron(ops[2], np.kron(ops[1], ops[0]))
 
 
-def generator(widths, kappa, eta, f, elements_x=1, points=3):
+def generator(
+    widths, kappa, eta, f, elements_x=1, points=3, background=None
+):
     """The operator for elements of the given widths, `elements_x` of them
-    along x."""
+    along x, about Minkowski space or about the constant state
+    `background = (phi, alpha, beta)`."""
     counts = (elements_x, 1, 1)
     operators = [_operators_1d(points, count) for count in counts]
     identities = [np.eye(points * count) for count in counts]
@@ -214,7 +252,17 @@ def generator(widths, kappa, eta, f, elements_x=1, points=3):
         for i in range(3)
     ]
     mean = np.kron(operators[2][4], np.kron(operators[1][4], operators[0][4]))
-    c, b, d, e = _symbol(f)
+    if background is None:
+        c, b, d, e = _symbol(f)
+        lapse = 1.0
+
+        def absolute(matrix):
+            return _absolute(matrix, f)
+
+    else:
+        phi, lapse, beta = background
+        c, b, d, e = _background_symbol(f, phi, lapse, np.asarray(beta))
+        absolute = reference.schur3_absolute
 
     reconstruction = np.zeros((43 * n, 23 * n))
     reconstruction[: 13 * n, : 13 * n] = np.eye(13 * n)
@@ -222,11 +270,11 @@ def generator(widths, kappa, eta, f, elements_x=1, points=3):
         reconstruction[(13 + 10 * i) * n : (23 + 10 * i) * n, 13 * n :] = (
             np.kron(np.eye(10), derivatives[i])
         )
-    first_order = np.kron(_source(kappa, eta), np.eye(n))
+    first_order = np.kron(_source(kappa, eta, lapse), np.eye(n))
     for i in range(3):
         normal_matrix = _normal_matrix(c, b, d, e, _EYE[i])
         first_order += np.kron(normal_matrix, centrals[i]) - np.kron(
-            _absolute(normal_matrix, f) + np.eye(43), jumps[i]
+            absolute(normal_matrix) + np.eye(43), jumps[i]
         )
     target = first_order @ reconstruction
     volume_potential_target = (
@@ -283,6 +331,25 @@ def linearized_rates(
     return (
         generator(
             (width_x, width_y, width_z), kappa, eta, f, int(round(elements_x))
+        )
+        @ state
+    )
+
+
+def linearized_rates_about(
+    state, width_x, width_y, width_z, kappa, eta, f, elements_x, background
+):
+    """`linearized_rates` about the constant state
+    background = (phi, alpha, beta_x, beta_y, beta_z)."""
+    background = np.asarray(background)
+    return (
+        generator(
+            (width_x, width_y, width_z),
+            kappa,
+            eta,
+            f,
+            int(round(elements_x)),
+            background=(background[0], background[1], background[2:5]),
         )
         @ state
     )

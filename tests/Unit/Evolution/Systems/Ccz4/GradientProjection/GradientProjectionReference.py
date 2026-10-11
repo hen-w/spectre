@@ -9,6 +9,11 @@
 # The argument `f` is the Gamma-driver parameter of beta_t = f b.
 # All arrays crossing the C++ interface are flat: 3x3 matrices and 43x43
 # matrices row-major, gradients q[i][A] as q[10 * i + A].
+# The potentials are u = (H[5], phi, lapse, shift[3]) with the physical
+# conformal factor phi. The `_log` functions are frozen copies of the
+# previous formulation with log(phi) in place of phi; they are independent
+# oracles for the similarity A_phi = S A_log S^-1, with S multiplying the
+# gradients of phi by phi.
 
 from decimal import Decimal, localcontext
 
@@ -143,7 +148,7 @@ def original_rhs_impl(u, w, q, f):
     strain = shift_gradient @ g + g @ shift_gradient.T - 2 * g * divergence / 3
     result = np.zeros(10, dtype=np.result_type(u, w, q))
     result[:5] = -alpha * w[:5] + shift @ q[:, :5] + encode(inverse(strain))
-    result[5] = shift @ q[:, 5] + (alpha * w[5] - divergence) / 3
+    result[5] = shift @ q[:, 5] + u[5] * (alpha * w[5] - divergence) / 3
     result[6] = shift @ q[:, 6] - 2 * alpha * (w[5] - 2 * w[6])
     result[7:] = f * w[10:]
     return result
@@ -158,7 +163,7 @@ def recover_impl(u, q, rhs, difference, f):
     strain = bgrad @ g + g @ bgrad.T - 2 * g * divergence / 3
     w = np.zeros(13)
     w[:5] = (shift @ q[:, :5] + encode(inverse(strain)) - rhs[:5]) / alpha
-    w[5] = (3 * (rhs[5] - shift @ q[:, 5]) + divergence) / alpha
+    w[5] = (3 * (rhs[5] - shift @ q[:, 5]) / u[5] + divergence) / alpha
     w[6] = (rhs[6] - shift @ q[:, 6]) / (4 * alpha) + w[5] / 2
     w[10:] = rhs[7:] / f
     w[7:10] = difference + w[10:]
@@ -166,6 +171,80 @@ def recover_impl(u, q, rhs, difference, f):
 
 
 def curved_normal_impl(u, normal, f):
+    g, gi, _, inverse = geometry(u[:5])
+    alpha, phi, beta = u[6], u[5], u[7:]
+    speed = beta @ normal
+    raised = gi @ normal
+
+    def tf(x):
+        return x - g * np.einsum("ij,ij->", gi, x) / 3
+
+    def apply(y):
+        w = y[:13]
+        q = y[13:].reshape(3, 10)
+        result = np.zeros(43)
+        gamma_gradient = np.outer(normal, g @ w[7:10])
+        conformal_hessian = np.outer(normal, q[:, 5] / phi)
+        lapse_hessian = np.outer(normal, q[:, 6])
+        metric_source = (
+            alpha
+            * phi**2
+            * tf(
+                (
+                    gamma_gradient
+                    + gamma_gradient.T
+                    + conformal_hessian
+                    + conformal_hessian.T
+                )
+                / 2
+            )
+        )
+        metric_source -= phi**2 * tf((lapse_hessian + lapse_hessian.T) / 2)
+        result[:5] = (
+            speed * w[:5]
+            - alpha * phi**2 * (raised @ q[:, :5])
+            + 2 * encode(inverse(metric_source))
+        )
+        result[5] = (
+            speed * w[5]
+            + alpha * phi**2 * (normal @ w[7:10] + 4 * raised @ q[:, 5] / phi)
+            - phi**2 * raised @ q[:, 6]
+        )
+        result[6] = speed * w[6] + alpha * phi**2 * (
+            normal @ w[7:10] / 2 + 2 * raised @ q[:, 5] / phi
+        )
+        result[7:10] = (
+            speed * w[7:10]
+            + alpha * raised * (2 * w[6] - 4 * w[5] / 3)
+            + raised @ q[:, 7:]
+            + raised * np.trace(q[:, 7:]) / 3
+        )
+        result[10:13] = result[7:10]
+        result[13:] = np.outer(normal, original_rhs_impl(u, w, q, f)).ravel()
+        return result
+
+    return np.column_stack([apply(v) for v in np.eye(43)])
+
+
+# Frozen copies of the log(phi) formulation (u[5] = log(phi)).
+
+
+def original_rhs_log_impl(u, w, q, f):
+    g, _, _, inverse = geometry(u[:5])
+    alpha = u[6]
+    shift = u[7:]
+    shift_gradient = q[:, 7:]
+    divergence = np.trace(shift_gradient)
+    strain = shift_gradient @ g + g @ shift_gradient.T - 2 * g * divergence / 3
+    result = np.zeros(10, dtype=np.result_type(u, w, q))
+    result[:5] = -alpha * w[:5] + shift @ q[:, :5] + encode(inverse(strain))
+    result[5] = shift @ q[:, 5] + (alpha * w[5] - divergence) / 3
+    result[6] = shift @ q[:, 6] - 2 * alpha * (w[5] - 2 * w[6])
+    result[7:] = f * w[10:]
+    return result
+
+
+def curved_normal_log_impl(u, normal, f):
     g, gi, _, inverse = geometry(u[:5])
     alpha, phi, beta = u[6], np.exp(u[5]), u[7:]
     speed = beta @ normal
@@ -215,10 +294,19 @@ def curved_normal_impl(u, normal, f):
             + raised * np.trace(q[:, 7:]) / 3
         )
         result[10:13] = result[7:10]
-        result[13:] = np.outer(normal, original_rhs_impl(u, w, q, f)).ravel()
+        result[13:] = np.outer(
+            normal, original_rhs_log_impl(u, w, q, f)
+        ).ravel()
         return result
 
     return np.column_stack([apply(v) for v in np.eye(43)])
+
+
+def phi_similarity(phi):
+    """S, multiplying the three gradients of phi by phi."""
+    scaling = np.ones(43)
+    scaling[[18, 28, 38]] = phi
+    return np.diag(scaling)
 
 
 def jacobian(function, value):
@@ -270,6 +358,22 @@ def schur3_absolute(a, tol=1.0e-8):
 
 def normal_matrix(u, normal, f):
     return curved_normal_impl(np.array(u), np.array(normal), f).ravel()
+
+
+def normal_matrix_log(u_log, normal, f):
+    return curved_normal_log_impl(np.array(u_log), np.array(normal), f).ravel()
+
+
+def absolute_normal_matrix_log_schur(u_log, normal, f):
+    return schur3_absolute(
+        curved_normal_log_impl(np.array(u_log), np.array(normal), f)
+    ).ravel()
+
+
+def original_rhs_log(u_log, w, q_log, f):
+    return original_rhs_log_impl(
+        np.array(u_log), np.array(w), np.reshape(np.array(q_log), (3, 10)), f
+    )
 
 
 def absolute_normal_matrix_eig(u, normal, f):

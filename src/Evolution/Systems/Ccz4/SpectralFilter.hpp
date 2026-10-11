@@ -34,11 +34,10 @@ using all_runtime_filters = tmpl::append<
 }  // namespace Ccz4
 
 namespace Filters::runtime {
-// No filter may modify the LDG auxiliary variables FieldA/B/D/P (rebuilt
-// from the filtered variables every step with lifted boundary
-// corrections): restrict all filters to the 9 original CCZ4 evolved
-// variables, matching the legacy Ccz4::TensorYlmFilter and the tag list
-// of the legacy filter action in EvolveCcz4.hpp.
+// No filter may modify the stored gradients of the gradient-projection
+// scheme (recomputed from the physical fields before every use): restrict
+// all filters to the 9 physical CCZ4 variables, matching the legacy
+// Ccz4::TensorYlmFilter.
 template <>
 struct FilteredTags<Ccz4::fd::System::variables_tag_list> {
   using type = Ccz4::filter_detail::ccz4_vars_list<Frame::Inertial>;

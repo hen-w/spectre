@@ -8,6 +8,8 @@
 
 #include "DataStructures/DataBox/Tag.hpp"
 #include "DataStructures/DataVector.hpp"
+#include "DataStructures/Tensor/IndexType.hpp"
+#include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
 #include "Evolution/DgSubcell/Tags/SubcellOptions.hpp"
 #include "Evolution/DgSubcell/Tags/SubcellSolver.hpp"
@@ -83,6 +85,23 @@ struct EtaConstant {
 
 /// \brief Tags for evolving SoCcz4 with finite difference
 namespace Tags {
+/*!
+ * \brief The element-local ordinary gradients \f$q_i=D_iu\f$ of the
+ * potentials \f$u=(H,\phi,\alpha,\beta^i)\f$ of the CCZ4 gradient-projection
+ * scheme, `get(i, A)` with `A` ordered as in
+ * `Ccz4::GradientProjection::PotentialIndex`.
+ *
+ * \details These scratch gradients follow the physical fields in the evolved
+ * `Variables` of both DG and finite-difference elements, so that they are sent
+ * with the physical ghost data. They are recomputed from the physical fields
+ * before every use and are not evolved: their time derivative is zero.
+ */
+struct PotentialGradients : db::SimpleTag {
+  using type = Tensor<DataVector, Symmetry<2, 1>,
+                      index_list<SpatialIndex<3, UpLo::Lo, Frame::Inertial>,
+                                 SpatialIndex<10, UpLo::Up, Frame::NoFrame>>>;
+};
+
 /// \brief Tag for the reconstructor
 struct Reconstructor : db::SimpleTag {
   using type = std::unique_ptr<fd::Reconstructor>;

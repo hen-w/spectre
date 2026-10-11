@@ -32,7 +32,7 @@ constexpr size_t z_gamma = VelocityIndex::gamma_hat;
 constexpr size_t z_b = VelocityIndex::b;
 constexpr size_t z_r = number_of_velocities;
 constexpr size_t z_r_h = z_r + PotentialIndex::log_metric;
-constexpr size_t z_r_ell = z_r + PotentialIndex::log_conformal_factor;
+constexpr size_t z_r_phi = z_r + PotentialIndex::conformal_factor;
 constexpr size_t z_r_lapse = z_r + PotentialIndex::lapse;
 constexpr size_t z_r_beta = z_r + PotentialIndex::shift;
 
@@ -114,6 +114,19 @@ std::array<double, 3> shift_values(const double v, const double c_s,
   return {{p + kernel, p, f * s - v * kernel / c_s}};
 }
 
+// The conformal factor is stored directly, so its positivity (which the
+// characteristic structure needs) is no longer implied by the chart.
+double checked_conformal_factor(const PotentialVector& u) {
+  const double conformal_factor = u[PotentialIndex::conformal_factor];
+  if (not(conformal_factor > 0.0)) {
+    ERROR(
+        "The conformal factor must be positive for the normal operator of the "
+        "CCZ4 target operator, but is "
+        << conformal_factor << " (lapse " << u[PotentialIndex::lapse] << ")");
+  }
+  return conformal_factor;
+}
+
 void check_gamma_driver_parameter(const double f) {
   if (not(f > 0.0)) {
     ERROR(
@@ -135,8 +148,7 @@ NormalSubspaceVector normal_flux(const LogMetricChart& chart,
                                  const VelocityVector& w,
                                  const GradientVector& q, const double f) {
   const double lapse = u[PotentialIndex::lapse];
-  const double conformal_factor =
-      std::exp(u[PotentialIndex::log_conformal_factor]);
+  const double conformal_factor = checked_conformal_factor(u);
   const double phi_squared = conformal_factor * conformal_factor;
   const Matrix3 metric = chart.metric();
   const Matrix3 inverse_metric = chart.inverse_metric();
@@ -149,18 +161,22 @@ NormalSubspaceVector normal_flux(const LogMetricChart& chart,
            raised_normal[1] * q[1][component] +
            raised_normal[2] * q[2][component];
   };
-  const auto gradient_covector = [&q](const size_t component) {
-    return Vector3{{q[0][component], q[1][component], q[2][component]}};
+  const auto gradient_covector = [&q](const size_t component,
+                                      const double factor) {
+    return Vector3{{factor * q[0][component], factor * q[1][component],
+                    factor * q[2][component]}};
   };
 
+  // The principal terms of the conformal factor enter through
+  // FieldP_i = q_{phi,i} / phi.
   const Vector3 lowered_gamma =
       matrix_times(metric, &w[VelocityIndex::gamma_hat]);
   Matrix3 big_u =
       lapse * (symmetric_outer(normal, lowered_gamma) +
                symmetric_outer(
-                   normal,
-                   gradient_covector(PotentialIndex::log_conformal_factor))) -
-      symmetric_outer(normal, gradient_covector(PotentialIndex::lapse));
+                   normal, gradient_covector(PotentialIndex::conformal_factor,
+                                             1.0 / conformal_factor))) -
+      symmetric_outer(normal, gradient_covector(PotentialIndex::lapse, 1.0));
   double trace = 0.0;
   for (size_t i = 0; i < 3; ++i) {
     for (size_t j = 0; j < 3; ++j) {
@@ -179,17 +195,17 @@ NormalSubspaceVector normal_flux(const LogMetricChart& chart,
         gsl::at(metric_source, a);
   }
   const double normal_gamma = dot(normal, &w[VelocityIndex::gamma_hat]);
-  const double raised_ell =
-      raised_gradient(PotentialIndex::log_conformal_factor);
+  const double raised_field_p =
+      raised_gradient(PotentialIndex::conformal_factor) / conformal_factor;
   const double raised_alpha = raised_gradient(PotentialIndex::lapse);
   const double trace_k = w[VelocityIndex::trace_extrinsic_curvature];
   const double theta = w[VelocityIndex::theta];
   result[z_k] = advection * trace_k +
-                lapse * phi_squared * (normal_gamma + 4.0 * raised_ell) -
+                lapse * phi_squared * (normal_gamma + 4.0 * raised_field_p) -
                 phi_squared * raised_alpha;
   result[z_theta] =
       advection * theta +
-      lapse * phi_squared * (0.5 * normal_gamma + 2.0 * raised_ell);
+      lapse * phi_squared * (0.5 * normal_gamma + 2.0 * raised_field_p);
   double divergence = 0.0;
   for (size_t i = 0; i < 3; ++i) {
     divergence += gsl::at(gsl::at(q, i), PotentialIndex::shift + i);
@@ -242,7 +258,7 @@ NormalCharacteristics::NormalCharacteristics(
       sqrt_metric_(chart.sqrt_metric()),
       inverse_sqrt_metric_(chart.inverse_sqrt_metric()),
       lapse_(u[PotentialIndex::lapse]),
-      conformal_factor_(std::exp(u[PotentialIndex::log_conformal_factor])),
+      conformal_factor_(checked_conformal_factor(u)),
       f_(f) {
   check_gamma_driver_parameter(f_);
   if (not(lapse_ > 0.0)) {
@@ -413,7 +429,8 @@ NormalSubspaceVector NormalCharacteristics::to_isotropic(
   }
   result[z_k] = z[z_k];
   result[z_theta] = z[z_theta];
-  result[z_r_ell] = m * z[z_r_ell];
+  // The isotropic scalar rate is that of log(phi): R_phi = phi R_log(phi).
+  result[z_r_phi] = m * z[z_r_phi] / conformal_factor_;
   result[z_r_lapse] = m * z[z_r_lapse];
   const Vector3 gamma = matrix_times(sqrt_metric_, &z[z_gamma]);
   const Vector3 b = matrix_times(sqrt_metric_, &z[z_b]);
@@ -443,7 +460,7 @@ NormalSubspaceVector NormalCharacteristics::from_isotropic(
   }
   result[z_k] = z[z_k];
   result[z_theta] = z[z_theta];
-  result[z_r_ell] = z[z_r_ell] / m;
+  result[z_r_phi] = conformal_factor_ * z[z_r_phi] / m;
   result[z_r_lapse] = z[z_r_lapse] / m;
   const Vector3 gamma = matrix_times(inverse_sqrt_metric_, &z[z_gamma]);
   const Vector3 b = matrix_times(inverse_sqrt_metric_, &z[z_b]);
@@ -515,7 +532,7 @@ NormalSubspaceVector NormalCharacteristics::characteristic_fields(
   const double trace_k = iso[z_k];
   const double theta = iso[z_theta];
   const double gamma_n = dot(n, gamma);
-  const double ell = iso[z_r_ell];
+  const double ell = iso[z_r_phi];
   const double s = iso[z_r_lapse];
   const double big_p = trace_k - 2.0 * theta;
   const double psi = gamma_n + 4.0 * ell;
@@ -648,7 +665,7 @@ NormalCharacteristics::normal_fields_from_characteristic_fields(
   }
   iso[z_k] = trace_k;
   iso[z_theta] = theta;
-  iso[z_r_ell] = ell;
+  iso[z_r_phi] = ell;
   iso[z_r_lapse] = s;
   for (size_t i = 0; i < 3; ++i) {
     gsl::at(iso, z_gamma + i) = gsl::at(gamma, i);
@@ -693,7 +710,7 @@ double largest_characteristic_speed(const LogMetricChart& chart,
   const double m = std::sqrt(dot(raised, normal.data()));
   const double v = std::abs(dot(normal, &u[PotentialIndex::shift]));
   const double lapse = u[PotentialIndex::lapse];
-  const double phi = std::exp(u[PotentialIndex::log_conformal_factor]);
+  const double phi = checked_conformal_factor(u);
   return std::max({v + lapse * phi * m, v + phi * m * std::sqrt(2.0 * lapse),
                    0.5 * v + std::sqrt(0.25 * v * v + 4.0 * f * m * m / 3.0)});
 }

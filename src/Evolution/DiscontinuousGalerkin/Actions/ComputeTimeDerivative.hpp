@@ -122,6 +122,199 @@ struct get_primitive_tags_for_face {
 };
 }  // namespace detail
 
+namespace detail {
+/*!
+ * \brief Send the boundary data of the element to all its neighbors: the
+ * oriented volume mesh, the DG-subcell ghost data (with DG-subcell), the TCI
+ * decision, the integration order and, if `SendMortarData`, the local mortar
+ * data, to the `BoundaryCorrectionAndGhostCellsInbox` with
+ * `IsAuxiliaryInbox`.
+ *
+ * \details Without `SendMortarData` only ghost data are sent (the boundary
+ * correction mesh and data are empty); this requires DG-subcell.
+ */
+template <size_t Dim, typename EvolutionSystem, bool UseNodegroupDgElements,
+          bool IsAuxiliaryInbox, bool SendMortarData,
+          typename ParallelComponent, typename DbTagsList,
+          typename Metavariables>
+void send_boundary_and_ghost_data(
+    const gsl::not_null<Parallel::GlobalCache<Metavariables>*> cache,
+    const gsl::not_null<db::DataBox<DbTagsList>*> box,
+    [[maybe_unused]] const Variables<
+        db::wrap_tags_in<::Tags::Flux, typename EvolutionSystem::flux_variables,
+                         tmpl::size_t<Dim>, Frame::Inertial>>& volume_fluxes) {
+  using variables_tag = typename EvolutionSystem::variables_tag;
+  static_assert(SendMortarData or using_subcell_v<Metavariables>,
+                "Ghost data are only sent with DG-subcell.");
+
+  auto& receiver_proxy =
+      Parallel::get_parallel_component<ParallelComponent>(*cache);
+  const auto& element = db::get<domain::Tags::Element<Dim>>(*box);
+
+  const auto& time_step_id = db::get<::Tags::TimeStepId>(*box);
+  const auto integration_order =
+      db::get<::Tags::HistoryEvolvedVariables<variables_tag>>(*box)
+          .integration_order();
+  const auto& all_mortar_data =
+      db::get<evolution::dg::Tags::MortarData<Dim>>(*box);
+  const auto& mortar_meshes = get<evolution::dg::Tags::MortarMesh<Dim>>(*box);
+  const auto& mortar_info = get<evolution::dg::Tags::MortarInfo<Dim>>(*box);
+
+  std::optional<DirectionMap<Dim, DataVector>>
+      all_neighbor_data_for_reconstruction = std::nullopt;
+  int tci_decision = 0;
+  const Mesh<Dim>& volume_mesh = db::get<domain::Tags::Mesh<Dim>>(*box);
+  std::optional<Mesh<Dim>> ghost_data_mesh = std::nullopt;
+  if constexpr (using_subcell_v<Metavariables>) {
+    if (not all_neighbor_data_for_reconstruction.has_value()) {
+      all_neighbor_data_for_reconstruction = DirectionMap<Dim, DataVector>{};
+    }
+
+    evolution::dg::subcell::prepare_neighbor_data<Metavariables>(
+        make_not_null(&all_neighbor_data_for_reconstruction.value()),
+        make_not_null(&ghost_data_mesh), box, volume_fluxes);
+    tci_decision = evolution::dg::subcell::get_tci_decision(*box);
+  }
+
+  for (const auto& [direction, neighbors] : element.neighbors()) {
+    std::optional<DataVector> ghost_and_subcell_data = std::nullopt;
+    if constexpr (using_subcell_v<Metavariables>) {
+      ASSERT(all_neighbor_data_for_reconstruction.has_value(),
+             "Trying to do DG-subcell but the ghost and subcell data for the "
+             "neighbor has not been set.");
+      ghost_and_subcell_data =
+          std::move(all_neighbor_data_for_reconstruction.value()[direction]);
+    }
+
+    const size_t total_neighbors = neighbors.size();
+    // If there are multiple non-conforming neighbors, we only create a single
+    // mortar labeled by the host ElementId.  This is done because the data
+    // from all neighbors will be combined onto a single mortar as it makes no
+    // sense to have multiple mortars between non-conforming Elements.
+    const bool has_multiple_non_conforming_neighbors =
+        total_neighbors > 1 and not neighbors.are_conforming();
+    size_t neighbor_count = 1;
+    for (const auto& neighbor : neighbors) {
+      const auto& orientation = neighbors.orientation(neighbor);
+      const auto direction_from_neighbor = orientation(direction.opposite());
+      const DirectionalId<Dim> mortar_id{
+          direction,
+          has_multiple_non_conforming_neighbors ? element.id() : neighbor};
+      const Mesh<Dim - 1>& mortar_mesh = mortar_meshes.at(mortar_id);
+      auto volume_mesh_for_neighbor = volume_mesh;
+      auto mortar_mesh_for_neighbor = mortar_mesh;
+      DataVector neighbor_boundary_data_on_mortar{};
+      std::optional<InterpolatedBoundaryData<Dim>> interpolated_boundary_data{
+          std::nullopt};
+
+      if constexpr (not SendMortarData) {
+        // Only the ghost data are sent; the neighbor needs the oriented
+        // volume mesh.
+        if (mortar_info.at(mortar_id).interface_data_policy() ==
+            InterfaceDataPolicy::OrientCopyProject) {
+          volume_mesh_for_neighbor = orientation(volume_mesh);
+        }
+      } else {
+        switch (mortar_info.at(mortar_id).interface_data_policy()) {
+          case InterfaceDataPolicy::CopyProject:
+            [[fallthrough]];
+          case InterfaceDataPolicy::NonconformingNeighborInterpolates:
+            neighbor_boundary_data_on_mortar =
+                *all_mortar_data.at(mortar_id).local().mortar_data.value();
+            break;
+          case InterfaceDataPolicy::OrientCopyProject: {
+            volume_mesh_for_neighbor = orientation(volume_mesh);
+            mortar_mesh_for_neighbor = orient_mesh_on_slice(
+                mortar_mesh, direction.dimension(), orientation);
+            const auto& slice_extents = mortar_mesh.extents();
+            neighbor_boundary_data_on_mortar = orient_variables_on_slice(
+                all_mortar_data.at(mortar_id).local().mortar_data.value(),
+                slice_extents, direction.dimension(), orientation);
+            break;
+          }
+          case InterfaceDataPolicy::NonconformingSelfInterpolates: {
+            if constexpr (Dim > 1) {
+              neighbor_boundary_data_on_mortar =
+                  *all_mortar_data.at(mortar_id).local().mortar_data.value();
+              const auto& interpolator =
+                  mortar_info.at(mortar_id).interpolator().value();
+              const auto& host_data =
+                  *all_mortar_data.at(mortar_id).local().mortar_data.value();
+              // neighbor_boundary_data_on_mortar =
+              //     interpolator.interpolate_to_neighbor(host_data);
+              interpolated_boundary_data = InterpolatedBoundaryData<Dim>{
+                  {.data = interpolator.interpolate_to_neighbor(host_data),
+                   .target_mesh = interpolator.neighbor_mortar_mesh(),
+                   .offsets =
+                       interpolator.interpolated_neighbor_data_offsets()}};
+            } else {
+              ERROR("Cannot have non-conforming neighbors in 1D");
+            }
+            break;
+          }
+          default:
+            ERROR("InterfaceDataPolicy "
+                  << mortar_info.at(mortar_id).interface_data_policy()
+                  << " is not handled yet, id = " << mortar_id);
+        }
+      }
+
+      const TimeStepId& next_time_step_id =
+          db::get<::Tags::Next<::Tags::TimeStepId>>(*box);
+
+      using SendData = evolution::dg::BoundaryData<Dim>;
+      SendData data{};
+
+      if (neighbor_count == total_neighbors) {
+        data = SendData{volume_mesh_for_neighbor,
+                        ghost_data_mesh,
+                        mortar_mesh_for_neighbor,
+                        std::move(ghost_and_subcell_data),
+                        {std::move(neighbor_boundary_data_on_mortar)},
+                        next_time_step_id,
+                        tci_decision,
+                        integration_order,
+                        interpolated_boundary_data};
+      } else {
+        data = SendData{volume_mesh_for_neighbor,
+                        ghost_data_mesh,
+                        mortar_mesh_for_neighbor,
+                        ghost_and_subcell_data,
+                        {std::move(neighbor_boundary_data_on_mortar)},
+                        next_time_step_id,
+                        tci_decision,
+                        integration_order,
+                        interpolated_boundary_data};
+      }
+      if constexpr (not SendMortarData) {
+        data.boundary_correction_mesh = std::nullopt;
+        data.boundary_correction_data = std::nullopt;
+      }
+
+      // Send mortar data (the `std::tuple` named `data`) to neighbor
+      if constexpr (Parallel::is_dg_element_collection_v<ParallelComponent>) {
+        Parallel::local_synchronous_action<
+            Parallel::Actions::SendDataToElement>(
+            receiver_proxy, cache,
+            evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
+                Dim, UseNodegroupDgElements, IsAuxiliaryInbox>{},
+            neighbor, time_step_id,
+            std::make_pair(DirectionalId{direction_from_neighbor, element.id()},
+                           std::move(data)));
+      } else {
+        Parallel::receive_data<
+            evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
+                Dim, UseNodegroupDgElements, IsAuxiliaryInbox>>(
+            receiver_proxy[neighbor], time_step_id,
+            std::make_pair(DirectionalId{direction_from_neighbor, element.id()},
+                           std::move(data)));
+      }
+      ++neighbor_count;
+    }
+  }
+}
+}  // namespace detail
+
 /*!
  * \brief Computes the time derivative for a DG time step.
  *
@@ -426,6 +619,22 @@ ComputeTimeDerivative<Dim, EvolutionSystem, DgStepChoosers, LocalTimeStepping,
   using flux_variables = typename EvolutionSystem::flux_variables;
   using compute_volume_time_derivative_terms =
       typename EvolutionSystem::compute_volume_time_derivative_terms;
+  // A system lifting its boundary corrections into a separate target buffer
+  // evaluates its volume terms into that buffer before this action, so the
+  // generic volume terms below are skipped and must have nothing to compute.
+  constexpr bool lifts_into_separate_targets =
+      detail::has_boundary_correction_target_tag_v<EvolutionSystem>;
+  static_assert(
+      not lifts_into_separate_targets or
+          (not LocalTimeStepping and not ComputeAuxiliary and
+           tmpl::size<partial_derivative_tags>::value == 0 and
+           tmpl::size<flux_variables>::value == 0 and
+           tmpl::size<typename compute_volume_time_derivative_terms::
+                          temporary_tags>::value == 0),
+      "A system with a boundary_correction_target_tag must use global time "
+      "stepping without the auxiliary pass and have no gradient variables, "
+      "fluxes or volume temporaries, since its volume terms are evaluated "
+      "before ComputeTimeDerivative.");
 
   const Mesh<Dim>& mesh = db::get<::domain::Tags::Mesh<Dim>>(box);
   const Element<Dim>& element = db::get<domain::Tags::Element<Dim>>(box);
@@ -600,8 +809,9 @@ ComputeTimeDerivative<Dim, EvolutionSystem, DgStepChoosers, LocalTimeStepping,
   // auxiliary pass.  The auxiliary pass only needs evolved variables on
   // element faces for dg_auxiliary_package_data; none of the volume_terms
   // outputs (dt_vars, volume_fluxes, partial_derivs, temporaries) are
-  // consumed before the physical pass recomputes them.
-  if constexpr (not ComputeAuxiliary) {
+  // consumed before the physical pass recomputes them. A system lifting into
+  // separate targets has already evaluated its volume terms.
+  if constexpr (not ComputeAuxiliary and not lifts_into_separate_targets) {
     const Scalar<DataVector>* det_inverse_jacobian = nullptr;
     if constexpr (tmpl::size<flux_variables>::value != 0) {
       if (dg_formulation == ::dg::Formulation::WeakInertial) {
@@ -720,158 +930,18 @@ void ComputeTimeDerivative<Dim, EvolutionSystem, DgStepChoosers,
             ::Tags::Flux, typename EvolutionSystem::flux_variables,
             tmpl::size_t<Dim>, Frame::Inertial>>& volume_fluxes) {
   using variables_tag = typename EvolutionSystem::variables_tag;
+  detail::send_boundary_and_ghost_data<Dim, EvolutionSystem,
+                                       UseNodegroupDgElements, ComputeAuxiliary,
+                                       true, ParallelComponent>(cache, box,
+                                                                volume_fluxes);
 
-  auto& receiver_proxy =
-      Parallel::get_parallel_component<ParallelComponent>(*cache);
   const auto& element = db::get<domain::Tags::Element<Dim>>(*box);
-
   const auto& time_step_id = db::get<::Tags::TimeStepId>(*box);
   const auto integration_order =
       db::get<::Tags::HistoryEvolvedVariables<variables_tag>>(*box)
           .integration_order();
-  const auto& all_mortar_data =
-      db::get<evolution::dg::Tags::MortarData<Dim>>(*box);
-  const auto& mortar_meshes = get<evolution::dg::Tags::MortarMesh<Dim>>(*box);
   const auto& mortar_info = get<evolution::dg::Tags::MortarInfo<Dim>>(*box);
-
-  std::optional<DirectionMap<Dim, DataVector>>
-      all_neighbor_data_for_reconstruction = std::nullopt;
-  int tci_decision = 0;
   const Mesh<Dim>& volume_mesh = db::get<domain::Tags::Mesh<Dim>>(*box);
-  std::optional<Mesh<Dim>> ghost_data_mesh = std::nullopt;
-  if constexpr (using_subcell_v<Metavariables>) {
-    if (not all_neighbor_data_for_reconstruction.has_value()) {
-      all_neighbor_data_for_reconstruction = DirectionMap<Dim, DataVector>{};
-    }
-
-    evolution::dg::subcell::prepare_neighbor_data<Metavariables>(
-        make_not_null(&all_neighbor_data_for_reconstruction.value()),
-        make_not_null(&ghost_data_mesh), box, volume_fluxes);
-    tci_decision = evolution::dg::subcell::get_tci_decision(*box);
-  }
-
-  for (const auto& [direction, neighbors] : element.neighbors()) {
-    std::optional<DataVector> ghost_and_subcell_data = std::nullopt;
-    if constexpr (using_subcell_v<Metavariables>) {
-      ASSERT(all_neighbor_data_for_reconstruction.has_value(),
-             "Trying to do DG-subcell but the ghost and subcell data for the "
-             "neighbor has not been set.");
-      ghost_and_subcell_data =
-          std::move(all_neighbor_data_for_reconstruction.value()[direction]);
-    }
-
-    const size_t total_neighbors = neighbors.size();
-    // If there are multiple non-conforming neighbors, we only create a single
-    // mortar labeled by the host ElementId.  This is done because the data
-    // from all neighbors will be combined onto a single mortar as it makes no
-    // sense to have multiple mortars between non-conforming Elements.
-    const bool has_multiple_non_conforming_neighbors =
-        total_neighbors > 1 and not neighbors.are_conforming();
-    size_t neighbor_count = 1;
-    for (const auto& neighbor : neighbors) {
-      const auto& orientation = neighbors.orientation(neighbor);
-      const auto direction_from_neighbor = orientation(direction.opposite());
-      const DirectionalId<Dim> mortar_id{
-          direction,
-          has_multiple_non_conforming_neighbors ? element.id() : neighbor};
-      const Mesh<Dim - 1>& mortar_mesh = mortar_meshes.at(mortar_id);
-      auto volume_mesh_for_neighbor = volume_mesh;
-      auto mortar_mesh_for_neighbor = mortar_mesh;
-      DataVector neighbor_boundary_data_on_mortar{};
-      std::optional<InterpolatedBoundaryData<Dim>> interpolated_boundary_data{
-          std::nullopt};
-
-      switch (mortar_info.at(mortar_id).interface_data_policy()) {
-        case InterfaceDataPolicy::CopyProject:
-          [[fallthrough]];
-        case InterfaceDataPolicy::NonconformingNeighborInterpolates:
-          neighbor_boundary_data_on_mortar =
-              *all_mortar_data.at(mortar_id).local().mortar_data.value();
-          break;
-        case InterfaceDataPolicy::OrientCopyProject: {
-          volume_mesh_for_neighbor = orientation(volume_mesh);
-          mortar_mesh_for_neighbor = orient_mesh_on_slice(
-              mortar_mesh, direction.dimension(), orientation);
-          const auto& slice_extents = mortar_mesh.extents();
-          neighbor_boundary_data_on_mortar = orient_variables_on_slice(
-              all_mortar_data.at(mortar_id).local().mortar_data.value(),
-              slice_extents, direction.dimension(), orientation);
-          break;
-        }
-        case InterfaceDataPolicy::NonconformingSelfInterpolates: {
-          if constexpr (Dim > 1) {
-            neighbor_boundary_data_on_mortar =
-                *all_mortar_data.at(mortar_id).local().mortar_data.value();
-            const auto& interpolator =
-                mortar_info.at(mortar_id).interpolator().value();
-            const auto& host_data =
-                *all_mortar_data.at(mortar_id).local().mortar_data.value();
-            // neighbor_boundary_data_on_mortar =
-            //     interpolator.interpolate_to_neighbor(host_data);
-            interpolated_boundary_data = InterpolatedBoundaryData<Dim>{
-                {.data = interpolator.interpolate_to_neighbor(host_data),
-                 .target_mesh = interpolator.neighbor_mortar_mesh(),
-                 .offsets = interpolator.interpolated_neighbor_data_offsets()}};
-          } else {
-            ERROR("Cannot have non-conforming neighbors in 1D");
-          }
-          break;
-        }
-        default:
-          ERROR("InterfaceDataPolicy "
-                << mortar_info.at(mortar_id).interface_data_policy()
-                << " is not handled yet, id = " << mortar_id);
-      }
-
-      const TimeStepId& next_time_step_id =
-          db::get<::Tags::Next<::Tags::TimeStepId>>(*box);
-
-      using SendData = evolution::dg::BoundaryData<Dim>;
-      SendData data{};
-
-      if (neighbor_count == total_neighbors) {
-        data = SendData{volume_mesh_for_neighbor,
-                        ghost_data_mesh,
-                        mortar_mesh_for_neighbor,
-                        std::move(ghost_and_subcell_data),
-                        {std::move(neighbor_boundary_data_on_mortar)},
-                        next_time_step_id,
-                        tci_decision,
-                        integration_order,
-                        interpolated_boundary_data};
-      } else {
-        data = SendData{volume_mesh_for_neighbor,
-                        ghost_data_mesh,
-                        mortar_mesh_for_neighbor,
-                        ghost_and_subcell_data,
-                        {std::move(neighbor_boundary_data_on_mortar)},
-                        next_time_step_id,
-                        tci_decision,
-                        integration_order,
-                        interpolated_boundary_data};
-      }
-
-      // Send mortar data (the `std::tuple` named `data`) to neighbor
-      if constexpr (Parallel::is_dg_element_collection_v<ParallelComponent>) {
-        Parallel::local_synchronous_action<
-            Parallel::Actions::SendDataToElement>(
-            receiver_proxy, cache,
-            evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
-                Dim, UseNodegroupDgElements, ComputeAuxiliary>{},
-            neighbor, time_step_id,
-            std::make_pair(DirectionalId{direction_from_neighbor, element.id()},
-                           std::move(data)));
-      } else {
-        Parallel::receive_data<
-            evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
-                Dim, UseNodegroupDgElements, ComputeAuxiliary>>(
-            receiver_proxy[neighbor], time_step_id,
-            std::make_pair(DirectionalId{direction_from_neighbor, element.id()},
-                           std::move(data)));
-      }
-      ++neighbor_count;
-    }
-  }
 
   // We treat this as a set, but use a map because we don't have a
   // non-allocating set type.

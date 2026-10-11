@@ -13,31 +13,28 @@
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
 #include "Domain/CoordinateMaps/Affine.hpp"
-#include "Domain/FunctionsOfTime/Tags.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.tpp"
 #include "Domain/CoordinateMaps/Identity.hpp"
 #include "Domain/CoordinateMaps/ProductMaps.hpp"
 #include "Domain/CoordinateMaps/ProductMaps.tpp"
 #include "Domain/ElementMap.hpp"
+#include "Domain/FunctionsOfTime/Tags.hpp"
 #include "Domain/Structure/Direction.hpp"
 #include "Domain/Structure/DirectionalIdMap.hpp"
 #include "Domain/Structure/Element.hpp"
 #include "Domain/Structure/ElementId.hpp"
 #include "Evolution/DgSubcell/GhostData.hpp"
 #include "Evolution/Systems/Ccz4/ATilde.hpp"
-#include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
-#include "Evolution/Systems/Ccz4/BoundaryConditions/DirichletAnalytic.hpp"
-#include "Evolution/Systems/Ccz4/BoundaryConditions/Factory.hpp"
-#include "Evolution/Systems/Ccz4/BoundaryConditions/Sommerfeld.hpp"
 #include "Evolution/Systems/Ccz4/Ccz4WrappedGr.hpp"
 #include "Evolution/Systems/Ccz4/Christoffel.hpp"
 #include "Evolution/Systems/Ccz4/DerivChristoffel.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Derivatives.hpp"
-#include "Evolution/Systems/Ccz4/FiniteDifference/UnlimitedDeg4Prim.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Reconstructor.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/SoTimeDerivative.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/UnlimitedDeg4Prim.hpp"
 #include "Evolution/Systems/Ccz4/System.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Framework/TestCreation.hpp"
@@ -48,10 +45,10 @@
 #include "PointwiseFunctions/AnalyticSolutions/GeneralRelativity/GaugePlaneWave.hpp"
 #include "PointwiseFunctions/AnalyticSolutions/GeneralRelativity/KerrSchild.hpp"
 #include "PointwiseFunctions/AnalyticSolutions/GeneralRelativity/Minkowski.hpp"
+#include "PointwiseFunctions/ConstraintDamping/Constant.hpp"
 #include "PointwiseFunctions/GeneralRelativity/DerivativeSpatialMetric.hpp"
 #include "PointwiseFunctions/GeneralRelativity/ExtrinsicCurvature.hpp"
 #include "PointwiseFunctions/GeneralRelativity/Tags.hpp"
-#include "PointwiseFunctions/ConstraintDamping/Constant.hpp"
 #include "PointwiseFunctions/MathFunctions/MathFunction.hpp"
 #include "PointwiseFunctions/MathFunctions/Sinusoid.hpp"
 #include "Time/Tags/Time.hpp"
@@ -62,16 +59,9 @@
 namespace Ccz4::fd {
 namespace {
 
-template <bool EnableSubcell>
 struct DummyEvolutionMetaVars {
   struct SubcellOptions {
-    static constexpr bool subcell_enabled_at_external_boundary = EnableSubcell;
-  };
-  struct factory_creation
-      : tt::ConformsTo<Options::protocols::FactoryCreation> {
-    using factory_classes =
-        tmpl::map<tmpl::pair<BoundaryConditions::BoundaryCondition,
-                             BoundaryConditions::standard_boundary_conditions>>;
+    static constexpr bool subcell_enabled_at_external_boundary = false;
   };
 };
 
@@ -165,11 +155,10 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
       db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
 
   auto box = db::create<db::AddSimpleTags<
-      ::Ccz4::Tags::DampingFunctionKappa1,
-      ::Ccz4::Tags::DampingFunctionKappa2, ::Ccz4::Tags::Kappa3,
-      ::Ccz4::fd::Tags::EvolveLapseAndShift, domain::Tags::Element<SpatialDim>,
-      fd::Tags::Reconstructor,
-      Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<false>>,
+      ::Ccz4::Tags::DampingFunctionKappa1, ::Ccz4::Tags::DampingFunctionKappa2,
+      ::Ccz4::Tags::Kappa3, ::Ccz4::fd::Tags::EvolveLapseAndShift,
+      domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
+      Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
       ::Ccz4::Tags::K0<DataVector>,
       ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
@@ -179,7 +168,6 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
       evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertial<
           SpatialDim>,
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>,
-      domain::Tags::ExternalBoundaryConditions<SpatialDim>,
       evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Inertial>,
       evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Grid>,
       ::Tags::Time, ::domain::Tags::FunctionsOfTime>>(
@@ -187,16 +175,13 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
       evolve_lapse_and_shift, element,
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
-      DummyEvolutionMetaVars<false>{}, evolved_vars, eta, k_0,
+      DummyEvolutionMetaVars{}, evolved_vars, eta, k_0,
       upper_spatial_z4_constraint,
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
-      cell_centered_logical_to_inertial_inv_hessian, all_ghost_data,
-      std::vector<DirectionMap<
-          SpatialDim,
-          std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>{},
-      x, grid_coords, time, std::move(functions_of_time));
+      cell_centered_logical_to_inertial_inv_hessian, all_ghost_data, x,
+      grid_coords, time, std::move(functions_of_time));
   // Check that all time derivatives are 0
   ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
   const auto zero = DataVector(used_for_size.size(), 0.0);
@@ -326,11 +311,10 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
       db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
 
   auto box = db::create<db::AddSimpleTags<
-      ::Ccz4::Tags::DampingFunctionKappa1,
-      ::Ccz4::Tags::DampingFunctionKappa2, ::Ccz4::Tags::Kappa3,
-      ::Ccz4::fd::Tags::EvolveLapseAndShift, domain::Tags::Element<SpatialDim>,
-      fd::Tags::Reconstructor,
-      Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<false>>,
+      ::Ccz4::Tags::DampingFunctionKappa1, ::Ccz4::Tags::DampingFunctionKappa2,
+      ::Ccz4::Tags::Kappa3, ::Ccz4::fd::Tags::EvolveLapseAndShift,
+      domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
+      Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
       ::Ccz4::Tags::K0<DataVector>,
       ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
@@ -340,7 +324,6 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
       evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertial<
           SpatialDim>,
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>,
-      domain::Tags::ExternalBoundaryConditions<SpatialDim>,
       evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Inertial>,
       evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Grid>,
       ::Tags::Time, ::domain::Tags::FunctionsOfTime>>(
@@ -348,16 +331,13 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
       evolve_lapse_and_shift, element,
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
-      DummyEvolutionMetaVars<false>{}, evolved_vars, eta, k_0,
+      DummyEvolutionMetaVars{}, evolved_vars, eta, k_0,
       upper_spatial_z4_constraint,
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
-      cell_centered_logical_to_inertial_inv_hessian, all_ghost_data,
-      std::vector<DirectionMap<
-          SpatialDim,
-          std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>{},
-      x, grid_coords, time, std::move(functions_of_time));
+      cell_centered_logical_to_inertial_inv_hessian, all_ghost_data, x,
+      grid_coords, time, std::move(functions_of_time));
   // Check that all time derivatives are 0
   ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
   const auto zero = DataVector(used_for_size.size(), 0.0);
@@ -516,11 +496,10 @@ void test_gauge_plane_wave(
       db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
 
   auto box = db::create<db::AddSimpleTags<
-      ::Ccz4::Tags::DampingFunctionKappa1,
-      ::Ccz4::Tags::DampingFunctionKappa2, ::Ccz4::Tags::Kappa3,
-      ::Ccz4::fd::Tags::EvolveLapseAndShift, domain::Tags::Element<SpatialDim>,
-      fd::Tags::Reconstructor,
-      Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<false>>,
+      ::Ccz4::Tags::DampingFunctionKappa1, ::Ccz4::Tags::DampingFunctionKappa2,
+      ::Ccz4::Tags::Kappa3, ::Ccz4::fd::Tags::EvolveLapseAndShift,
+      domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
+      Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
       ::Ccz4::Tags::K0<DataVector>,
       ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
@@ -530,7 +509,6 @@ void test_gauge_plane_wave(
       evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertial<
           SpatialDim>,
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>,
-      domain::Tags::ExternalBoundaryConditions<SpatialDim>,
       evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Inertial>,
       evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Grid>,
       ::Tags::Time, ::domain::Tags::FunctionsOfTime>>(
@@ -538,16 +516,13 @@ void test_gauge_plane_wave(
       evolve_lapse_and_shift, element,
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
-      DummyEvolutionMetaVars<false>{}, evolved_vars, eta, k_0,
+      DummyEvolutionMetaVars{}, evolved_vars, eta, k_0,
       upper_spatial_z4_constraint,
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
-      cell_centered_logical_to_inertial_inv_hessian, all_ghost_data,
-      std::vector<DirectionMap<
-          SpatialDim,
-          std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>{},
-      x, grid_coords, time, std::move(functions_of_time));
+      cell_centered_logical_to_inertial_inv_hessian, all_ghost_data, x,
+      grid_coords, time, std::move(functions_of_time));
   // Check all time derivatives
   ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
 
@@ -770,483 +745,40 @@ void test_gauge_plane_wave(
           box);
   CHECK_ITERABLE_CUSTOM_APPROX(dt_b_actual, dt_b_expected, custom_approx);
 
-  // Verify dt of auxiliary and boundary fields is zero
+  // The stored gradients are not evolved.
   const DataVector zero_dt(subcell_mesh.number_of_grid_points(), 0.0);
-  tmpl::for_each<tmpl::append<System::auxiliary_variables_tags,
-                              System::boundary_second_order_tags>>(
-      [&]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
-        const std::string tag_name = db::tag_name<::Tags::dt<Tag>>();
-        CAPTURE(tag_name);
-        for (const auto& component : get<::Tags::dt<Tag>>(box)) {
-          CHECK_ITERABLE_CUSTOM_APPROX(component, zero_dt, custom_approx);
-        }
-      });
-}
-
-
-void test_sommerfeld(
-    const bool evolve_lapse_and_shift,
-    std::unique_ptr<Ccz4::BoundaryConditions::BoundaryCondition>
-        boundary_condition) {
-  const size_t SpatialDim = 3;
-  using FrameType = Frame::Inertial;
-  const size_t points_per_dimension = 5;
-  const Ccz4::fd::UnlimitedDeg4Prim recons{};
-  const size_t ghost_zone_size = recons.ghost_zone_size();
-  const Mesh<SpatialDim> subcell_mesh{points_per_dimension,
-                                      Spectral::Basis::FiniteDifference,
-                                      Spectral::Quadrature::CellCentered};
-
-  const std::array<double, SpatialDim> lower_bound{0.8, 0.7, -2.1};
-  const std::array<double, SpatialDim> upper_bound{1.0, 1.5, -0.9};
-  const std::array<double, SpatialDim> coords_range = upper_bound - lower_bound;
-
-  // Create an element with an external boundary by omitting the last neighbor
-  // in the upper_zeta direction.
-  const Element<SpatialDim> element =
-      TestHelpers::Ccz4::fd::detail::set_element(true);
-
-  // we cannot declare element_map const because it is not copyable into the box
-  // NOLINTNEXTLINE(misc-const-correctness)
-  ElementMap element_map{
-      element.id(),
-      domain::make_coordinate_map<Frame::BlockLogical, Frame::Grid>(
-          Affine3D{Affine{-1., 1., lower_bound[0], upper_bound[0]},
-                   Affine{-1., 1., lower_bound[1], upper_bound[1]},
-                   Affine{-1., 1., lower_bound[2], upper_bound[2]}})
-          .get_clone()};
-
-  const auto grid_to_inertial_map =
-      domain::make_coordinate_map<Frame::Grid, FrameType>(
-          domain::CoordinateMaps::Identity<3>{});
-
-  const auto logical_coords =
-      TestHelpers::Ccz4::fd::detail::set_logical_coordinates(subcell_mesh);
-  const auto x = grid_to_inertial_map(element_map(logical_coords));
-
-  InverseJacobian<DataVector, SpatialDim, Frame::ElementLogical,
-                  Frame::Inertial>
-      cell_centered_logical_to_inertial_inv_jacobian{
-          subcell_mesh.number_of_grid_points(), 0.0};
-  for (size_t i = 0; i < SpatialDim; ++i) {
-    cell_centered_logical_to_inertial_inv_jacobian.get(i, i) =
-        2.0 / gsl::at(coords_range, i);
+  for (const auto& component : get<::Tags::dt<Tags::PotentialGradients>>(box)) {
+    CHECK(component == zero_dt);
   }
 
-  InverseHessian<DataVector, SpatialDim, Frame::ElementLogical, Frame::Inertial>
-      cell_centered_logical_to_inertial_inv_hessian{
-          subcell_mesh.number_of_grid_points(), 0.0};
-
-  // Ghost data from interior neighbors (none for the external face, which is
-  // set by BCs)
-  const DirectionalIdMap<SpatialDim, evolution::dg::subcell::GhostData>
-      all_ghost_data =
-          TestHelpers::Ccz4::fd::detail::compute_ghost_data<Frame::Inertial>(
-              subcell_mesh, x, element.neighbors(), ghost_zone_size,
-              TestHelpers::Ccz4::fd::detail::Minkowski::
-                  compute_prim_solution_for_Minkowski<false>,
-              coords_range);
-
-  // Minkowski evolved variables
-  auto evolved_vars = TestHelpers::Ccz4::fd::detail::Minkowski::
-      compute_prim_solution_for_Minkowski(x);
-
-  const DataVector radial_coords =
-      sqrt(square(get<0>(x)) + square(get<1>(x)) + square(get<2>(x)));
-
-  const DataVector used_for_size(subcell_mesh.number_of_grid_points(),
-                                 std::numeric_limits<double>::signaling_NaN());
-  // set dummy k_0 value to get non-trivial lapse evolution for testing
-  const auto k_0 = make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
-  const auto eta = make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
-  const auto upper_spatial_z4_constraint =
-      make_with_value<tnsr::I<DataVector, 3>>(
-          used_for_size, std::numeric_limits<double>::signaling_NaN());
-
-  std::unique_ptr<ConstraintDamping::DampingFunction<3, Frame::Grid>>
-      kappa_1_fn =
-          std::make_unique<ConstraintDamping::Constant<3, Frame::Grid>>(0.1);
-  std::unique_ptr<ConstraintDamping::DampingFunction<3, Frame::Grid>>
-      kappa_2_fn =
-          std::make_unique<ConstraintDamping::Constant<3, Frame::Grid>>(0.2);
-  const double kappa_3 = 0.3;
-  // Grid coords = Inertial coords for identity grid-to-inertial map
-  tnsr::I<DataVector, SpatialDim, Frame::Grid> grid_coords(
-      subcell_mesh.number_of_grid_points());
-  for (size_t i = 0; i < SpatialDim; ++i) {
-    grid_coords.get(i) = x.get(i);
-  }
-
-  using dt_variables_tag =
-      db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
-
-  // Provide BC on the external face (upper_zeta)
-  std::vector<DirectionMap<
-      SpatialDim,
-      std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>
-      external_bcs_per_block(1);
-  external_bcs_per_block[0][Direction<SpatialDim>::upper_zeta()] =
-      std::move(boundary_condition);
-
-  // NOLINTNEXTLINE(misc-const-correctness)
-  std::unordered_map<std::string,
-                     std::unique_ptr<domain::FunctionsOfTime::FunctionOfTime>>
-      functions_of_time{};
-
-  auto box = db::create<db::AddSimpleTags<
-      ::Ccz4::Tags::DampingFunctionKappa1,
-      ::Ccz4::Tags::DampingFunctionKappa2, ::Ccz4::Tags::Kappa3,
-      ::Ccz4::fd::Tags::EvolveLapseAndShift, domain::Tags::Element<SpatialDim>,
-      fd::Tags::Reconstructor,
-      Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<true>>,
-      Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
-      ::Ccz4::Tags::K0<DataVector>,
-      ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
-      evolution::dg::subcell::Tags::Mesh<SpatialDim>,
-      evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
-          SpatialDim>,
-      evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertial<
-          SpatialDim>,
-      evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>,
-      domain::Tags::ExternalBoundaryConditions<SpatialDim>,
-      evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Inertial>,
-      evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Grid>,
-      ::Tags::Time, domain::Tags::FunctionsOfTime,
-      domain::Tags::ElementMap<SpatialDim, Frame::Grid>,
-      domain::CoordinateMaps::Tags::CoordinateMap<SpatialDim, Frame::Grid,
-                                                  Frame::Inertial>>>(
-      std::move(kappa_1_fn), std::move(kappa_2_fn), kappa_3,
-      evolve_lapse_and_shift, element,
-      std::unique_ptr<Ccz4::fd::Reconstructor>{
-          std::make_unique<std::decay_t<decltype(recons)>>(recons)},
-      DummyEvolutionMetaVars<true>{}, evolved_vars, eta, k_0,
-      upper_spatial_z4_constraint,
-      Variables<typename dt_variables_tag::tags_list>{
-          subcell_mesh.number_of_grid_points()},
-      subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
-      cell_centered_logical_to_inertial_inv_hessian, all_ghost_data,
-      std::move(external_bcs_per_block), x, grid_coords, 0.0,
-      std::move(functions_of_time), std::move(element_map),
-      grid_to_inertial_map.get_clone());
-
-  ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
-
-  const size_t num_pts = subcell_mesh.number_of_grid_points();
-  const size_t num_face_pts = subcell_mesh.extents(0) * subcell_mesh.extents(1);
-
-  // Compute r on the upper zeta slice
-  const size_t num_unaffected_pts = num_pts - num_face_pts;
-  DataVector r_affected{};
-  make_const_view<DataVector>(make_not_null(&r_affected), radial_coords,
-                              num_unaffected_pts, num_face_pts);
-
-  {
-    // Points not in upper zeta slice should be unaffected (zero dt for
-    // Minkowski)
-    const auto unaffected_expected = DataVector(num_pts - num_face_pts, 0.0);
-    const auto& dt_lapse = get<::Tags::dt<gr::Tags::Lapse<DataVector>>>(box);
-
-    DataVector unaffected_actual{};
-    make_const_view<DataVector>(make_not_null(&unaffected_actual),
-                                get(dt_lapse), 0, num_unaffected_pts);
-    CHECK_ITERABLE_APPROX(unaffected_actual, unaffected_expected);
-
-    DataVector affected_actual{};
-    make_const_view<DataVector>(make_not_null(&affected_actual), get(dt_lapse),
-                                num_unaffected_pts, num_face_pts);
-    // Points in upper zeta slice has expected dt = -1/r for lapse in Minkowski
-    const DataVector affected_expected = -1.0 / r_affected;
-    CHECK_ITERABLE_APPROX(affected_actual, affected_expected);
-  }
-
-  {
-    // Points not in upper zeta slice should be unaffected (zero dt for
-    // Minkowski)
-    const auto unaffected_expected = DataVector(num_pts - num_face_pts, 0.0);
-    const auto& dt_conformal_factor =
-        get<::Tags::dt<::Ccz4::Tags::ConformalFactor<DataVector>>>(box);
-
-    DataVector unaffected_actual{};
-    make_const_view<DataVector>(make_not_null(&unaffected_actual),
-                                get(dt_conformal_factor), 0,
-                                num_unaffected_pts);
-    CHECK_ITERABLE_APPROX(unaffected_actual, unaffected_expected);
-
-    DataVector affected_actual{};
-    make_const_view<DataVector>(make_not_null(&affected_actual),
-                                get(dt_conformal_factor), num_unaffected_pts,
-                                num_face_pts);
-    // Points in upper zeta slice has expected dt = -1/r for conformal factor in
-    // Minkowski
-    const DataVector affected_expected = -1.0 / r_affected;
-    CHECK_ITERABLE_APPROX(affected_actual, affected_expected);
-  }
-
-  {
-    // Points not in upper zeta slice should be unaffected (zero dt for
-    // Minkowski)
-    const auto unaffected_expected = DataVector(num_pts - num_face_pts, 0.0);
-    const auto& dt_conformal_metric =
-        get<::Tags::dt<::Ccz4::Tags::ConformalMetric<DataVector, SpatialDim>>>(
-            box);
-    for (size_t i = 0; i < SpatialDim; ++i) {
-      for (size_t j = 0; j < SpatialDim; ++j) {
-        DataVector unaffected_actual{};
-        make_const_view<DataVector>(make_not_null(&unaffected_actual),
-                                    dt_conformal_metric.get(i, j), 0,
-                                    num_unaffected_pts);
-        CHECK_ITERABLE_APPROX(unaffected_actual, unaffected_expected);
-
-        DataVector affected_actual{};
-        make_const_view<DataVector>(make_not_null(&affected_actual),
-                                    dt_conformal_metric.get(i, j),
-                                    num_unaffected_pts, num_face_pts);
-        // Points in upper zeta slice has expected dt = -1/r for diagonal in
-        // Minkowski
-        const DataVector affected_expected =
-            (i == j) ? (-1.0 / r_affected) : DataVector(num_face_pts, 0.0);
-        CHECK_ITERABLE_APPROX(affected_actual, affected_expected);
-      }
-    }
-  }
-
-  // all other evolved variables must have zero dt everywhere
-  {
-    const Approx custom_approx = Approx::custom().epsilon(1.0e-13).scale(1.0);
-    const DataVector all_expected{num_pts, 0.0};
-    tmpl::for_each<Ccz4::fd::System::variables_tag_list>(
-        [&]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
-          // Skip variables already checked above: lapse, conformal factor,
-          // conformal metric
-          if constexpr (std::is_same_v<Tag, gr::Tags::Lapse<DataVector>> ||
-                        std::is_same_v<
-                            Tag, ::Ccz4::Tags::ConformalFactor<DataVector>> ||
-                        std::is_same_v<Tag, ::Ccz4::Tags::ConformalMetric<
-                                                DataVector, SpatialDim>>) {
-            return;
-          }
-          const std::string tag_name = db::tag_name<::Tags::dt<Tag>>();
-          CAPTURE(tag_name);
-          for (auto& component : get<::Tags::dt<Tag>>(box)) {
-            // dt_theta and dt_trace_extrinsic_curvature are slightly non-zero
-            // which is likely due to round-off error.
-            CHECK_ITERABLE_CUSTOM_APPROX(component, all_expected,
-                                         custom_approx);
-          }
-        });
-  }
-
-  // now change the lapse to some dummy values to test the radial deriv term in
-  // Sommerfeld BC
+  // The right-hand side does not depend on the stored gradients, in the
+  // volume or in the ghost data: poisoning them with (finite) values leaves
+  // it bitwise unchanged.
+  const auto dt_vars = get<dt_variables_tag>(box);
   db::mutate<
-      Ccz4::fd::System::variables_tag, ::Ccz4::Tags::K0<DataVector>,
+      Ccz4::fd::System::variables_tag,
       evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>>(
-      [&](const auto evolved_var_ptr, const auto k_0_ptr,
-          const auto all_ghost_data_ptr) {
-        get(get<gr::Tags::Lapse<DataVector>>(*evolved_var_ptr)) = get<0>(x);
-        get(*k_0_ptr) = DataVector(num_pts, 1.0);
-        *all_ghost_data_ptr =
-            TestHelpers::Ccz4::fd::detail::compute_ghost_data<Frame::Inertial>(
-                subcell_mesh, x, element.neighbors(), ghost_zone_size,
-                TestHelpers::Ccz4::fd::detail::Minkowski::
-                    compute_prim_solution_for_Minkowski<true>,
-                coords_range);
+      [](const auto evolved_vars_ptr, const auto ghost_data_ptr) {
+        for (auto& component :
+             get<Tags::PotentialGradients>(*evolved_vars_ptr)) {
+          component = 3.0e3;
+        }
+        for (auto& id_and_ghost_data : *ghost_data_ptr) {
+          DataVector& data =
+              id_and_ghost_data.second.neighbor_ghost_data_for_reconstruction();
+          using GhostVariables = Variables<System::variables_tag_list>;
+          REQUIRE(data.size() %
+                      GhostVariables::number_of_independent_components ==
+                  0);
+          GhostVariables view{data.data(), data.size()};
+          for (auto& component : get<Tags::PotentialGradients>(view)) {
+            component = -7.0e2;
+          }
+        }
       },
       make_not_null(&box));
-
   ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
-
-  {
-    // Points not in upper zeta slice should be unaffected (value dependent on
-    // evolve_lapse_and_shift)
-    DataVector dt_lapse_expected = -2.0 * get<0>(x) / radial_coords;
-    for (size_t i = 0; i < num_unaffected_pts; ++i) {
-      dt_lapse_expected[i] = evolve_lapse_and_shift ? 2.0 * get<0>(x)[i] : 0.0;
-    }
-    DataVector dt_lapse_unaffected_expected{};
-    make_const_view<DataVector>(make_not_null(&dt_lapse_unaffected_expected),
-                                dt_lapse_expected, 0, num_unaffected_pts);
-
-    const auto& dt_lapse = get<::Tags::dt<gr::Tags::Lapse<DataVector>>>(box);
-
-    DataVector unaffected_actual{};
-    make_const_view<DataVector>(make_not_null(&unaffected_actual),
-                                get(dt_lapse), 0, num_unaffected_pts);
-    CHECK_ITERABLE_APPROX(unaffected_actual, dt_lapse_unaffected_expected);
-
-    DataVector affected_actual{};
-    make_const_view<DataVector>(make_not_null(&affected_actual), get(dt_lapse),
-                                num_unaffected_pts, num_face_pts);
-    // Points in upper zeta slice has expected dt = -2*x/r for dummy lapse in
-    // Minkowski
-    DataVector dt_lapse_affected_expected{};
-    make_const_view<DataVector>(make_not_null(&dt_lapse_affected_expected),
-                                dt_lapse_expected, num_unaffected_pts,
-                                num_face_pts);
-    CHECK_ITERABLE_APPROX(affected_actual, dt_lapse_affected_expected);
-  }
-}
-
-void test_dirichlet_analytic_bc(const bool evolve_lapse_and_shift) {
-  const size_t SpatialDim = 3;
-  using FrameType = Frame::Inertial;
-  const size_t points_per_dimension = 5;
-  const Ccz4::fd::UnlimitedDeg4Prim recons{};
-  const size_t ghost_zone_size = recons.ghost_zone_size();
-  const Mesh<SpatialDim> subcell_mesh{points_per_dimension,
-                                      Spectral::Basis::FiniteDifference,
-                                      Spectral::Quadrature::CellCentered};
-
-  const std::array<double, SpatialDim> lower_bound{0.8, 0.7, -2.1};
-  const std::array<double, SpatialDim> upper_bound{1.0, 1.5, -0.9};
-  const std::array<double, SpatialDim> coords_range = upper_bound - lower_bound;
-
-  // Create an element with an external boundary by omitting the last neighbor
-  // in the upper_zeta direction.
-  const Element<SpatialDim> element =
-      TestHelpers::Ccz4::fd::detail::set_element(true);
-
-  // we cannot declare element_map const because it is not copyable into the box
-  // NOLINTNEXTLINE(misc-const-correctness)
-  ElementMap element_map{
-      element.id(),
-      domain::make_coordinate_map<Frame::BlockLogical, Frame::Grid>(
-          Affine3D{Affine{-1., 1., lower_bound[0], upper_bound[0]},
-                   Affine{-1., 1., lower_bound[1], upper_bound[1]},
-                   Affine{-1., 1., lower_bound[2], upper_bound[2]}})
-          .get_clone()};
-
-  const auto grid_to_inertial_map =
-      domain::make_coordinate_map<Frame::Grid, FrameType>(
-          domain::CoordinateMaps::Identity<3>{});
-
-  const auto logical_coords =
-      TestHelpers::Ccz4::fd::detail::set_logical_coordinates(subcell_mesh);
-  const auto x = grid_to_inertial_map(element_map(logical_coords));
-
-  InverseJacobian<DataVector, SpatialDim, Frame::ElementLogical,
-                  Frame::Inertial>
-      cell_centered_logical_to_inertial_inv_jacobian{
-          subcell_mesh.number_of_grid_points(), 0.0};
-  for (size_t i = 0; i < SpatialDim; ++i) {
-    cell_centered_logical_to_inertial_inv_jacobian.get(i, i) =
-        2.0 / gsl::at(coords_range, i);
-  }
-
-  InverseHessian<DataVector, SpatialDim, Frame::ElementLogical, Frame::Inertial>
-      cell_centered_logical_to_inertial_inv_hessian{
-          subcell_mesh.number_of_grid_points(), 0.0};
-
-  // Ghost data from interior neighbors (none for the external face, which is
-  // set by BCs)
-  const DirectionalIdMap<SpatialDim, evolution::dg::subcell::GhostData>
-      all_ghost_data =
-          TestHelpers::Ccz4::fd::detail::compute_ghost_data<Frame::Inertial>(
-              subcell_mesh, x, element.neighbors(), ghost_zone_size,
-              TestHelpers::Ccz4::fd::detail::Minkowski::
-                  compute_prim_solution_for_Minkowski<false>,
-              coords_range);
-
-  // Minkowski evolved variables
-  auto evolved_vars = TestHelpers::Ccz4::fd::detail::Minkowski::
-      compute_prim_solution_for_Minkowski(x);
-
-  const DataVector used_for_size(subcell_mesh.number_of_grid_points(),
-                                 std::numeric_limits<double>::signaling_NaN());
-  // set dummy k_0 value to get non-trivial lapse evolution for testing
-  const auto k_0 = make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
-  const auto eta = make_with_value<Scalar<DataVector>>(used_for_size, 0.0);
-  const auto upper_spatial_z4_constraint =
-      make_with_value<tnsr::I<DataVector, 3>>(
-          used_for_size, std::numeric_limits<double>::signaling_NaN());
-
-  std::unique_ptr<ConstraintDamping::DampingFunction<3, Frame::Grid>>
-      kappa_1_fn =
-          std::make_unique<ConstraintDamping::Constant<3, Frame::Grid>>(0.1);
-  std::unique_ptr<ConstraintDamping::DampingFunction<3, Frame::Grid>>
-      kappa_2_fn =
-          std::make_unique<ConstraintDamping::Constant<3, Frame::Grid>>(0.2);
-  const double kappa_3 = 0.3;
-  // Grid coords = Inertial coords for identity grid-to-inertial map
-  tnsr::I<DataVector, SpatialDim, Frame::Grid> grid_coords(
-      subcell_mesh.number_of_grid_points());
-  for (size_t i = 0; i < SpatialDim; ++i) {
-    grid_coords.get(i) = x.get(i);
-  }
-
-  using dt_variables_tag =
-      db::add_tag_prefix<::Tags::dt, Ccz4::fd::System::variables_tag>;
-
-  // Provide BC on the external face (upper_zeta)
-  std::vector<DirectionMap<
-      SpatialDim,
-      std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>>>
-      external_bcs_per_block(1);
-  external_bcs_per_block[0][Direction<SpatialDim>::upper_zeta()] =
-      std::make_unique<Ccz4::BoundaryConditions::DirichletAnalytic>(
-          std::make_unique<
-              Ccz4::Solutions::Ccz4WrappedGr<gr::Solutions::Minkowski<3>>>(
-              Ccz4::Solutions::Ccz4WrappedGr<gr::Solutions::Minkowski<3>>{}));
-
-  // NOLINTNEXTLINE(misc-const-correctness)
-  std::unordered_map<std::string,
-                     std::unique_ptr<domain::FunctionsOfTime::FunctionOfTime>>
-      functions_of_time{};
-
-  auto box = db::create<db::AddSimpleTags<
-      ::Ccz4::Tags::DampingFunctionKappa1,
-      ::Ccz4::Tags::DampingFunctionKappa2, ::Ccz4::Tags::Kappa3,
-      ::Ccz4::fd::Tags::EvolveLapseAndShift, domain::Tags::Element<SpatialDim>,
-      fd::Tags::Reconstructor,
-      Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars<true>>,
-      Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
-      ::Ccz4::Tags::K0<DataVector>,
-      ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
-      evolution::dg::subcell::Tags::Mesh<SpatialDim>,
-      evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<
-          SpatialDim>,
-      evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertial<
-          SpatialDim>,
-      evolution::dg::subcell::Tags::GhostDataForReconstruction<SpatialDim>,
-      domain::Tags::ExternalBoundaryConditions<SpatialDim>,
-      evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Inertial>,
-      evolution::dg::subcell::Tags::Coordinates<SpatialDim, Frame::Grid>,
-      ::Tags::Time, domain::Tags::FunctionsOfTime,
-      domain::Tags::ElementMap<SpatialDim, Frame::Grid>,
-      domain::CoordinateMaps::Tags::CoordinateMap<SpatialDim, Frame::Grid,
-                                                  Frame::Inertial>>>(
-      std::move(kappa_1_fn), std::move(kappa_2_fn), kappa_3,
-      evolve_lapse_and_shift, element,
-      std::unique_ptr<Ccz4::fd::Reconstructor>{
-          std::make_unique<std::decay_t<decltype(recons)>>(recons)},
-      DummyEvolutionMetaVars<true>{}, evolved_vars, eta, k_0,
-      upper_spatial_z4_constraint,
-      Variables<typename dt_variables_tag::tags_list>{
-          subcell_mesh.number_of_grid_points()},
-      subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
-      cell_centered_logical_to_inertial_inv_hessian, all_ghost_data,
-      std::move(external_bcs_per_block), x, grid_coords, 0.0,
-      std::move(functions_of_time), std::move(element_map),
-      grid_to_inertial_map.get_clone());
-
-  ::Ccz4::fd::SoTimeDerivative::apply(make_not_null(&box));
-
-  {
-    const size_t num_pts = subcell_mesh.number_of_grid_points();
-    const Approx custom_approx = Approx::custom().epsilon(1.0e-13).scale(1.0);
-    const DataVector all_expected{num_pts, 0.0};
-    tmpl::for_each<Ccz4::fd::System::variables_tag_list>(
-        [&]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
-          const std::string tag_name = db::tag_name<::Tags::dt<Tag>>();
-          CAPTURE(tag_name);
-          for (auto& component : get<::Tags::dt<Tag>>(box)) {
-            // dt_theta and dt_trace_extrinsic_curvature are slightly non-zero
-            // which is likely due to round-off error.
-            CHECK_ITERABLE_CUSTOM_APPROX(component, all_expected,
-                                         custom_approx);
-          }
-        });
-  }
+  CHECK(get<dt_variables_tag>(box) == dt_vars);
 }
 
 void test() {
@@ -1266,15 +798,6 @@ void test() {
       std::make_unique<MathFunctions::Sinusoid<1, Frame::Inertial>>(0.6, 0.8,
                                                                     2.0),
       0.4, false);
-
-  // Run Diridchlet BC test
-  test_dirichlet_analytic_bc(true);
-  test_dirichlet_analytic_bc(false);
-  // Run Sommerfeld BC test
-  test_sommerfeld(true,
-                  std::make_unique<Ccz4::BoundaryConditions::Sommerfeld>(2));
-  test_sommerfeld(false,
-                  std::make_unique<Ccz4::BoundaryConditions::Sommerfeld>(2));
 }
 }  // namespace
 

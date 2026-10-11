@@ -9,10 +9,9 @@
 #include "NumericalAlgorithms/LinearOperators/Filters/SphericalShell.tpp"
 
 namespace {
-// The full CCZ4 evolved-variables list (9 original + 4 LDG auxiliary + 4
-// boundary second-order fields). Taken from the system so the instantiated
-// types are guaranteed to match the executable's
-// `system::variables_tag::tags_list`.
+// The full CCZ4 evolved-variables list (9 physical fields + the stored
+// gradients). Taken from the system so the instantiated types are guaranteed
+// to match the executable's `system::variables_tag::tags_list`.
 using tags_for_filter = Ccz4::fd::System::variables_tag_list;
 }  // namespace
 

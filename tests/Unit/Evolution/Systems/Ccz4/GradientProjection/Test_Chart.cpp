@@ -238,16 +238,31 @@ void test_divided_differences(const gsl::not_null<std::mt19937*> gen) {
   CHECK(gp::sinhc(0.0) == 1.0);
 }
 
+gp::PotentialVector add(const gp::PotentialVector& a,
+                        const gp::PotentialVector& b, const double factor) {
+  gp::PotentialVector result{};
+  for (size_t i = 0; i < result.size(); ++i) {
+    gsl::at(result, i) = gsl::at(a, i) + factor * gsl::at(b, i);
+  }
+  return result;
+}
+
 // R, its inverse P and the potential derivative R_u against the archived
 // model functions (complex-step Jacobian for R_u), for the Gamma-driver
-// parameter f.
-void test_potential_rhs(const gsl::not_null<std::mt19937*> gen,
-                        const double f) {
+// parameter f and physical conformal factors in `phi_range`. Independently of
+// the physical-phi reference: R against the frozen log(phi) right-hand side
+// (R_phi = phi R_log(phi) with q_log(phi) = q_phi / phi), R_u against central
+// differences of R itself, L P = I with the production L, and the explicit
+// conformal-factor rows of L, E and R_u.
+void test_potential_rhs(const gsl::not_null<std::mt19937*> gen, const double f,
+                        const std::array<double, 2>& phi_range) {
   for (size_t sample = 0; sample < 12; ++sample) {
-    const auto state =
-        helpers::random_state(gen, sample < 4 ? 0.0 : 0.3, 0.3, 0.2);
+    const auto state = helpers::random_state(gen, sample < 4 ? 0.0 : 0.3, 0.3,
+                                             0.2, {{0.4, 1.5}}, phi_range);
     const gp::LogMetricChart chart{
         gp::stf_decode(&state.u[gp::PotentialIndex::log_metric])};
+    const double phi = state.u[gp::PotentialIndex::conformal_factor];
+    const double lapse = state.u[gp::PotentialIndex::lapse];
     const gp::PotentialVector rhs =
         gp::potential_rhs(chart, state.u, state.w, state.q, f);
     const DataVector expected = pypp::call<DataVector>(
@@ -255,6 +270,22 @@ void test_potential_rhs(const gsl::not_null<std::mt19937*> gen,
         to_data_vector(state.w), to_data_vector(state.q), f);
     for (size_t a = 0; a < gp::number_of_potentials; ++a) {
       CHECK(gsl::at(rhs, a) == approx(expected[a]).epsilon(1e-13));
+    }
+    // The frozen log(phi) right-hand side at the same state.
+    gp::PotentialVector u_log = state.u;
+    u_log[gp::PotentialIndex::conformal_factor] = std::log(phi);
+    gp::GradientVector q_log = state.q;
+    for (size_t i = 0; i < 3; ++i) {
+      gsl::at(q_log, i)[gp::PotentialIndex::conformal_factor] /= phi;
+    }
+    const DataVector log_rhs = pypp::call<DataVector>(
+        module, "original_rhs_log", to_data_vector(u_log),
+        to_data_vector(state.w), to_data_vector(q_log), f);
+    for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+      const double scaled_log_rhs = a == gp::PotentialIndex::conformal_factor
+                                        ? phi * log_rhs[a]
+                                        : log_rhs[a];
+      CHECK(gsl::at(rhs, a) == approx(scaled_log_rhs).epsilon(1e-13));
     }
 
     // L P = I and Z P = 0, where L y = R(u, y, 0).
@@ -264,7 +295,7 @@ void test_potential_rhs(const gsl::not_null<std::mt19937*> gen,
       component = normal(*gen);
     }
     const gp::VelocityVector inverse =
-        gp::apply_rhs_inverse(state.u[gp::PotentialIndex::lapse], delta, f);
+        gp::apply_rhs_inverse(lapse, phi, delta, f);
     const gp::PotentialVector l_p =
         gp::potential_rhs(chart, state.u, inverse, gp::GradientVector{}, f);
     for (size_t a = 0; a < gp::number_of_potentials; ++a) {
@@ -283,10 +314,32 @@ void test_potential_rhs(const gsl::not_null<std::mt19937*> gen,
       CHECK(gsl::at(inverse, a) == approx(recovered[a]).epsilon(1e-13));
     }
 
-    // R_u against a complex-step Jacobian.
+    // The conformal-factor rows: L maps delta K to alpha phi delta K / 3, E
+    // has the advection coefficient beta^i and the shift-divergence
+    // coefficient -phi / 3.
+    gp::VelocityVector unit_k{};
+    unit_k[gp::VelocityIndex::trace_extrinsic_curvature] = 1.0;
+    CHECK(gp::potential_rhs(chart, state.u, unit_k, gp::GradientVector{},
+                            f)[gp::PotentialIndex::conformal_factor] ==
+          approx(lapse * phi / 3.0));
+    for (size_t i = 0; i < 3; ++i) {
+      gp::GradientVector unit_q_phi{};
+      gsl::at(unit_q_phi, i)[gp::PotentialIndex::conformal_factor] = 1.0;
+      CHECK(gp::potential_rhs(chart, state.u, gp::VelocityVector{}, unit_q_phi,
+                              f)[gp::PotentialIndex::conformal_factor] ==
+            approx(gsl::at(state.u, gp::PotentialIndex::shift + i)));
+      gp::GradientVector unit_divergence{};
+      gsl::at(gsl::at(unit_divergence, i), gp::PotentialIndex::shift + i) = 1.0;
+      CHECK(gp::potential_rhs(
+                chart, state.u, gp::VelocityVector{}, unit_divergence,
+                f)[gp::PotentialIndex::conformal_factor] == approx(-phi / 3.0));
+    }
+
+    // R_u against a complex-step Jacobian and central differences of R.
     const DataVector jacobian = pypp::call<DataVector>(
         module, "rhs_potential_jacobian", to_data_vector(state.u),
         to_data_vector(state.w), to_data_vector(state.q), f);
+    const double step = 1.0e-6;
     for (size_t direction = 0; direction < gp::number_of_potentials;
          ++direction) {
       gp::PotentialVector delta_u{};
@@ -294,11 +347,45 @@ void test_potential_rhs(const gsl::not_null<std::mt19937*> gen,
       const gp::PotentialVector derivative =
           gp::potential_rhs_potential_derivative(chart, state.u, state.w,
                                                  state.q, delta_u);
+      const gp::PotentialVector u_plus = add(state.u, delta_u, step);
+      const gp::PotentialVector u_minus = add(state.u, delta_u, -step);
+      const gp::PotentialVector difference =
+          add(gp::potential_rhs(gp::LogMetricChart{gp::stf_decode(
+                                    &u_plus[gp::PotentialIndex::log_metric])},
+                                u_plus, state.w, state.q, f),
+              gp::potential_rhs(gp::LogMetricChart{gp::stf_decode(
+                                    &u_minus[gp::PotentialIndex::log_metric])},
+                                u_minus, state.w, state.q, f),
+              -1.0);
       for (size_t a = 0; a < gp::number_of_potentials; ++a) {
         CHECK(gsl::at(derivative, a) ==
               approx(jacobian[10 * a + direction]).epsilon(1e-12));
+        CHECK(gsl::at(derivative, a) ==
+              approx(gsl::at(difference, a) / (2.0 * step))
+                  .epsilon(1e-8)
+                  .scale(1.0));
       }
     }
+    // The conformal-factor row of R_u: delta phi (alpha K - d) / 3 +
+    // phi K delta alpha / 3 + delta beta^i q_{phi,i}.
+    const double trace_k =
+        state.w[gp::VelocityIndex::trace_extrinsic_curvature];
+    double divergence = 0.0;
+    for (size_t i = 0; i < 3; ++i) {
+      divergence += gsl::at(gsl::at(state.q, i), gp::PotentialIndex::shift + i);
+    }
+    gp::PotentialVector unit_phi{};
+    unit_phi[gp::PotentialIndex::conformal_factor] = 1.0;
+    CHECK(gp::potential_rhs_potential_derivative(
+              chart, state.u, state.w, state.q,
+              unit_phi)[gp::PotentialIndex::conformal_factor] ==
+          approx((lapse * trace_k - divergence) / 3.0));
+    gp::PotentialVector unit_lapse{};
+    unit_lapse[gp::PotentialIndex::lapse] = 1.0;
+    CHECK(gp::potential_rhs_potential_derivative(
+              chart, state.u, state.w, state.q,
+              unit_lapse)[gp::PotentialIndex::conformal_factor] ==
+          approx(phi * trace_k / 3.0));
   }
 }
 
@@ -308,8 +395,7 @@ void test_chart_from_physical(const gsl::not_null<std::mt19937*> gen) {
       gp::stf_decode(&state.u[gp::PotentialIndex::log_metric])};
   gp::PhysicalPointState physical{};
   physical.conformal_metric = chart.metric();
-  physical.conformal_factor =
-      std::exp(state.u[gp::PotentialIndex::log_conformal_factor]);
+  physical.conformal_factor = state.u[gp::PotentialIndex::conformal_factor];
   physical.a_tilde =
       0.5 * chart.tangent(gp::stf_decode(&state.w[gp::VelocityIndex::a]));
   physical.trace_extrinsic_curvature =
@@ -332,6 +418,8 @@ void test_chart_from_physical(const gsl::not_null<std::mt19937*> gen) {
   for (size_t a = 0; a < gp::number_of_potentials; ++a) {
     CHECK(gsl::at(u, a) == approx(gsl::at(state.u, a)));
   }
+  // The conformal factor itself is the potential.
+  CHECK(u[gp::PotentialIndex::conformal_factor] == physical.conformal_factor);
   for (size_t a = 0; a < gp::number_of_velocities; ++a) {
     CHECK(gsl::at(w, a) == approx(gsl::at(state.w, a)));
   }
@@ -369,7 +457,9 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.GradientProjection.Chart",
   test_divided_differences(make_not_null(&gen));
   for (const double f : {1.0, 0.5, 1.25}) {
     CAPTURE(f);
-    test_potential_rhs(make_not_null(&gen), f);
+    test_potential_rhs(make_not_null(&gen), f, {{0.6, 1.3}});
   }
+  // Small conformal factors exercise the 1 / phi of P.
+  test_potential_rhs(make_not_null(&gen), 1.0, {{0.02, 0.1}});
   test_chart_from_physical(make_not_null(&gen));
 }

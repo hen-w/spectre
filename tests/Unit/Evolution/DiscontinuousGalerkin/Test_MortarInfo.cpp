@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <optional>
 
+#include "Domain/CoordinateMaps/Distribution.hpp"
 #include "Domain/Creators/NonconformingSphericalShells.hpp"
 #include "Domain/Domain.hpp"
 #include "Evolution/DiscontinuousGalerkin/InterfaceDataPolicy.hpp"
@@ -60,7 +61,11 @@ SPECTRE_TEST_CASE("Unit.Evolution.DG.MortarInfo", "[Unit][Evolution]") {
   test<1>({{}}, std::nullopt);
   test<2>({{Spectral::SegmentSize::Full}}, std::nullopt);
   const auto creator = domain::creators::NonconformingSphericalShells(
-      2.0, 3.0, 4.0, {}, {}, 0, 0, 5, 8, 11,
+      2.0, 3.0, 4.0, {}, {},
+      std::array<std::vector<domain::CoordinateMaps::Distribution>, 2>{
+          {{domain::CoordinateMaps::Distribution::Linear},
+           {domain::CoordinateMaps::Distribution::Linear}}},
+      0, 0, 5, 8, 11,
       domain::creators::NonconformingSphericalShells_detail::Excision{},
       // The pre-refactor creator hardcoded equiangular wedge maps.
       true, nullptr);

@@ -33,40 +33,42 @@ constexpr const char* module = "GradientProjectionReference";
 struct ElementData {
   helpers::Geometry geometry;
   gp::LocalOperators operators;
-  gp::Tags::ChartU::type u;
-  gp::Tags::ChartW::type w;
-  gp::Tags::ChartQ::type q;
-  gp::Tags::ChartU::type dt_u;
-  gp::Tags::ChartW::type dt_w;
-  gp::Tags::ChartQ::type dt_q;
+  helpers::ChartData chart{0};
+  gp::Tags::PotentialGradients::type q;
+  gp::Tags::PotentialRateTarget::type dt_u;
+  gp::Tags::VelocityTarget::type dt_w;
+  gp::Tags::GradientTarget::type dt_q;
 };
 
-// Random admissible chart fields with q = D u, and random targets.
+// Random admissible chart fields with q = D u, and random targets, with
+// physical conformal factors in `phi_range`.
 ElementData make_element(const gsl::not_null<std::mt19937*> gen,
-                         const bool curved) {
+                         const bool curved,
+                         const std::array<double, 2>& phi_range = {
+                             {0.6, 1.3}}) {
   ElementData result{};
   result.geometry = helpers::make_geometry({{4, 4, 4}}, curved);
   result.operators =
       gp::LocalOperators{result.geometry.mesh, result.geometry.inverse_jacobian,
                          result.geometry.det_inverse_jacobian};
   const size_t n = result.geometry.mesh.number_of_grid_points();
-  result.u = gp::Tags::ChartU::type{n};
-  result.w = gp::Tags::ChartW::type{n};
-  result.q = gp::Tags::ChartQ::type{n};
-  result.dt_u = gp::Tags::ChartU::type{n};
-  result.dt_w = gp::Tags::ChartW::type{n};
-  result.dt_q = gp::Tags::ChartQ::type{n};
+  result.chart = helpers::ChartData{n};
+  result.q = gp::Tags::PotentialGradients::type{n};
+  result.dt_u = gp::Tags::PotentialRateTarget::type{n};
+  result.dt_w = gp::Tags::VelocityTarget::type{n};
+  result.dt_q = gp::Tags::GradientTarget::type{n};
+  gp::Tags::PotentialRateTarget::type u{n};
   for (size_t s = 0; s < n; ++s) {
-    const auto state = helpers::random_state(gen, 0.3, 0.3, 0.3);
-    gp::set_potentials_at(make_not_null(&result.u), s, state.u);
-    gp::set_velocities_at(make_not_null(&result.w), s, state.w);
+    const auto state =
+        helpers::random_state(gen, 0.3, 0.3, 0.3, {{0.4, 1.5}}, phi_range);
+    result.chart.set(s, state.u, state.w);
+    gp::set_potentials_at(make_not_null(&u), s, state.u);
     const auto targets = helpers::random_state(gen, 1.0, 1.0, 1.0);
     gp::set_potentials_at(make_not_null(&result.dt_u), s, targets.u);
     gp::set_velocities_at(make_not_null(&result.dt_w), s, targets.w);
     gp::set_gradients_at(make_not_null(&result.dt_q), s, targets.q);
   }
-  gp::potential_gradients(make_not_null(&result.q), result.u,
-                          result.geometry.mesh,
+  gp::potential_gradients(make_not_null(&result.q), u, result.geometry.mesh,
                           result.geometry.inverse_jacobian);
   return result;
 }
@@ -88,32 +90,33 @@ Scalar<DataVector> varying_eta(const helpers::Geometry& geometry) {
 }
 
 struct ChartRates {
-  gp::Tags::ChartU::type u_rate;
-  gp::Tags::ChartW::type w_rate;
-  gp::Tags::ChartQ::type fitted_gradient;
+  gp::Tags::PotentialRateTarget::type u_rate;
+  gp::Tags::VelocityTarget::type w_rate;
+  gp::Tags::GradientTarget::type fitted_gradient;
 };
 
 ChartRates chart_rates(const ElementData& data,
-                       const gp::Tags::ChartW::type& dt_w_target,
+                       const gp::Tags::VelocityTarget::type& dt_w_target,
                        const Scalar<DataVector>& eta, const double f) {
   const size_t n = data.geometry.mesh.number_of_grid_points();
-  ChartRates result{gp::Tags::ChartU::type{n}, gp::Tags::ChartW::type{n},
-                    gp::Tags::ChartQ::type{n}};
+  ChartRates result{gp::Tags::PotentialRateTarget::type{n},
+                    gp::Tags::VelocityTarget::type{n},
+                    gp::Tags::GradientTarget::type{n}};
   gp::finalized_chart_rates(
       make_not_null(&result.u_rate), make_not_null(&result.w_rate),
-      make_not_null(&result.fitted_gradient), data.u, data.w, data.q, data.dt_u,
-      dt_w_target, data.dt_q, data.geometry.mesh,
-      data.geometry.inverse_jacobian, data.operators, eta, f);
+      make_not_null(&result.fitted_gradient), data.chart.potentials(),
+      data.chart.velocities(), data.q, data.dt_u, dt_w_target, data.dt_q,
+      data.geometry.mesh, data.geometry.inverse_jacobian, data.operators, eta,
+      f);
   return result;
 }
 
 // The velocity target with the volume source -eta b of the b rate.
-gp::Tags::ChartW::type with_volume_damping(const ElementData& data,
-                                           const Scalar<DataVector>& eta) {
-  gp::Tags::ChartW::type result = data.dt_w;
+gp::Tags::VelocityTarget::type with_volume_damping(
+    const ElementData& data, const Scalar<DataVector>& eta) {
+  gp::Tags::VelocityTarget::type result = data.dt_w;
   for (size_t i = 0; i < 3; ++i) {
-    result.get(gp::VelocityIndex::b + i) -=
-        get(eta) * data.w.get(gp::VelocityIndex::b + i);
+    result.get(gp::VelocityIndex::b + i) -= get(eta) * data.chart.b.get(i);
   }
   return result;
 }
@@ -128,18 +131,13 @@ double max_abs(const VectorExpression& x) {
 // compatibility terms. Also checks Z P = 0 and the mean of the fit. R, L, E_i
 // and P are those of the Gamma-driver parameter f.
 void test_compatibility(const gsl::not_null<std::mt19937*> gen,
-                        const bool curved, const double f) {
-  const ElementData data = make_element(gen, curved);
+                        const bool curved, const double f,
+                        const std::array<double, 2>& phi_range) {
+  const ElementData data = make_element(gen, curved, phi_range);
   const size_t n = data.geometry.mesh.number_of_grid_points();
-  gp::Tags::ChartU::type u_rate{n};
-  gp::Tags::ChartW::type w_rate{n};
-  gp::Tags::ChartQ::type fitted_gradient{n};
   // The identity holds without the fitted shift damping (eta = 0).
-  gp::finalized_chart_rates(make_not_null(&u_rate), make_not_null(&w_rate),
-                            make_not_null(&fitted_gradient), data.u, data.w,
-                            data.q, data.dt_u, data.dt_w, data.dt_q,
-                            data.geometry.mesh, data.geometry.inverse_jacobian,
-                            data.operators, Scalar<DataVector>{n, 0.0}, f);
+  const auto [u_rate, w_rate, fitted_gradient] =
+      chart_rates(data, data.dt_w, Scalar<DataVector>{n, 0.0}, f);
   // The fit fixes the mass-weighted mean of the potential rate.
   for (size_t a = 0; a < gp::number_of_potentials; ++a) {
     CHECK(data.operators.mean(u_rate.get(a)) ==
@@ -157,8 +155,8 @@ void test_compatibility(const gsl::not_null<std::mt19937*> gen,
 
   double largest_control_defect = 0.0;
   for (size_t s = 0; s < n; ++s) {
-    const auto u = gp::potentials_at(data.u, s);
-    const auto w = gp::velocities_at(data.w, s);
+    const auto u = gp::potentials_at(data.chart.potentials(), s);
+    const auto w = gp::velocities_at(data.chart.velocities(), s);
     const auto q = gp::gradients_at(data.q, s);
     const auto r = gp::potentials_at(u_rate, s);
     const auto w_t = gp::velocities_at(w_rate, s);
@@ -193,11 +191,11 @@ void test_compatibility(const gsl::not_null<std::mt19937*> gen,
                    gsl::at(w_target, gp::VelocityIndex::b + i)));
     }
     // Control: without R_u (R - r) the identity fails.
-    const auto missing =
-        gp::apply_rhs_inverse(u[gp::PotentialIndex::lapse],
-                              gp::potential_rhs_potential_derivative(
-                                  chart, u, w, q, add(rhs, r, -1.0)),
-                              f);
+    const auto missing = gp::apply_rhs_inverse(
+        u[gp::PotentialIndex::lapse], u[gp::PotentialIndex::conformal_factor],
+        gp::potential_rhs_potential_derivative(chart, u, w, q,
+                                               add(rhs, r, -1.0)),
+        f);
     gp::VelocityVector w_t_control = w_t;
     for (size_t a = 0; a < gp::number_of_velocities; ++a) {
       gsl::at(w_t_control, a) -= gsl::at(missing, a);
@@ -222,7 +220,7 @@ void test_representable_targets(const gsl::not_null<std::mt19937*> gen,
                                 const double f) {
   ElementData data = make_element(gen, true);
   const size_t n = data.geometry.mesh.number_of_grid_points();
-  gp::Tags::ChartU::type exact{n};
+  gp::Tags::PotentialRateTarget::type exact{n};
   for (size_t s = 0; s < n; ++s) {
     gp::set_potentials_at(make_not_null(&exact), s,
                           helpers::random_state(gen, 1.0, 1.0, 1.0).u);
@@ -232,31 +230,25 @@ void test_representable_targets(const gsl::not_null<std::mt19937*> gen,
   for (size_t a = 0; a < gp::number_of_potentials; ++a) {
     data.dt_u.get(a) = exact.get(a);
   }
-  gp::Tags::ChartU::type u_rate{n};
-  gp::Tags::ChartW::type w_rate{n};
-  gp::Tags::ChartQ::type fitted_gradient{n};
-  gp::finalized_chart_rates(make_not_null(&u_rate), make_not_null(&w_rate),
-                            make_not_null(&fitted_gradient), data.u, data.w,
-                            data.q, data.dt_u, data.dt_w, data.dt_q,
-                            data.geometry.mesh, data.geometry.inverse_jacobian,
-                            data.operators, Scalar<DataVector>{n, 0.0}, f);
+  const auto [u_rate, w_rate, fitted_gradient] =
+      chart_rates(data, data.dt_w, Scalar<DataVector>{n, 0.0}, f);
   for (size_t a = 0; a < gp::number_of_potentials; ++a) {
     CHECK_ITERABLE_CUSTOM_APPROX(u_rate.get(a), exact.get(a),
                                  Approx::custom().epsilon(1e-10).scale(1.0));
   }
   for (size_t s = 0; s < n; ++s) {
-    const auto u = gp::potentials_at(data.u, s);
-    const auto w = gp::velocities_at(data.w, s);
+    const auto u = gp::potentials_at(data.chart.potentials(), s);
+    const auto w = gp::velocities_at(data.chart.velocities(), s);
     const auto q = gp::gradients_at(data.q, s);
     const gp::LogMetricChart chart{
         gp::stf_decode(&u[gp::PotentialIndex::log_metric])};
-    const auto expected =
-        gp::apply_rhs_inverse(u[gp::PotentialIndex::lapse],
-                              gp::potential_rhs_potential_derivative(
-                                  chart, u, w, q,
-                                  add(gp::potential_rhs(chart, u, w, q, f),
-                                      gp::potentials_at(exact, s), -1.0)),
-                              f);
+    const auto expected = gp::apply_rhs_inverse(
+        u[gp::PotentialIndex::lapse], u[gp::PotentialIndex::conformal_factor],
+        gp::potential_rhs_potential_derivative(
+            chart, u, w, q,
+            add(gp::potential_rhs(chart, u, w, q, f),
+                gp::potentials_at(exact, s), -1.0)),
+        f);
     for (size_t a = 0; a < gp::number_of_velocities; ++a) {
       CHECK(w_rate.get(a)[s] ==
             approx(data.dt_w.get(a)[s] + gsl::at(expected, a))
@@ -285,21 +277,31 @@ void test_physical_rates(const gsl::not_null<std::mt19937*> gen,
   Scalar<DataVector> dt_lapse{n};
   tnsr::I<DataVector, 3> dt_shift{n};
   tnsr::I<DataVector, 3> dt_b{n};
+  const auto& chart_data = data.chart;
   gp::FinalizeTimeDerivative::apply(
       make_not_null(&dt_g), make_not_null(&dt_phi), make_not_null(&dt_a_tilde),
       make_not_null(&dt_k), make_not_null(&dt_theta),
       make_not_null(&dt_gamma_hat), make_not_null(&dt_lapse),
-      make_not_null(&dt_shift), make_not_null(&dt_b), data.u, data.w, data.q,
-      data.dt_u, data.dt_w, data.dt_q, data.geometry.mesh,
-      data.geometry.inverse_jacobian, data.operators, eta);
+      make_not_null(&dt_shift), make_not_null(&dt_b),
+      chart_data.conformal_metric, chart_data.conformal_factor,
+      chart_data.a_tilde, chart_data.trace_extrinsic_curvature,
+      chart_data.theta, chart_data.gamma_hat, chart_data.lapse,
+      chart_data.shift, chart_data.b, data.q, data.dt_u, data.dt_w, data.dt_q,
+      data.geometry.mesh, data.geometry.inverse_jacobian, data.operators, eta);
+  // The chart rates of the exact chart fields; the mutator recomputes H and
+  // a from the physical fields, which agree to rounding.
   const auto [u_rate, w_rate, fitted_gradient] =
       chart_rates(data, data.dt_w, eta, ::Ccz4::fd::System::f);
+  const auto custom = Approx::custom().epsilon(1e-11).scale(1.0);
   // The b rates of the mutator carry the fitted shift damping of eta: they
   // match the chart rates of eta at every point and, when damped, differ from
   // those of eta = 0.
   for (size_t i = 0; i < 3; ++i) {
-    CHECK(dt_b.get(i) == w_rate.get(gp::VelocityIndex::b + i));
-    CHECK(dt_gamma_hat.get(i) == w_rate.get(gp::VelocityIndex::gamma_hat + i));
+    CHECK_ITERABLE_CUSTOM_APPROX(dt_b.get(i),
+                                 w_rate.get(gp::VelocityIndex::b + i), custom);
+    CHECK_ITERABLE_CUSTOM_APPROX(dt_gamma_hat.get(i),
+                                 w_rate.get(gp::VelocityIndex::gamma_hat + i),
+                                 custom);
   }
   if (damped) {
     const ChartRates without_correction = chart_rates(
@@ -309,8 +311,8 @@ void test_physical_rates(const gsl::not_null<std::mt19937*> gen,
           0.1);
   }
   for (size_t s = 0; s < n; s += 5) {
-    const auto u = gp::potentials_at(data.u, s);
-    const auto w = gp::velocities_at(data.w, s);
+    const auto u = gp::potentials_at(chart_data.potentials(), s);
+    const auto w = gp::velocities_at(chart_data.velocities(), s);
     const auto r = gp::potentials_at(u_rate, s);
     const auto w_t = gp::velocities_at(w_rate, s);
     const gp::Matrix3 h = gp::stf_decode(&u[gp::PotentialIndex::log_metric]);
@@ -355,17 +357,20 @@ void test_physical_rates(const gsl::not_null<std::mt19937*> gen,
           approx(rhs(0, 0) + rhs(1, 1) + rhs(2, 2))
               .epsilon(1e-11)
               .scale(1.0 + helpers::max_abs(lhs)));
+    // The fitted conformal-factor rate is the physical rate itself.
     CHECK(get(dt_phi)[s] ==
-          approx(std::exp(u[gp::PotentialIndex::log_conformal_factor]) *
-                 r[gp::PotentialIndex::log_conformal_factor]));
-    CHECK(get(dt_lapse)[s] == r[gp::PotentialIndex::lapse]);
-    CHECK(get(dt_k)[s] == w_t[gp::VelocityIndex::trace_extrinsic_curvature]);
-    CHECK(get(dt_theta)[s] == w_t[gp::VelocityIndex::theta]);
+          approx(r[gp::PotentialIndex::conformal_factor]).epsilon(1e-11));
+    CHECK(get(dt_lapse)[s] ==
+          approx(r[gp::PotentialIndex::lapse]).epsilon(1e-11));
+    CHECK(get(dt_k)[s] ==
+          approx(w_t[gp::VelocityIndex::trace_extrinsic_curvature])
+              .epsilon(1e-11)
+              .scale(1.0));
+    CHECK(get(dt_theta)[s] ==
+          approx(w_t[gp::VelocityIndex::theta]).epsilon(1e-11).scale(1.0));
     for (size_t i = 0; i < 3; ++i) {
-      CHECK(dt_shift.get(i)[s] == gsl::at(r, gp::PotentialIndex::shift + i));
-      CHECK(dt_gamma_hat.get(i)[s] ==
-            gsl::at(w_t, gp::VelocityIndex::gamma_hat + i));
-      CHECK(dt_b.get(i)[s] == gsl::at(w_t, gp::VelocityIndex::b + i));
+      CHECK(dt_shift.get(i)[s] ==
+            approx(gsl::at(r, gp::PotentialIndex::shift + i)).epsilon(1e-11));
     }
   }
 }
@@ -391,8 +396,8 @@ void test_fitted_shift_damping(const gsl::not_null<std::mt19937*> gen,
   for (size_t i = 0; i < 3; ++i) {
     const DataVector& r_beta =
         undamped.u_rate.get(gp::PotentialIndex::shift + i);
-    const DataVector& b = data.w.get(gp::VelocityIndex::b + i);
-    CHECK(max_abs(b - data.w.get(gp::VelocityIndex::gamma_hat + i)) > 0.1);
+    const DataVector& b = data.chart.b.get(i);
+    CHECK(max_abs(b - data.chart.gamma_hat.get(i)) > 0.1);
     CHECK(max_abs(r_beta - f * b) > 0.1);
     CHECK(std::abs(data.operators.mean(r_beta)) > 0.5);
   }
@@ -427,8 +432,7 @@ void test_fitted_shift_damping(const gsl::not_null<std::mt19937*> gen,
         CHECK(max_abs(difference +
                       get(eta) * data.dt_u.get(gp::PotentialIndex::shift + i) /
                           f) > 0.1);
-        CHECK(max_abs(difference +
-                      get(eta) * data.w.get(gp::VelocityIndex::b + i)) > 0.1);
+        CHECK(max_abs(difference + get(eta) * data.chart.b.get(i)) > 0.1);
       }
     }
   }
@@ -458,7 +462,7 @@ void test_shift_damping_limits(const gsl::not_null<std::mt19937*> gen,
         chart_rates(data, with_volume_damping(data, eta), eta, f);
     for (size_t i = 0; i < 3; ++i) {
       CHECK(max_abs(damped.u_rate.get(gp::PotentialIndex::shift + i)) == 0.0);
-      CHECK(max_abs(data.w.get(gp::VelocityIndex::b + i)) > 0.1);
+      CHECK(max_abs(data.chart.b.get(i)) > 0.1);
       CHECK_ITERABLE_CUSTOM_APPROX(
           damped.w_rate.get(gp::VelocityIndex::b + i),
           undamped.w_rate.get(gp::VelocityIndex::b + i),
@@ -468,12 +472,11 @@ void test_shift_damping_limits(const gsl::not_null<std::mt19937*> gen,
 
   // Continuum compatible: the shift-rate targets are the element gradients
   // and mean of f b, which the fit reproduces.
-  gp::Tags::ChartU::type compatible{n, 0.0};
+  gp::Tags::PotentialRateTarget::type compatible{n, 0.0};
   for (size_t i = 0; i < 3; ++i) {
-    compatible.get(gp::PotentialIndex::shift + i) =
-        f * data.w.get(gp::VelocityIndex::b + i);
+    compatible.get(gp::PotentialIndex::shift + i) = f * data.chart.b.get(i);
   }
-  gp::Tags::ChartQ::type compatible_gradient{n};
+  gp::Tags::GradientTarget::type compatible_gradient{n};
   gp::potential_gradients(make_not_null(&compatible_gradient), compatible,
                           data.geometry.mesh, data.geometry.inverse_jacobian);
   for (size_t i = 0; i < 3; ++i) {
@@ -495,7 +498,7 @@ void test_shift_damping_limits(const gsl::not_null<std::mt19937*> gen,
           Approx::custom().epsilon(1e-10).scale(1.0));
       const DataVector unchanged_source =
           undamped.w_rate.get(gp::VelocityIndex::b + i) -
-          get(eta) * data.w.get(gp::VelocityIndex::b + i);
+          get(eta) * data.chart.b.get(i);
       CHECK_ITERABLE_CUSTOM_APPROX(damped.w_rate.get(gp::VelocityIndex::b + i),
                                    unchanged_source,
                                    Approx::custom().epsilon(1e-9).scale(1.0));
@@ -513,8 +516,10 @@ SPECTRE_TEST_CASE(
   MAKE_GENERATOR(gen);
   for (const double f : {1.0, 0.5, 1.25}) {
     CAPTURE(f);
-    test_compatibility(make_not_null(&gen), false, f);
-    test_compatibility(make_not_null(&gen), true, f);
+    test_compatibility(make_not_null(&gen), false, f, {{0.6, 1.3}});
+    test_compatibility(make_not_null(&gen), true, f, {{0.6, 1.3}});
+    // Small conformal factors exercise the 1 / phi of P.
+    test_compatibility(make_not_null(&gen), true, f, {{0.03, 0.1}});
     test_representable_targets(make_not_null(&gen), f);
     for (const bool curved : {false, true}) {
       CAPTURE(curved);

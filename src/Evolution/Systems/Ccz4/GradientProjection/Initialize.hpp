@@ -15,9 +15,15 @@
 #include "Domain/CoordinateMaps/Tags.hpp"
 #include "Domain/ElementMap.hpp"
 #include "Domain/FunctionsOfTime/Tags.hpp"
+#include "Domain/Structure/Element.hpp"
 #include "Domain/Tags.hpp"
 #include "Domain/TagsTimeDependent.hpp"
+#include "Evolution/DgSubcell/ActiveGrid.hpp"
+#include "Evolution/DgSubcell/Tags/ActiveGrid.hpp"
+#include "Evolution/DgSubcell/Tags/Coordinates.hpp"
+#include "Evolution/DiscontinuousGalerkin/UsingSubcell.hpp"
 #include "Evolution/Initialization/InitialData.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/LocalOperators.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/System.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Tags.hpp"
@@ -37,7 +43,8 @@
 namespace Ccz4::GradientProjection {
 /*!
  * \brief Initialization mutator that builds the static per-element
- * `LocalOperators`.
+ * `LocalOperators` and adds the (empty) right-hand-side target buffer
+ * `Tags::RhsTargets`, which every right-hand side evaluation fills.
  *
  * It is an `ERROR` if the grid-to-inertial map is time dependent, since the
  * cached operators are valid only for a static mesh.
@@ -46,9 +53,9 @@ struct InitializeLocalOperators {
   using const_global_cache_tags = tmpl::list<>;
   using mutable_global_cache_tags = tmpl::list<>;
   using simple_tags_from_options = tmpl::list<>;
-  using simple_tags = tmpl::list<Tags::LocalOperators>;
+  using simple_tags = tmpl::list<Tags::LocalOperators, Tags::RhsTargets>;
   using compute_tags = tmpl::list<>;
-  using return_tags = simple_tags;
+  using return_tags = tmpl::list<Tags::LocalOperators>;
   using argument_tags = tmpl::list<
       domain::Tags::Mesh<3>,
       domain::Tags::InverseJacobian<3, Frame::ElementLogical, Frame::Inertial>,
@@ -68,13 +75,15 @@ struct InitializeLocalOperators {
 namespace Actions {
 /*!
  * \brief Set the physical fields from the analytic initial data and zero the
- * chart scratch fields.
+ * stored gradients, on the active grid (the DG grid, or with DG-subcell the
+ * subcell grid of elements using finite differences).
  *
  * \details This replaces `evolution::Initialization::Actions::SetVariables`,
- * which would request the chart scratch fields from the initial data. The
- * chart fields are zeroed (rather than left uninitialized) because generic
- * actions such as `RandomizeVariables` operate on the whole evolved
- * `Variables`; they are overwritten before every use.
+ * which would request the gradients from the initial data (with DG-subcell,
+ * `SetSubcellGrid` must therefore not set the variables). The gradients are
+ * zeroed (rather than left uninitialized) because generic actions such as
+ * `RandomizeVariables` operate on the whole evolved `Variables`; they are
+ * overwritten before every use.
  */
 struct SetInitialData {
   using simple_tags_from_options = tmpl::list<::Tags::Time>;
@@ -92,14 +101,23 @@ struct SetInitialData {
         tmpl::at<typename Metavariables::factory_creation::factory_classes,
                  evolution::initial_data::InitialData>;
     const double initial_time = db::get<::Tags::Time>(box);
+    const auto& logical_coords =
+        [&box]() -> const tnsr::I<DataVector, 3, Frame::ElementLogical>& {
+      if constexpr (evolution::dg::using_subcell_v<Metavariables>) {
+        if (db::get<evolution::dg::subcell::Tags::ActiveGrid>(box) ==
+            evolution::dg::subcell::ActiveGrid::Subcell) {
+          return db::get<evolution::dg::subcell::Tags::Coordinates<
+              3, Frame::ElementLogical>>(box);
+        }
+      }
+      return db::get<domain::Tags::Coordinates<3, Frame::ElementLogical>>(box);
+    }();
     const auto inertial_coords =
         db::get<::domain::CoordinateMaps::Tags::CoordinateMap<3, Frame::Grid,
                                                               Frame::Inertial>>(
-            box)(
-            db::get<::domain::Tags::ElementMap<3, Frame::Grid>>(box)(
-                db::get<domain::Tags::Coordinates<3, Frame::ElementLogical>>(
-                    box)),
-            initial_time, db::get<::domain::Tags::FunctionsOfTime>(box));
+            box)(db::get<::domain::Tags::ElementMap<3, Frame::Grid>>(box)(
+                     logical_coords),
+                 initial_time, db::get<::domain::Tags::FunctionsOfTime>(box));
     using variables_tag = typename System::variables_tag;
     call_with_dynamic_type<void, derived_classes>(
         &db::get<evolution::initial_data::Tags::InitialData>(box),
@@ -122,6 +140,55 @@ struct SetInitialData {
                 "initial data.");
           }
         });
+    return {Parallel::AlgorithmExecution::Continue, std::nullopt};
+  }
+};
+
+/*!
+ * \brief On elements using finite differences, check that the options the
+ * DG-FD coupling requires are set.
+ *
+ * \details The gradients that finite-difference elements send to their DG
+ * neighbors (`ComputeFiniteDifferenceGradients`) require the volume to be on
+ * the algebraic-constraint surface, which
+ * `Ccz4::fd::Tags::ConstrainedEvolution` enforces at the start of each
+ * finite-difference right-hand side, and the DG elements always evolve the
+ * lapse and shift
+ * (`Ccz4::fd::Tags::EvolveLapseAndShift`). It is an `ERROR` if either option
+ * is `false` on an element whose active grid is the subcell grid. Elements
+ * using DG do not depend on these options. The active grid is fixed at
+ * initialization (there is no troubled-cell indicator), so the check is done
+ * once, after `evolution::dg::subcell::Actions::SetSubcellGrid`.
+ */
+struct CheckFiniteDifferenceOptions {
+  template <typename DbTagsList, typename... InboxTags, typename Metavariables,
+            typename ArrayIndex, typename ActionList,
+            typename ParallelComponent>
+  static Parallel::iterable_action_return_t apply(
+      db::DataBox<DbTagsList>& box,
+      const tuples::TaggedTuple<InboxTags...>& /*inboxes*/,
+      const Parallel::GlobalCache<Metavariables>& /*cache*/,
+      const ArrayIndex& /*array_index*/, ActionList /*meta*/,
+      const ParallelComponent* const /*meta*/) {
+    static_assert(evolution::dg::using_subcell_v<Metavariables>,
+                  "CheckFiniteDifferenceOptions is only used with DG-subcell.");
+    if (db::get<evolution::dg::subcell::Tags::ActiveGrid>(box) ==
+        evolution::dg::subcell::ActiveGrid::Subcell) {
+      const auto& element_id = db::get<domain::Tags::Element<3>>(box).id();
+      if (not db::get<::Ccz4::fd::Tags::ConstrainedEvolution>(box)) {
+        ERROR("Element " << element_id
+                         << " uses finite differences, which in the CCZ4 "
+                            "gradient-projection DG-FD scheme require "
+                            "ConstrainedEvolution: true.");
+      }
+      if (not db::get<::Ccz4::fd::Tags::EvolveLapseAndShift>(box)) {
+        ERROR("Element " << element_id
+                         << " uses finite differences, which in the CCZ4 "
+                            "gradient-projection DG-FD scheme require "
+                            "EvolveLapseAndShift: true (the DG elements always "
+                            "evolve the lapse and shift).");
+      }
+    }
     return {Parallel::AlgorithmExecution::Continue, std::nullopt};
   }
 };

@@ -16,6 +16,7 @@
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
 #include "DataStructures/VariablesTag.hpp"
+#include "Domain/CoordinateMaps/Distribution.hpp"
 #include "Domain/CreateInitialElement.hpp"
 #include "Domain/Creators/NonconformingSphericalShells.hpp"
 #include "Domain/Creators/RegisterDerivedWithCharm.hpp"
@@ -425,7 +426,11 @@ template <bool LocalTimeStepping>
 void test_nonconforming_blocks() {
   INFO("NonconformingSphericalShells");
   const auto creator = domain::creators::NonconformingSphericalShells(
-      2.0, 3.0, 4.0, {}, {}, 0, 0, 5, 7, 11,
+      2.0, 3.0, 4.0, {}, {},
+      std::array<std::vector<domain::CoordinateMaps::Distribution>, 2>{
+          {{domain::CoordinateMaps::Distribution::Linear},
+           {domain::CoordinateMaps::Distribution::Linear}}},
+      0, 0, 5, 7, 11,
       domain::creators::NonconformingSphericalShells_detail::Excision{},
       // The pre-refactor creator hardcoded equiangular wedge maps.
       true, nullptr);

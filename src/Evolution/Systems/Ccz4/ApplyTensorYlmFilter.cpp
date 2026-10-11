@@ -716,8 +716,7 @@ using ccz4_evolved_vars_list = ::Ccz4::fd::System::variables_tag_list;
 // The filter operates in place through a non-owning view over the
 // leading block of the full evolved Variables, so the 9 filtered
 // (original) variables must be the first 9 tags of the evolved list,
-// in the same order. The trailing LDG auxiliary and boundary
-// second-order variables are never touched.
+// in the same order. The trailing stored gradients are never touched.
 template <typename FullList>
 using leading_nine_tags = tmpl::list<
     tmpl::at_c<FullList, 0>, tmpl::at_c<FullList, 1>, tmpl::at_c<FullList, 2>,

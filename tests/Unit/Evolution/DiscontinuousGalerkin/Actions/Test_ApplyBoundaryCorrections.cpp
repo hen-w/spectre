@@ -21,6 +21,7 @@
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
 #include "DataStructures/VariablesTag.hpp"
+#include "Domain/CoordinateMaps/Distribution.hpp"
 #include "Domain/Creators/NonconformingSphericalShells.hpp"
 #include "Domain/Creators/RegisterDerivedWithCharm.hpp"
 #include "Domain/Creators/Tags/Domain.hpp"
@@ -1383,6 +1384,9 @@ void test_deterministic_mortar_interpolation() {
       2.9,
       std::vector<double>{},
       std::vector<double>{},
+      std::array<std::vector<domain::CoordinateMaps::Distribution>, 2>{
+          {{domain::CoordinateMaps::Distribution::Linear},
+           {domain::CoordinateMaps::Distribution::Linear}}},
       size_t{0},
       size_t{0},
       size_t{2},
