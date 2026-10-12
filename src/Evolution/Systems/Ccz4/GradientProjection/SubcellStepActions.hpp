@@ -37,7 +37,7 @@ namespace Ccz4::GradientProjection {
  *   inbox, compute the gradients for their DG neighbors
  *   (`Actions::ComputeFiniteDifferenceGradients`), exchange the physical
  *   fields and the gradients, and take the finite-difference step with
- *   `Ccz4::fd::SoTimeDerivative`, followed by the Kreiss-Oliger filter.
+ *   `Ccz4::fd::SoTimeDerivative` and same-time Kreiss-Oliger dissipation.
  *
  * Every element sends both exchanges to all its neighbors; how they are
  * consumed depends only on the receiver's method.
@@ -75,11 +75,11 @@ using subcell_step_actions = tmpl::flatten<tmpl::list<
     // subcell actions
     evolution::dg::subcell::fd::Actions::TakeTimeStep<
         ::Ccz4::fd::SoTimeDerivative>,
+    ::Actions::MutateApply<::Ccz4::fd::AddKreissOligerDissipation>,
     ::Actions::MutateApply<::Ccz4::fd::EnforceTracelessDtConformalMetric>,
     ::Actions::MutateApply<RecordTimeStepperData<System>>,
     evolution::Actions::RunEventsAndDenseTriggers<tmpl::list<>>,
     ::Actions::MutateApply<UpdateU<System, false>>,
-    ::Actions::MutateApply<::Ccz4::fd::ApplyFilter>,
     ::Actions::MutateApply<CleanHistory<System>>,
     ::Actions::Label<evolution::dg::subcell::Actions::Labels::EndOfSolvers>>>;
 }  // namespace Ccz4::GradientProjection

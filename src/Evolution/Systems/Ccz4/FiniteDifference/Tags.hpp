@@ -59,7 +59,10 @@ struct KreissOligerEpsilon {
   using type = double;
 
   static constexpr Options::String help = {
-      "The epsilon parameter for Kreiss-Oliger dissipation."};
+      "Nominal per-full-step strength of sixth-order Kreiss-Oliger "
+      "dissipation. The RHS coefficient is epsilon divided by the signed "
+      "full time step (the saved evolution step during self-start). "
+      "The explicit time-stepper stability restriction also applies."};
   using group = ::Ccz4::OptionTags::Ccz4Group;
 };
 

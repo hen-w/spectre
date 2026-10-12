@@ -26,10 +26,9 @@ source -eta b of the b rate by -eta r_beta / f with the complete fitted shift
 rate r_beta.
 """
 
+import GradientProjectionReference as reference
 import numpy as np
 from numpy.polynomial import legendre
-
-import GradientProjectionReference as reference
 
 _EYE = np.eye(3)
 _STF = np.zeros((5, 3, 3))
@@ -113,7 +112,9 @@ def _background_symbol(f, phi, alpha, beta):
         ]
     )
     d = normals[0][13:23, :13]
-    e = np.array([normals[0][13:23, 13 + 10 * j : 23 + 10 * j] for j in range(3)])
+    e = np.array(
+        [normals[0][13:23, 13 + 10 * j : 23 + 10 * j] for j in range(3)]
+    )
     return c, b, d, e
 
 
@@ -223,9 +224,7 @@ def _along(axis, operator, identities):
     return np.kron(ops[2], np.kron(ops[1], ops[0]))
 
 
-def generator(
-    widths, kappa, eta, f, elements_x=1, points=3, background=None
-):
+def generator(widths, kappa, eta, f, elements_x=1, points=3, background=None):
     """The operator for elements of the given widths, `elements_x` of them
     along x, about Minkowski space or about the constant state
     `background = (phi, alpha, beta)`."""
@@ -474,10 +473,11 @@ def linearized_rates_on_mesh(
                 - u[:, element, ids]
             )
         factor = 1.0 if internal else external_factor
+        scalar_penalty = 1.0 if internal else 0.0
         for k in range(len(ids)):
             a_n = _normal_matrix(c, b, d, e, face["normal"][k])
             correction = a_n @ jump[:, k] + factor * (
-                _absolute(a_n, f) @ jump[:, k] + jump[:, k]
+                _absolute(a_n, f) @ jump[:, k] + scalar_penalty * jump[:, k]
             )
             target[:, element, ids[k]] += 0.5 * face["lift"][k] * correction
             if internal:

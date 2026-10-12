@@ -3,7 +3,9 @@
 
 #include "Framework/TestingFramework.hpp"
 
+#include <cmath>
 #include <cstddef>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -28,19 +30,25 @@
 #include "Framework/TestHelpers.hpp"
 #include "Helpers/Evolution/Systems/Ccz4/PrimReconstructor.hpp"
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
+#include "Time/Slab.hpp"
+#include "Time/TimeStepId.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/TMPL.hpp"
 
 namespace {
 template <size_t Dim>
-void set_polynomial(
+void set_profile(
     const gsl::not_null<std::vector<DataVector>*> vars_ptr,
     const tnsr::I<DataVector, Dim, Frame::ElementLogical>& local_logical_coords,
-    const size_t degree) {
+    const size_t degree, const double wave_number = 0.0) {
   for (auto& var : *vars_ptr) {
     var = 0.0;
     for (size_t i = 0; i < Dim; ++i) {
-      var += pow(local_logical_coords.get(i), degree);
+      if (wave_number == 0.0) {
+        var += pow(local_logical_coords.get(i), degree);
+      } else {
+        var += sin(wave_number * local_logical_coords.get(i));
+      }
     }
   }
 }
@@ -53,7 +61,8 @@ void set_solution(
         neighbor_data,
     const Mesh<3>& mesh,
     const tnsr::I<DataVector, 3, Frame::ElementLogical>& logical_coords,
-    const size_t deriv_order, const size_t degree) {
+    const size_t deriv_order, const size_t degree,
+    const double wave_number = 0.0) {
   const auto set_data_vectors = [](const gsl::not_null<std::vector<DataVector>*>
                                        local_dvs,
                                    const auto local_vars) {
@@ -97,7 +106,7 @@ void set_solution(
 
   std::vector<DataVector> vars(25);
   set_data_vectors(make_not_null(&vars), volume_vars);
-  set_polynomial(&vars, logical_coords, degree);
+  set_profile(&vars, logical_coords, degree, wave_number);
 
   for (const auto& direction : Direction<3>::all_directions()) {
     auto neighbor_logical_coords = logical_coords;
@@ -105,11 +114,11 @@ void set_solution(
         direction.sign() * 2.0;
     std::vector<DataVector> neighbor_dvs(25);
     Variables<::Ccz4::fd::System::variables_tag_list> neighbor_vars{
-        mesh.number_of_grid_points()};
+        mesh.number_of_grid_points(), 7.0};
 
     set_data_vectors(make_not_null(&neighbor_dvs),
                      make_not_null(&neighbor_vars));
-    set_polynomial(&neighbor_dvs, neighbor_logical_coords, degree);
+    set_profile(&neighbor_dvs, neighbor_logical_coords, degree, wave_number);
 
     const auto sliced_data = evolution::dg::subcell::detail::slice_data_impl(
         gsl::make_span(neighbor_vars), mesh.extents(), deriv_order / 2 + 1,
@@ -124,135 +133,137 @@ void set_solution(
   }
 }
 
-void test(const bool evolve_lapse_and_shift) {
-  const size_t points_per_dimension = 6;
-  const Mesh<3> subcell_mesh{points_per_dimension,
-                             Spectral::Basis::FiniteDifference,
-                             Spectral::Quadrature::CellCentered};
-  const auto logical_coords =
-      TestHelpers::Ccz4::fd::detail::set_logical_coordinates(subcell_mesh);
-
-  using System = ::Ccz4::fd::System;
-
-  Variables<System::variables_tag_list> volume_evolved_variables{
-      subcell_mesh.number_of_grid_points(), 0.0};
-
-  DirectionalIdMap<3, evolution::dg::subcell::GhostData>
-      neighbor_data_for_reconstruction{};
-
-  set_solution<System>(&volume_evolved_variables,
-                       &neighbor_data_for_reconstruction, subcell_mesh,
-                       logical_coords, 6, 5);
-
-  // Store the original variables for comparison
-  Variables<System::variables_tag_list> original_variables =
-      volume_evolved_variables;
-
-  // Set up the DataBox with all required tags
-  const double kreiss_oliger_epsilon = 0.5;  // Use valid epsilon value
-
+// A sixth difference annihilates degrees <=5 and gives 6! h^6 on
+// x^6. These expectations do not call the production filter.
+void test(const bool evolve_lapse_and_shift, const bool forward,
+          const bool self_start, const double epsilon, const size_t degree) {
+  CAPTURE(evolve_lapse_and_shift, forward, self_start, epsilon, degree);
+  using System = Ccz4::fd::System;
+  using Dissipation = Ccz4::fd::AddKreissOligerDissipation;
+  using DtTag = Dissipation::dt_variables_tag;
+  const Mesh<3> mesh{8, Spectral::Basis::FiniteDifference,
+                     Spectral::Quadrature::CellCentered};
+  Variables<System::variables_tag_list> vars{mesh.number_of_grid_points(), 7.0};
+  DirectionalIdMap<3, evolution::dg::subcell::GhostData> ghosts{};
+  set_solution<System>(
+      &vars, &ghosts, mesh,
+      TestHelpers::Ccz4::fd::detail::set_logical_coordinates(mesh), 6, degree);
+  const auto original_vars = vars;
+  const auto original_ghosts = ghosts;
+  const Slab slab{0.0, 1.0};
+  const auto full_step = (forward ? 1 : -1) * slab.duration() / 100;
+  const TimeStepId id{forward, self_start ? -1 : 0,
+                      forward ? slab.start() : slab.end()};
   auto box = db::create<db::AddSimpleTags<
-      System::variables_tag, evolution::dg::subcell::Tags::Mesh<3>,
+      DtTag, System::variables_tag, evolution::dg::subcell::Tags::Mesh<3>,
       Ccz4::fd::Tags::EvolveLapseAndShift, Ccz4::fd::Tags::KreissOligerEpsilon,
-      evolution::dg::subcell::Tags::GhostDataForReconstruction<3>>>(
-      volume_evolved_variables, subcell_mesh,
-      evolve_lapse_and_shift, kreiss_oliger_epsilon,
-      neighbor_data_for_reconstruction);
-
-  // Apply the filter through the mutator
-  db::mutate_apply<Ccz4::fd::ApplyFilter>(make_not_null(&box));
-
-  // Get the result from the box
-  const auto& result = get<System::variables_tag>(box);
-
-  if (not evolve_lapse_and_shift) {
-    CHECK(get<gr::Tags::Lapse<DataVector>>(result) ==
-          get<gr::Tags::Lapse<DataVector>>(original_variables));
-    CHECK(get<gr::Tags::Shift<DataVector, 3>>(result) ==
-          get<gr::Tags::Shift<DataVector, 3>>(original_variables));
-    CHECK(
-        get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(result) ==
-        get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(original_variables));
+      evolution::dg::subcell::Tags::GhostDataForReconstruction<3>,
+      ::Tags::TimeStep, ::Tags::TimeStepId,
+      SelfStart::Tags::InitialValue<::Tags::TimeStep>>>(
+      DtTag::type{mesh.number_of_grid_points(), 0.125}, vars, mesh,
+      evolve_lapse_and_shift, epsilon, ghosts,
+      self_start ? full_step / 3 : full_step, id,
+      std::tuple{self_start ? full_step : TimeDelta{}});
+  db::mutate_apply<Dissipation>(make_not_null(&box));
+  const auto& result = get<DtTag>(box);
+  const double correction = degree == 6 ? 3.0 * 720.0 * pow(0.25, 6) * epsilon /
+                                              (64.0 * full_step.value())
+                                        : 0.0;
+  tmpl::for_each<
+      System::original_evolved_variables_tags>([&result, evolve_lapse_and_shift,
+                                                correction]<typename Tag>(
+                                                   tmpl::type_<Tag> /*meta*/) {
+    constexpr bool is_gauge = tmpl::list_contains_v<
+        tmpl::list<gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
+                   Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>,
+        Tag>;
+    const double expected =
+        0.125 + ((evolve_lapse_and_shift or not is_gauge) ? correction : 0.0);
+    CAPTURE(db::tag_name<Tag>());
+    for (const auto& component : get<::Tags::dt<Tag>>(result)) {
+      for (const double value : component) {
+        CHECK(value == approx(expected));
+      }
+    }
+  });
+  for (const auto& component :
+       get<::Tags::dt<Ccz4::fd::Tags::PotentialGradients>>(result)) {
+    CHECK(component == DataVector(mesh.number_of_grid_points(), 0.125));
   }
-
-  tmpl::for_each<System::original_evolved_variables_tags>(
-      [&result, &original_variables](auto tag_v) {
-        using tag = tmpl::type_from<decltype(tag_v)>;
-        const auto& result_tensor = get<tag>(result);
-        const auto& volume_tensor = get<tag>(original_variables);
-        CAPTURE(pretty_type::name<tag>());
-        const Approx custom_approx =
-            Approx::custom().epsilon(1.0e-12).scale(1.0);
-        for (size_t tensor_index = 0; tensor_index < result_tensor.size();
-             ++tensor_index) {
-          CHECK_ITERABLE_CUSTOM_APPROX(result_tensor[tensor_index],
-                                       volume_tensor[tensor_index],
-                                       custom_approx);
-        }
-      });
-
-  // The stored gradients are untouched by the filter.
-  CHECK(get<::Ccz4::fd::Tags::PotentialGradients>(result) ==
-        get<::Ccz4::fd::Tags::PotentialGradients>(original_variables));
+  CHECK(get<System::variables_tag>(box) == original_vars);
+  const auto& remaining_ghosts =
+      get<evolution::dg::subcell::Tags::GhostDataForReconstruction<3>>(box);
+  for (const auto& [key, data] : original_ghosts) {
+    CHECK(remaining_ghosts.at(key).neighbor_ghost_data_for_reconstruction() ==
+          data.neighbor_ghost_data_for_reconstruction());
+  }
 }
 
-void test_error_when_epsilon_out_of_range() {
-  const size_t points_per_dimension = 6;
-  const Mesh<3> subcell_mesh{points_per_dimension,
-                             Spectral::Basis::FiniteDifference,
-                             Spectral::Quadrature::CellCentered};
-  const auto logical_coords =
-      TestHelpers::Ccz4::fd::detail::set_logical_coordinates(subcell_mesh);
+// Fourier modes have the exact sixth-order KO eigenvalue
+// -epsilon * sin(k h / 2)^6. Check modes through the grid cutoff and two
+// actual step sizes, including points whose stencil crosses each face.
+void test_fourier_modes() {
+  using System = Ccz4::fd::System;
+  using Dissipation = Ccz4::fd::AddKreissOligerDissipation;
+  const Mesh<3> mesh{8, Spectral::Basis::FiniteDifference,
+                     Spectral::Quadrature::CellCentered};
+  const auto x = TestHelpers::Ccz4::fd::detail::set_logical_coordinates(mesh);
+  const Slab slab{0.0, 1.0};
+  for (const double wave_number : {M_PI, 2.0 * M_PI, 4.0 * M_PI}) {
+    System::variables_tag::type vars{mesh.number_of_grid_points(), 7.0};
+    DirectionalIdMap<3, evolution::dg::subcell::GhostData> ghosts{};
+    set_solution<System>(&vars, &ghosts, mesh, x, 6, 0, wave_number);
+    for (const int denominator : {50, 100}) {
+      const auto step = slab.duration() / denominator;
+      Dissipation::dt_variables_tag::type dt{mesh.number_of_grid_points(), 0.0};
+      Dissipation::apply(make_not_null(&dt), vars, mesh, true, 0.1, ghosts,
+                         step, TimeStepId{true, 0, slab.start()}, {});
+      const DataVector expected = -0.1 / step.value() *
+                                  pow(sin(wave_number * 0.25 / 2.0), 6) *
+                                  get(get<gr::Tags::Lapse<DataVector>>(vars));
+      CHECK_ITERABLE_APPROX(
+          get(get<::Tags::dt<gr::Tags::Lapse<DataVector>>>(dt)), expected);
+    }
+  }
+}
 
-  using System = ::Ccz4::fd::System;
-
-  Variables<System::variables_tag_list> volume_evolved_variables{
-      subcell_mesh.number_of_grid_points(), 0.0};
-
-  DirectionalIdMap<3, evolution::dg::subcell::GhostData>
-      neighbor_data_for_reconstruction{};
-
-  set_solution<System>(&volume_evolved_variables,
-                       &neighbor_data_for_reconstruction, subcell_mesh,
-                       logical_coords, 6, 5);
-
-  // Test with epsilon = 0.0 (should throw error)
-  {
-    auto box = db::create<db::AddSimpleTags<
-        System::variables_tag, evolution::dg::subcell::Tags::Mesh<3>,
-        Ccz4::fd::Tags::EvolveLapseAndShift,
-        Ccz4::fd::Tags::KreissOligerEpsilon,
-        evolution::dg::subcell::Tags::GhostDataForReconstruction<3>>>(
-        volume_evolved_variables, subcell_mesh, true, -0.1,
-        neighbor_data_for_reconstruction);
-
+void test_invalid_epsilon() {
+  using Dissipation = Ccz4::fd::AddKreissOligerDissipation;
+  const Mesh<3> mesh{8, Spectral::Basis::FiniteDifference,
+                     Spectral::Quadrature::CellCentered};
+  const Ccz4::fd::System::variables_tag::type vars{mesh.number_of_grid_points(),
+                                                   1.0};
+  Dissipation::dt_variables_tag::type dt{mesh.number_of_grid_points(), 0.125};
+  const Slab slab{0.0, 1.0};
+  for (const double epsilon : {-0.1, 1.1}) {
     CHECK_THROWS_WITH(
-        db::mutate_apply<Ccz4::fd::ApplyFilter>(make_not_null(&box)),
+        Dissipation::apply(make_not_null(&dt), vars, mesh, true, epsilon, {},
+                           slab.duration() / 100,
+                           TimeStepId{true, 0, slab.start()}, {}),
         Catch::Matchers::ContainsSubstring(
             "Kreiss-Oliger epsilon should be in the interval [0, 1]"));
   }
-
-  // Test with epsilon = 1.0 (should throw error)
-  {
-    auto box = db::create<db::AddSimpleTags<
-        System::variables_tag, evolution::dg::subcell::Tags::Mesh<3>,
-        Ccz4::fd::Tags::EvolveLapseAndShift,
-        Ccz4::fd::Tags::KreissOligerEpsilon,
-        evolution::dg::subcell::Tags::GhostDataForReconstruction<3>>>(
-        volume_evolved_variables, subcell_mesh, true, 1.1,
-        neighbor_data_for_reconstruction);
-
-    CHECK_THROWS_WITH(
-        db::mutate_apply<Ccz4::fd::ApplyFilter>(make_not_null(&box)),
-        Catch::Matchers::ContainsSubstring(
-            "Kreiss-Oliger epsilon should be in the interval [0, 1]"));
-  }
+  // Disabled dissipation requires neither ghosts nor a valid step.
+  Dissipation::apply(make_not_null(&dt), vars, mesh, true, 0.0, {}, TimeDelta{},
+                     TimeStepId{}, {});
+  CHECK(dt == Dissipation::dt_variables_tag::type(mesh.number_of_grid_points(),
+                                                  0.125));
 }
 
 SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Fd.ApplyFilter",
                   "[Unit][Evolution]") {
-  test(true);
-  test(false);
-  test_error_when_epsilon_out_of_range();
+  for (const bool gauge : {false, true}) {
+    for (const bool forward : {false, true}) {
+      for (const bool self_start : {false, true}) {
+        for (const double epsilon : {0.0, 0.1, 1.0}) {
+          for (const size_t degree : {size_t{0}, size_t{5}, size_t{6}}) {
+            test(gauge, forward, self_start, epsilon, degree);
+          }
+        }
+      }
+    }
+  }
+  test_fourier_modes();
+  test_invalid_epsilon();
 }
 }  // namespace
