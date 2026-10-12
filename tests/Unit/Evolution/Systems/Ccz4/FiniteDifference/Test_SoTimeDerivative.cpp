@@ -59,12 +59,6 @@
 namespace Ccz4::fd {
 namespace {
 
-struct DummyEvolutionMetaVars {
-  struct SubcellOptions {
-    static constexpr bool subcell_enabled_at_external_boundary = false;
-  };
-};
-
 using Affine = domain::CoordinateMaps::Affine;
 using Affine3D = domain::CoordinateMaps::ProductOf3Maps<Affine, Affine, Affine>;
 
@@ -158,7 +152,6 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
       ::Ccz4::Tags::DampingFunctionKappa1, ::Ccz4::Tags::DampingFunctionKappa2,
       ::Ccz4::Tags::Kappa3, ::Ccz4::fd::Tags::EvolveLapseAndShift,
       domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
-      Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
       ::Ccz4::Tags::K0<DataVector>,
       ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
@@ -175,8 +168,7 @@ void test_minkowski(const bool evolve_lapse_and_shift) {
       evolve_lapse_and_shift, element,
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
-      DummyEvolutionMetaVars{}, evolved_vars, eta, k_0,
-      upper_spatial_z4_constraint,
+      evolved_vars, eta, k_0, upper_spatial_z4_constraint,
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -314,7 +306,6 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
       ::Ccz4::Tags::DampingFunctionKappa1, ::Ccz4::Tags::DampingFunctionKappa2,
       ::Ccz4::Tags::Kappa3, ::Ccz4::fd::Tags::EvolveLapseAndShift,
       domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
-      Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
       ::Ccz4::Tags::K0<DataVector>,
       ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
@@ -331,8 +322,7 @@ void test_kerrschild(const bool evolve_lapse_and_shift) {
       evolve_lapse_and_shift, element,
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
-      DummyEvolutionMetaVars{}, evolved_vars, eta, k_0,
-      upper_spatial_z4_constraint,
+      evolved_vars, eta, k_0, upper_spatial_z4_constraint,
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
@@ -499,7 +489,6 @@ void test_gauge_plane_wave(
       ::Ccz4::Tags::DampingFunctionKappa1, ::Ccz4::Tags::DampingFunctionKappa2,
       ::Ccz4::Tags::Kappa3, ::Ccz4::fd::Tags::EvolveLapseAndShift,
       domain::Tags::Element<SpatialDim>, fd::Tags::Reconstructor,
-      Parallel::Tags::MetavariablesImpl<DummyEvolutionMetaVars>,
       Ccz4::fd::System::variables_tag, ::Ccz4::Tags::Eta<DataVector>,
       ::Ccz4::Tags::K0<DataVector>,
       ::Ccz4::Tags::SpatialZ4ConstraintUp<DataVector, 3>, dt_variables_tag,
@@ -516,8 +505,7 @@ void test_gauge_plane_wave(
       evolve_lapse_and_shift, element,
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<std::decay_t<decltype(recons)>>(recons)},
-      DummyEvolutionMetaVars{}, evolved_vars, eta, k_0,
-      upper_spatial_z4_constraint,
+      evolved_vars, eta, k_0, upper_spatial_z4_constraint,
       Variables<typename dt_variables_tag::tags_list>{
           subcell_mesh.number_of_grid_points()},
       subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,

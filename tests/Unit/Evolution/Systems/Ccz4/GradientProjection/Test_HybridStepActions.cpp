@@ -5,24 +5,33 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "DataStructures/DataBox/DataBox.hpp"
 #include "DataStructures/DataBox/PrefixHelpers.hpp"
 #include "DataStructures/DataBox/Prefixes.hpp"
 #include "DataStructures/DataVector.hpp"
+#include "DataStructures/Index.hpp"
+#include "DataStructures/IndexIterator.hpp"
 #include "DataStructures/SliceVariables.hpp"
 #include "DataStructures/TaggedTuple.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
+#include "Domain/BoundaryConditions/BoundaryCondition.hpp"
 #include "Domain/BoundaryConditions/Periodic.hpp"
+#include "Domain/Creators/AlignedLattice.hpp"
 #include "Domain/Creators/DomainCreator.hpp"
 #include "Domain/Creators/Rectilinear.hpp"
 #include "Domain/Creators/RegisterDerivedWithCharm.hpp"
@@ -33,8 +42,11 @@
 #include "Domain/Creators/Tags/InitialRefinementLevels.hpp"
 #include "Domain/Structure/Direction.hpp"
 #include "Domain/Structure/DirectionalId.hpp"
+#include "Domain/Structure/DirectionalIdMap.hpp"
+#include "Domain/Structure/Element.hpp"
 #include "Domain/Structure/ElementId.hpp"
 #include "Domain/Structure/SegmentId.hpp"
+#include "Domain/Structure/Side.hpp"
 #include "Domain/Tags.hpp"
 #include "Evolution/Actions/RunEventsAndDenseTriggers.hpp"
 #include "Evolution/BoundaryCorrection.hpp"
@@ -46,6 +58,7 @@
 #include "Evolution/DgSubcell/Actions/TakeTimeStep.hpp"
 #include "Evolution/DgSubcell/ActiveGrid.hpp"
 #include "Evolution/DgSubcell/GetTciDecision.hpp"
+#include "Evolution/DgSubcell/GhostData.hpp"
 #include "Evolution/DgSubcell/Mesh.hpp"
 #include "Evolution/DgSubcell/NeighborReconstructedFaceSolution.hpp"
 #include "Evolution/DgSubcell/PrepareNeighborData.hpp"
@@ -56,6 +69,8 @@
 #include "Evolution/DgSubcell/SubcellOptions.hpp"
 #include "Evolution/DgSubcell/Tags/ActiveGrid.hpp"
 #include "Evolution/DgSubcell/Tags/Coordinates.hpp"
+#include "Evolution/DgSubcell/Tags/GhostDataForReconstruction.hpp"
+#include "Evolution/DgSubcell/Tags/Jacobians.hpp"
 #include "Evolution/DgSubcell/Tags/Mesh.hpp"
 #include "Evolution/DgSubcell/Tags/SubcellOptions.hpp"
 #include "Evolution/DiscontinuousGalerkin/Actions/ApplyBoundaryCorrections.hpp"
@@ -69,6 +84,9 @@
 #include "Evolution/Initialization/DgDomain.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
 #include "Evolution/Systems/Ccz4/Ccz4WrappedGr.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/ApplyFilter.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/BoundaryConditionGhostData.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/Derivatives.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Reconstructor.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/RegisterDerivedWithCharm.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/ResizeTimeDerivatives.hpp"
@@ -80,6 +98,7 @@
 #include "Evolution/Systems/Ccz4/GradientProjection/BoundaryCorrections/UpwindGradientProjection.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Filter.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/FiniteDifferenceGradients.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Initialize.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/NeighborPackagedData.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/SubcellStepActions.hpp"
@@ -110,6 +129,7 @@
 #include "ParallelAlgorithms/EventsAndTriggers/EventsAndTriggers.hpp"
 #include "ParallelAlgorithms/EventsAndTriggers/Tags.hpp"
 #include "ParallelAlgorithms/EventsAndTriggers/WhenToCheck.hpp"
+#include "PointwiseFunctions/AnalyticSolutions/GeneralRelativity/KerrSchild.hpp"
 #include "PointwiseFunctions/AnalyticSolutions/GeneralRelativity/Minkowski.hpp"
 #include "PointwiseFunctions/ConstraintDamping/Constant.hpp"
 #include "PointwiseFunctions/ConstraintDamping/DampingFunction.hpp"
@@ -154,7 +174,9 @@ using AuxInbox =
 using PhysicalInbox =
     evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<3, false, false>;
 using Minkowski = Ccz4::Solutions::Ccz4WrappedGr<gr::Solutions::Minkowski<3>>;
+using KerrSchild = Ccz4::Solutions::Ccz4WrappedGr<gr::Solutions::KerrSchild>;
 using ActiveGrid = evolution::dg::subcell::ActiveGrid;
+using GhostDataMap = DirectionalIdMap<3, evolution::dg::subcell::GhostData>;
 
 // The periodic brick: four elements along x, of which the first two use DG
 // and the last two finite differences, so that the x-interfaces are DG-DG,
@@ -177,6 +199,68 @@ domain::creators::Brick brick() {
           {{2, 0, 0}},
           {{dg_points, dg_points, dg_points}},
           {{true, true, true}}};
+}
+
+std::vector<ElementId<3>> all_ids() {
+  std::vector<ElementId<3>> ids{};
+  for (size_t i = 0; i < number_of_elements; ++i) {
+    ids.push_back(element_id(i));
+  }
+  return ids;
+}
+
+// The lattice with analytic (Kerr-Schild) external boundaries: four blocks
+// of one element each along x, of which the last is DG-only. With finite
+// differences allowed at external boundaries (as in EvolveCcz4),
+// `SetSubcellGrid` selects finite differences for the first two blocks and DG
+// for the last two (DG-only, or bordering a DG-only block), so that the
+// x-interfaces are FD-FD, FD-DG and DG-DG. Every element is at the external y
+// and z boundaries, the first also at the lower x boundary and the last at
+// the upper x boundary.
+constexpr size_t number_of_lattice_blocks = 4;
+const std::array<double, 3> lattice_lower_corner{{3.0, -0.6, -0.45}};
+
+std::vector<ElementId<3>> lattice_ids() {
+  std::vector<ElementId<3>> ids{};
+  for (size_t block = 0; block < number_of_lattice_blocks; ++block) {
+    ids.emplace_back(block);
+  }
+  return ids;
+}
+
+bool uses_dg_in_lattice(const ElementId<3>& id) { return id.block_id() >= 2; }
+
+KerrSchild kerr_schild() {
+  return KerrSchild{gr::Solutions::KerrSchild{
+      1.0, {{0.5, -0.2, 0.0}}, {{-0.2, 0.0, 0.3}}, {{0.0, 0.0, 0.0}}}};
+}
+
+domain::creators::AlignedLattice<3> lattice() {
+  std::array<std::vector<double>, 3> block_bounds{};
+  for (size_t block = 0; block <= number_of_lattice_blocks; ++block) {
+    block_bounds[0].push_back(lattice_lower_corner[0] +
+                              static_cast<double>(block) * element_lengths[0]);
+  }
+  for (size_t d = 1; d < 3; ++d) {
+    gsl::at(block_bounds, d) = {
+        gsl::at(lattice_lower_corner, d),
+        gsl::at(lattice_lower_corner, d) + gsl::at(element_lengths, d)};
+  }
+  std::array<
+      std::array<std::unique_ptr<domain::BoundaryConditions::BoundaryCondition>,
+                 2>,
+      3>
+      boundary_conditions{};
+  for (auto& lower_and_upper : boundary_conditions) {
+    for (auto& boundary_condition : lower_and_upper) {
+      boundary_condition =
+          std::make_unique<gp::BoundaryConditions::DirichletAnalytic>(
+              std::make_unique<KerrSchild>(kerr_schild()));
+    }
+  }
+  return domain::creators::AlignedLattice<3>(
+      block_bounds, {{0, 0, 0}}, {{dg_points, dg_points, dg_points}}, {}, {},
+      {}, std::move(boundary_conditions));
 }
 
 // Fixes the numerical method of each element (in a periodic domain
@@ -206,14 +290,16 @@ struct SetActiveGridForTest {
   }
 };
 
-// As in EvolveCcz4 (with the active grid fixed after SetSubcellGrid, and the
-// time-stepping, filter and dense-trigger items given directly).
+// As in EvolveCcz4 (with the active grid of the periodic brick fixed after
+// SetSubcellGrid, and the time-stepping, filter and dense-trigger items given
+// directly).
 template <typename Metavariables>
-using initialization_actions = tmpl::list<
+using initialization_actions = tmpl::flatten<tmpl::list<
     Initialization::Actions::InitializeItems<
         evolution::dg::Initialization::Domain<Metavariables>>,
     evolution::dg::subcell::Actions::SetSubcellGrid<3, system, true>,
-    SetActiveGridForTest, gp::Actions::CheckFiniteDifferenceOptions,
+    typename Metavariables::set_active_grid,
+    gp::Actions::CheckFiniteDifferenceOptions,
     ::Actions::MutateApply<evolution::dg::subcell::SetInterpolators<
         3, Ccz4::fd::Tags::Reconstructor>>,
     ::Actions::MutateApply<Ccz4::fd::ResizeTimeDerivatives>,
@@ -222,7 +308,7 @@ using initialization_actions = tmpl::list<
     evolution::dg::Initialization::Mortars<3>,
     Initialization::Actions::AddSimpleTags<Ccz4::fd::SetInitialEta,
                                            Ccz4::fd::SetK0>,
-    Initialization::Actions::InitializeItems<gp::InitializeLocalOperators>>;
+    Initialization::Actions::InitializeItems<gp::InitializeLocalOperators>>>;
 
 // The production DG-subcell step and the time advance.
 using evolve_actions = tmpl::push_back<gp::subcell_step_actions,
@@ -255,11 +341,18 @@ struct Component {
       Parallel::PhaseActions<Parallel::Phase::Evolve, evolve_actions>>;
 };
 
-struct Metavariables {
+// The periodic brick, or (`OnLattice`) the lattice with external boundaries.
+template <bool OnLattice>
+struct MetavariablesImpl {
   static constexpr size_t volume_dim = 3;
   static constexpr bool local_time_stepping = false;
   using system = gp::System;
-  using component_list = tmpl::list<Component<Metavariables>>;
+  using component_list = tmpl::list<Component<MetavariablesImpl>>;
+  using set_active_grid =
+      tmpl::conditional_t<OnLattice, tmpl::list<>, SetActiveGridForTest>;
+  static std::vector<ElementId<3>> element_ids() {
+    return OnLattice ? lattice_ids() : all_ids();
+  }
   using const_global_cache_tags = tmpl::list<
       ::Tags::ConcreteTimeStepper<TimeStepper>, Ccz4::Tags::Kappa3,
       evolution::initial_data::Tags::InitialData, Ccz4::fd::Tags::Reconstructor,
@@ -269,7 +362,7 @@ struct Metavariables {
       ::Tags::EventsAndTriggers<Triggers::WhenToCheck::AtSlabs>>;
   struct SubcellOptions {
     static constexpr bool subcell_enabled = true;
-    static constexpr bool subcell_enabled_at_external_boundary = false;
+    static constexpr bool subcell_enabled_at_external_boundary = OnLattice;
     template <typename DbTagsList>
     static constexpr size_t ghost_zone_size(
         const db::DataBox<DbTagsList>& box) {
@@ -289,18 +382,25 @@ struct Metavariables {
             tmpl::list<gp::BoundaryConditions::DirichletAnalytic,
                        domain::BoundaryConditions::Periodic<
                            Ccz4::BoundaryConditions::BoundaryCondition>>>,
-        tmpl::pair<evolution::initial_data::InitialData, tmpl::list<Minkowski>>,
+        tmpl::pair<evolution::initial_data::InitialData,
+                   tmpl::list<Minkowski, KerrSchild>>,
         tmpl::pair<DenseTrigger, tmpl::list<>>,
         tmpl::pair<Event, tmpl::list<>>>;
   };
 };
 
+using Metavariables = MetavariablesImpl<false>;
+using LatticeMetavariables = MetavariablesImpl<true>;
 using component = Component<Metavariables>;
+using lattice_component = Component<LatticeMetavariables>;
 using MockRuntimeSystem = ActionTesting::MockRuntimeSystem<Metavariables>;
+using LatticeRuntimeSystem =
+    ActionTesting::MockRuntimeSystem<LatticeMetavariables>;
 
-template <typename Tag>
-const auto& get_tag(const MockRuntimeSystem& runner, const ElementId<3>& id) {
-  return ActionTesting::get_databox_tag<component, Tag>(runner, id);
+template <typename Tag, typename Metavars>
+const auto& get_tag(const ActionTesting::MockRuntimeSystem<Metavars>& runner,
+                    const ElementId<3>& id) {
+  return ActionTesting::get_databox_tag<Component<Metavars>, Tag>(runner, id);
 }
 
 constexpr size_t time_stepper_order = 2;
@@ -308,12 +408,14 @@ constexpr double kappa_1 = 0.001;
 constexpr double eta = 1.0;
 const Slab slab{0.0, 0.002};
 
+template <typename Metavars>
 tuples::tagged_tuple_from_typelist<
-    Parallel::get_const_global_cache_tags<Metavariables>>
-make_cache() {
-  const auto creator = brick();
+    Parallel::get_const_global_cache_tags<Metavars>>
+make_cache(const DomainCreator<3>& creator,
+           std::unique_ptr<evolution::initial_data::InitialData> initial_data,
+           std::optional<std::vector<std::string>> only_dg_block_names) {
   tuples::tagged_tuple_from_typelist<
-      Parallel::get_const_global_cache_tags<Metavariables>>
+      Parallel::get_const_global_cache_tags<Metavars>>
       cache{};
   get<domain::Tags::Domain<3>>(cache) = creator.create_domain();
   get<::Tags::ConcreteTimeStepper<TimeStepper>>(cache) =
@@ -325,22 +427,24 @@ make_cache() {
   get<domain::Tags::ExternalBoundaryConditions<3>>(cache) =
       creator.external_boundary_conditions();
   get<evolution::initial_data::Tags::InitialData>(cache) =
-      std::make_unique<Minkowski>();
+      std::move(initial_data);
+  const evolution::dg::subcell::SubcellOptions subcell_options_with_names{
+      4.0,
+      1_st,
+      1.0e-3,
+      1.0e-4,
+      false,
+      false,
+      evolution::dg::subcell::fd::ReconstructionMethod::DimByDim,
+      false,
+      std::move(only_dg_block_names),
+      ::fd::DerivativeOrder::Two,
+      1,
+      1,
+      1};
   get<evolution::dg::subcell::Tags::SubcellOptions<3>>(cache) =
-      evolution::dg::subcell::SubcellOptions{
-          4.0,
-          1_st,
-          1.0e-3,
-          1.0e-4,
-          false,
-          false,
-          evolution::dg::subcell::fd::ReconstructionMethod::DimByDim,
-          false,
-          std::nullopt,
-          ::fd::DerivativeOrder::Two,
-          1,
-          1,
-          1};
+      evolution::dg::subcell::SubcellOptions{subcell_options_with_names,
+                                             creator};
   get<Ccz4::fd::Tags::Reconstructor>(cache) =
       std::make_unique<Ccz4::fd::UnlimitedDeg4Prim>();
   get<Ccz4::fd::Tags::KreissOligerEpsilon>(cache) = 0.1;
@@ -354,13 +458,16 @@ make_cache() {
   return cache;
 }
 
-// Emplaces and initializes the elements, and enters the evolution phase.
-void initialize_elements(const gsl::not_null<MockRuntimeSystem*> runner) {
-  const auto creator = brick();
+// Emplaces and initializes the elements, and checks their numerical
+// methods.
+template <typename Metavars>
+void initialize_elements(
+    const gsl::not_null<ActionTesting::MockRuntimeSystem<Metavars>*> runner,
+    const DomainCreator<3>& creator,
+    const std::function<bool(const ElementId<3>&)>& expect_dg) {
   const TimeDelta step = slab.duration();
-  for (size_t i = 0; i < number_of_elements; ++i) {
-    const ElementId<3> id = element_id(i);
-    ActionTesting::emplace_array_component_and_initialize<component>(
+  for (const auto& id : Metavars::element_ids()) {
+    ActionTesting::emplace_array_component_and_initialize<Component<Metavars>>(
         runner, ActionTesting::NodeId{0}, ActionTesting::LocalCoreId{0}, id,
         {creator.initial_extents(), creator.initial_refinement_levels(),
          Spectral::Quadrature::GaussLobatto, TimeStepId{},
@@ -374,25 +481,20 @@ void initialize_elements(const gsl::not_null<MockRuntimeSystem*> runner) {
                  std::nullopt)},
          EventsAndDenseTriggers(EventsAndDenseTriggers::ConstructionType{}),
          std::optional<double>{}});
-    for (size_t a = 0;
-         a < tmpl::size<initialization_actions<Metavariables>>::value; ++a) {
-      ActionTesting::next_action<component>(runner, id);
+    for (size_t a = 0; a < tmpl::size<initialization_actions<Metavars>>::value;
+         ++a) {
+      ActionTesting::next_action<Component<Metavars>>(runner, id);
     }
+    CAPTURE(id);
     CHECK(get_tag<evolution::dg::subcell::Tags::ActiveGrid>(*runner, id) ==
-          (uses_dg(id) ? ActiveGrid::Dg : ActiveGrid::Subcell));
+          (expect_dg(id) ? ActiveGrid::Dg : ActiveGrid::Subcell));
   }
 }
 
-std::vector<ElementId<3>> all_ids() {
-  std::vector<ElementId<3>> ids{};
-  for (size_t i = 0; i < number_of_elements; ++i) {
-    ids.push_back(element_id(i));
-  }
-  return ids;
-}
-
-size_t next_action(const MockRuntimeSystem& runner, const ElementId<3>& id) {
-  return ActionTesting::get_next_action_index<component>(runner, id);
+template <typename Metavars>
+size_t next_action(const ActionTesting::MockRuntimeSystem<Metavars>& runner,
+                   const ElementId<3>& id) {
+  return ActionTesting::get_next_action_index<Component<Metavars>>(runner, id);
 }
 
 template <typename Action>
@@ -401,10 +503,12 @@ constexpr size_t index_of = tmpl::index_of<evolve_actions, Action>::value;
 // Runs the elements, in the order of `schedule` (0: forward, 1: reverse,
 // each element until it blocks; 2: forward, one action per element and
 // sweep), until `stop(id)` holds for all of them. Fails on a deadlock.
-void run_until(const gsl::not_null<MockRuntimeSystem*> runner,
-               const size_t schedule,
-               const std::function<bool(const ElementId<3>&)>& stop) {
-  std::vector<ElementId<3>> order = all_ids();
+template <typename Metavars>
+void run_until(
+    const gsl::not_null<ActionTesting::MockRuntimeSystem<Metavars>*> runner,
+    const size_t schedule,
+    const std::function<bool(const ElementId<3>&)>& stop) {
+  std::vector<ElementId<3>> order = Metavars::element_ids();
   if (schedule == 1) {
     std::reverse(order.begin(), order.end());
   }
@@ -413,7 +517,8 @@ void run_until(const gsl::not_null<MockRuntimeSystem*> runner,
     bool done = true;
     for (const auto& id : order) {
       while (not stop(id) and
-             ActionTesting::next_action_if_ready<component>(runner, id)) {
+             ActionTesting::next_action_if_ready<Component<Metavars>>(runner,
+                                                                      id)) {
         progress = true;
         if (schedule == 2) {
           break;
@@ -431,8 +536,10 @@ void run_until(const gsl::not_null<MockRuntimeSystem*> runner,
 
 // Whether the element has completed `steps` steps (and not started another).
 // Each step is a slab.
+template <typename Metavars>
 std::function<bool(const ElementId<3>&)> completed(
-    const MockRuntimeSystem& runner, const size_t steps) {
+    const ActionTesting::MockRuntimeSystem<Metavars>& runner,
+    const size_t steps) {
   const double target = static_cast<double>(steps) * slab.duration().value();
   return [&runner, target](const ElementId<3>& id) {
     return std::abs(get_tag<::Tags::Time>(runner, id) - target) < 1.0e-14 and
@@ -440,12 +547,16 @@ std::function<bool(const ElementId<3>&)> completed(
   };
 }
 
-void check_inboxes_empty(const MockRuntimeSystem& runner) {
-  for (const auto& id : all_ids()) {
+template <typename Metavars>
+void check_inboxes_empty(
+    const ActionTesting::MockRuntimeSystem<Metavars>& runner) {
+  for (const auto& id : Metavars::element_ids()) {
     CAPTURE(id);
-    CHECK(ActionTesting::get_inbox_tag<component, AuxInbox>(runner, id)
-              .messages.empty());
-    CHECK(ActionTesting::get_inbox_tag<component, PhysicalInbox>(runner, id)
+    CHECK(
+        ActionTesting::get_inbox_tag<Component<Metavars>, AuxInbox>(runner, id)
+            .messages.empty());
+    CHECK(ActionTesting::get_inbox_tag<Component<Metavars>, PhysicalInbox>(
+              runner, id)
               .messages.empty());
   }
 }
@@ -460,14 +571,16 @@ const tnsr::I<DataVector, 3>& active_coordinates(
 
 // Runs the production self-start procedure (the step actions on all elements)
 // and enters the evolution phase at the start of the slab.
-void self_start(const gsl::not_null<MockRuntimeSystem*> runner,
-                const size_t schedule) {
+template <typename Metavars>
+void self_start(
+    const gsl::not_null<ActionTesting::MockRuntimeSystem<Metavars>*> runner,
+    const size_t schedule) {
   ActionTesting::set_phase(runner,
                            Parallel::Phase::InitializeTimeStepperHistory);
   run_until(runner, schedule, [&runner](const ElementId<3>& id) {
-    return ActionTesting::get_terminate<component>(*runner, id);
+    return ActionTesting::get_terminate<Component<Metavars>>(*runner, id);
   });
-  for (const auto& id : all_ids()) {
+  for (const auto& id : Metavars::element_ids()) {
     CHECK(get_tag<::Tags::TimeStepId>(*runner, id) ==
           TimeStepId(true, 0, slab.start()));
     CHECK(get_tag<history_tag>(*runner, id).integration_order() ==
@@ -498,9 +611,10 @@ void poison_gradients(const gsl::not_null<MockRuntimeSystem*> runner) {
 void test_minkowski(const size_t schedule) {
   CAPTURE(schedule);
   MockRuntimeSystem runner{
-      make_cache(),
+      make_cache<Metavariables>(brick(), std::make_unique<Minkowski>(),
+                                std::nullopt),
       tuples::TaggedTuple<domain::Tags::FunctionsOfTimeInitialize>{}};
-  initialize_elements(make_not_null(&runner));
+  initialize_elements(make_not_null(&runner), brick(), uses_dg);
   self_start(make_not_null(&runner), schedule);
   poison_gradients(make_not_null(&runner));
   for (size_t steps = 1; steps <= 2; ++steps) {
@@ -693,9 +807,10 @@ void check_dg_element(const MockRuntimeSystem& runner, const ElementId<3>& id,
 // corrections and their finalization.
 void test_smooth_state() {
   MockRuntimeSystem runner{
-      make_cache(),
+      make_cache<Metavariables>(brick(), std::make_unique<Minkowski>(),
+                                std::nullopt),
       tuples::TaggedTuple<domain::Tags::FunctionsOfTimeInitialize>{}};
-  initialize_elements(make_not_null(&runner));
+  initialize_elements(make_not_null(&runner), brick(), uses_dg);
   for (const auto& id : all_ids()) {
     auto& box =
         ActionTesting::get_databox<component>(make_not_null(&runner), id);
@@ -730,6 +845,243 @@ void test_smooth_state() {
   }
 }
 
+// The logical coordinates of the ghost cells of the face in `direction`,
+// without the ghost-zone coordinate helper: `ghost_zone_size` cells continuing
+// the uniform cell-centered grid outside the face, ordered like the volume
+// cells, at the tangential coordinates of the cells.
+tnsr::I<DataVector, 3, Frame::ElementLogical> ghost_logical_coordinates(
+    const Mesh<3>& mesh, const size_t ghost_zone_size,
+    const Direction<3>& direction) {
+  const size_t dim = direction.dimension();
+  Index<3> extents = mesh.extents();
+  extents[dim] = ghost_zone_size;
+  tnsr::I<DataVector, 3, Frame::ElementLogical> coords{extents.product()};
+  for (IndexIterator<3> index(extents); index; ++index) {
+    for (size_t d = 0; d < 3; ++d) {
+      const double spacing = 2.0 / static_cast<double>(mesh.extents(d));
+      const auto i = static_cast<double>(index()[d]);
+      if (d == dim) {
+        const double depth =
+            direction.side() == Side::Upper
+                ? i + 0.5
+                : static_cast<double>(ghost_zone_size) - i - 0.5;
+        coords.get(d)[index.collapsed_index()] =
+            direction.sign() * (1.0 + depth * spacing);
+      } else {
+        coords.get(d)[index.collapsed_index()] = -1.0 + (i + 0.5) * spacing;
+      }
+    }
+  }
+  return coords;
+}
+
+// Checks the ghost data of a finite-difference element of the lattice and
+// returns the entries of its neighbors. With `external_entries`, there is an
+// entry in each external direction with the full ghost-data layout: the
+// Kerr-Schild fields at the ghost points (the elements are affine) at the
+// current time, and default-initialized gradients (signaling NaN with
+// SPECTRE_NAN_INIT, compared bitwise; otherwise uninitialized and not read).
+// Without, there are no external entries.
+GhostDataMap check_lattice_ghost_data(const LatticeRuntimeSystem& runner,
+                                      const ElementId<3>& id,
+                                      const bool external_entries) {
+  CAPTURE(id);
+  CAPTURE(external_entries);
+  const auto& element = get_tag<domain::Tags::Element<3>>(runner, id);
+  const auto& ghost_data =
+      get_tag<evolution::dg::subcell::Tags::GhostDataForReconstruction<3>>(
+          runner, id);
+  GhostDataMap neighbor_entries{};
+  for (const auto& [direction, neighbors] : element.neighbors()) {
+    for (const auto& neighbor_id : neighbors.ids()) {
+      const DirectionalId<3> key{direction, neighbor_id};
+      REQUIRE(ghost_data.contains(key));
+      neighbor_entries.insert(std::pair{key, ghost_data.at(key)});
+    }
+  }
+  CHECK(ghost_data.size() ==
+        neighbor_entries.size() +
+            (external_entries ? element.external_boundaries().size() : 0));
+  const Mesh<3>& subcell_mesh =
+      get_tag<evolution::dg::subcell::Tags::Mesh<3>>(runner, id);
+  const double time = get_tag<::Tags::Time>(runner, id);
+  const size_t ghost_zone_size =
+      Ccz4::fd::UnlimitedDeg4Prim{}.ghost_zone_size();
+  for (const auto& direction : element.external_boundaries()) {
+    CAPTURE(direction);
+    const DirectionalId<3> key{direction, ElementId<3>::external_boundary_id()};
+    if (not external_entries) {
+      CHECK(not ghost_data.contains(key));
+      continue;
+    }
+    REQUIRE(ghost_data.contains(key));
+    const DataVector& data =
+        ghost_data.at(key).neighbor_ghost_data_for_reconstruction();
+    const size_t number_of_points =
+        ghost_zone_size *
+        subcell_mesh.extents().slice_away(direction.dimension()).product();
+    REQUIRE(data.size() ==
+            Vars::number_of_independent_components * number_of_points);
+    const auto logical_coords =
+        ghost_logical_coordinates(subcell_mesh, ghost_zone_size, direction);
+    tnsr::I<DataVector, 3> coords{number_of_points};
+    for (size_t d = 0; d < 3; ++d) {
+      const double lower_bound =
+          gsl::at(lattice_lower_corner, d) +
+          (d == 0 ? static_cast<double>(id.block_id()) * element_lengths[0]
+                  : 0.0);
+      coords.get(d) = lower_bound + 0.5 * (logical_coords.get(d) + 1.0) *
+                                        gsl::at(element_lengths, d);
+    }
+    const auto expected =
+        kerr_schild().variables(coords, time, physical_tags{});
+    const Vars ghost_vars{
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+        const_cast<double*>(data.data()), data.size()};
+    tmpl::for_each<physical_tags>(
+        [&ghost_vars, &expected]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
+          CAPTURE(db::tag_name<Tag>());
+          CHECK_ITERABLE_APPROX(get<Tag>(ghost_vars), get<Tag>(expected));
+        });
+#ifdef SPECTRE_NAN_INIT
+    const size_t physical_size =
+        Variables<physical_tags>::number_of_independent_components *
+        number_of_points;
+    std::vector<std::uint64_t> gradient_bits(data.size() - physical_size);
+    std::memcpy(gradient_bits.data(), data.data() + physical_size,
+                gradient_bits.size() * sizeof(double));
+    constexpr auto signaling_nan_bits = std::bit_cast<std::uint64_t>(
+        std::numeric_limits<double>::signaling_NaN());
+    CHECK(std::all_of(
+        gradient_bits.begin(), gradient_bits.end(),
+        [](const std::uint64_t bits) { return bits == signaling_nan_bits; }));
+#endif  // SPECTRE_NAN_INIT
+  }
+  return neighbor_entries;
+}
+
+void check_same_entries(const GhostDataMap& expected,
+                        const GhostDataMap& entries) {
+  REQUIRE(entries.size() == expected.size());
+  for (const auto& [key, entry] : expected) {
+    CAPTURE(key);
+    CHECK(entries.at(key) == entry);
+  }
+}
+
+// The stored gradients of a finite-difference element are those of its
+// physical fields and its current ghost data.
+void check_finite_difference_gradients(const LatticeRuntimeSystem& runner,
+                                       const ElementId<3>& id) {
+  CAPTURE(id);
+  const auto& vars = get_tag<variables_tag>(runner, id);
+  const Mesh<3>& mesh =
+      get_tag<evolution::dg::subcell::Tags::Mesh<3>>(runner, id);
+  using deriv_tags =
+      db::wrap_tags_in<::Tags::deriv, Ccz4::fd::System::gradients_tags,
+                       tmpl::size_t<3>, Frame::Inertial>;
+  Variables<deriv_tags> derivatives{mesh.number_of_grid_points()};
+  Ccz4::fd::spacetime_derivatives(
+      make_not_null(&derivatives), vars,
+      get_tag<evolution::dg::subcell::Tags::GhostDataForReconstruction<3>>(
+          runner, id),
+      4, mesh,
+      get_tag<evolution::dg::subcell::fd::Tags::
+                  InverseJacobianLogicalToInertial<3>>(runner, id));
+  gp::Tags::PotentialGradients::type expected{mesh.number_of_grid_points()};
+  gp::finite_difference_potential_gradients(
+      make_not_null(&expected),
+      get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(vars),
+      get<::Tags::deriv<Ccz4::Tags::ConformalMetric<DataVector, 3>,
+                        tmpl::size_t<3>, Frame::Inertial>>(derivatives),
+      get<::Tags::deriv<Ccz4::Tags::ConformalFactor<DataVector>,
+                        tmpl::size_t<3>, Frame::Inertial>>(derivatives),
+      get<::Tags::deriv<gr::Tags::Lapse<DataVector>, tmpl::size_t<3>,
+                        Frame::Inertial>>(derivatives),
+      get<::Tags::deriv<gr::Tags::Shift<DataVector, 3>, tmpl::size_t<3>,
+                        Frame::Inertial>>(derivatives));
+  CHECK(get<gp::Tags::PotentialGradients>(vars) == expected);
+}
+
+// On the lattice, through one step: the numerical methods selected at
+// initialization, and the ghost data of the finite-difference elements at
+// the external boundaries. Each exchange replaces all ghost data with the
+// neighbors' entries; the external entries are then added from the boundary
+// conditions, before the gradients for the DG neighbors are computed and
+// before the finite-difference right-hand side and dissipation.
+void test_external_boundaries() {
+  using SetGhostData = Ccz4::fd::Actions::SetBoundaryConditionGhostData;
+  constexpr size_t first_receive = index_of<
+      evolution::dg::subcell::Actions::ReceiveDataForReconstruction<3, true>>;
+  constexpr size_t second_receive = index_of<
+      evolution::dg::subcell::Actions::ReceiveDataForReconstruction<3>>;
+  CHECK(std::is_same_v<tmpl::at_c<evolve_actions, first_receive + 1>,
+                       SetGhostData>);
+  CHECK(std::is_same_v<tmpl::at_c<evolve_actions, first_receive + 2>,
+                       gp::Actions::ComputeFiniteDifferenceGradients>);
+  CHECK(std::is_same_v<tmpl::at_c<evolve_actions, second_receive + 1>,
+                       SetGhostData>);
+  constexpr size_t dg_boundary_corrections =
+      index_of<evolution::dg::Actions::ApplyBoundaryCorrectionsToTimeDerivative<
+          3, false>>;
+  constexpr size_t dg_drain =
+      index_of<evolution::dg::Actions::DrainAuxiliaryGhostData<3, false>>;
+  constexpr size_t fd_dissipation =
+      index_of<::Actions::MutateApply<Ccz4::fd::AddKreissOligerDissipation>>;
+
+  LatticeRuntimeSystem runner{
+      make_cache<LatticeMetavariables>(
+          lattice(), std::make_unique<KerrSchild>(kerr_schild()),
+          std::vector<std::string>{lattice().block_names()[3]}),
+      tuples::TaggedTuple<domain::Tags::FunctionsOfTimeInitialize>{}};
+  initialize_elements(make_not_null(&runner), lattice(), uses_dg_in_lattice);
+  std::vector<ElementId<3>> fd_ids{};
+  for (const auto& id : lattice_ids()) {
+    CHECK(get_tag<domain::Tags::Element<3>>(runner, id)
+              .external_boundaries()
+              .size() == (id.block_id() == 0 or id.block_id() == 3 ? 5 : 4));
+    if (not uses_dg_in_lattice(id)) {
+      fd_ids.push_back(id);
+    }
+  }
+  self_start(make_not_null(&runner), 0);
+
+  const auto stop_at = [&runner](const size_t fd_index, const size_t dg_index) {
+    return [&runner, fd_index, dg_index](const ElementId<3>& id) {
+      return next_action(runner, id) ==
+             (uses_dg_in_lattice(id) ? dg_index : fd_index);
+    };
+  };
+  // The first exchange, the external ghost data and the gradients for the DG
+  // neighbors.
+  run_until(make_not_null(&runner), 0,
+            stop_at(first_receive + 1, dg_boundary_corrections));
+  for (const auto& id : fd_ids) {
+    const GhostDataMap received = check_lattice_ghost_data(runner, id, false);
+    ActionTesting::next_action<lattice_component>(make_not_null(&runner), id);
+    check_same_entries(received, check_lattice_ghost_data(runner, id, true));
+    ActionTesting::next_action<lattice_component>(make_not_null(&runner), id);
+    check_finite_difference_gradients(runner, id);
+  }
+  // The second exchange and the external ghost data.
+  run_until(make_not_null(&runner), 1, stop_at(second_receive + 1, dg_drain));
+  for (const auto& id : fd_ids) {
+    const GhostDataMap received = check_lattice_ghost_data(runner, id, false);
+    ActionTesting::next_action<lattice_component>(make_not_null(&runner), id);
+    check_same_entries(received, check_lattice_ghost_data(runner, id, true));
+  }
+  // The right-hand side leaves the ghost data for the dissipation.
+  run_until(make_not_null(&runner), 2, stop_at(fd_dissipation, dg_drain));
+  for (const auto& id : fd_ids) {
+    check_lattice_ghost_data(runner, id, true);
+  }
+  run_until(make_not_null(&runner), 0, completed(runner, 1));
+  check_inboxes_empty(runner);
+  for (const auto& id : lattice_ids()) {
+    CHECK(get_tag<::Tags::Time>(runner, id) == approx(slab.duration().value()));
+  }
+}
+
 // [[TimeOut, 10]]
 SPECTRE_TEST_CASE(
     "Unit.Evolution.Systems.Ccz4.GradientProjection.HybridStepActions",
@@ -742,5 +1094,6 @@ SPECTRE_TEST_CASE(
   ConstraintDamping::register_derived_with_charm();
   test_minkowski(1);
   test_smooth_state();
+  test_external_boundaries();
 }
 }  // namespace

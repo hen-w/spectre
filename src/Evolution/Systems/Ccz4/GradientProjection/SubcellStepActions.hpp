@@ -9,6 +9,7 @@
 #include "Evolution/DgSubcell/Actions/SelectNumericalMethod.hpp"
 #include "Evolution/DgSubcell/Actions/TakeTimeStep.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/ApplyFilter.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/BoundaryConditionGhostData.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/EnforceConstrainedEvolution.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/EnforceTracelessDtConformalMetric.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/GhostData.hpp"
@@ -40,7 +41,11 @@ namespace Ccz4::GradientProjection {
  *   `Ccz4::fd::SoTimeDerivative` and same-time Kreiss-Oliger dissipation.
  *
  * Every element sends both exchanges to all its neighbors; how they are
- * consumed depends only on the receiver's method.
+ * consumed depends only on the receiver's method. Each exchange replaces all
+ * ghost data of a finite-difference element, so after each exchange the
+ * element adds the ghost data of its external boundaries from the boundary
+ * conditions (`Ccz4::fd::Actions::SetBoundaryConditionGhostData`), at the
+ * current time.
  */
 using subcell_step_actions = tmpl::flatten<tmpl::list<
     evolution::dg::subcell::Actions::SelectNumericalMethod,
@@ -58,6 +63,7 @@ using subcell_step_actions = tmpl::flatten<tmpl::list<
     evolution::dg::subcell::Actions::ReceiveAndSendDataForReconstruction<
         3, ::Ccz4::fd::GhostVariables, false, true>,
     evolution::dg::subcell::Actions::ReceiveDataForReconstruction<3, true>,
+    ::Ccz4::fd::Actions::SetBoundaryConditionGhostData,
 
     // -- Between the exchanges: the gradients for the DG neighbors --
     Actions::ComputeFiniteDifferenceGradients,
@@ -68,6 +74,7 @@ using subcell_step_actions = tmpl::flatten<tmpl::list<
     evolution::dg::subcell::Actions::ReceiveAndSendDataForReconstruction<
         3, ::Ccz4::fd::GhostVariablesPhysical, false>,
     evolution::dg::subcell::Actions::ReceiveDataForReconstruction<3>,
+    ::Ccz4::fd::Actions::SetBoundaryConditionGhostData,
 
     ::Actions::Label<
         evolution::dg::subcell::Actions::Labels::BeginSubcellAfterDgRollback>,

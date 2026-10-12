@@ -542,8 +542,8 @@ static void apply(
  * The four auxiliary varialbels \f$A_i\f$, \f$B_k{}^{i}\f$,
  * \f$D_{kij}\f$, and \f$P_i\f$ are NOT evolved. The stored gradients
  * `Tags::PotentialGradients` are neither used nor evolved: their time
- * derivative is zero. Finite-difference elements at external boundaries are
- * not supported.
+ * derivative is zero. The ghost data must include those of the external
+ * boundaries (see `Ccz4::fd::BoundaryConditionGhostData`).
  */
 struct SoTimeDerivative {
   template <typename DbTagsList>
@@ -569,12 +569,6 @@ struct SoTimeDerivative {
     const auto& cell_centered_logical_to_inertial_inv_hessian = db::get<
         evolution::dg::subcell::fd::Tags::InverseHessianLogicalToInertial<Dim>>(
         *box);
-
-    static_assert(
-        not std::decay_t<decltype(db::get<Parallel::Tags::Metavariables>(
-            *box))>::SubcellOptions::subcell_enabled_at_external_boundary,
-        "Finite-difference elements at external boundaries are not "
-        "supported.");
 
     const bool evolve_lapse_and_shift =
         get<::Ccz4::fd::Tags::EvolveLapseAndShift>(*box);

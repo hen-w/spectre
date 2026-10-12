@@ -28,6 +28,7 @@ spectre_target_headers(
   INCLUDE_DIRECTORY ${CMAKE_SOURCE_DIR}/src
   HEADERS
   ApplyFilter.hpp
+  BoundaryConditionGhostData.hpp
   Characteristics.hpp
   ConstraintCharacteristics.hpp
   Derivatives.hpp

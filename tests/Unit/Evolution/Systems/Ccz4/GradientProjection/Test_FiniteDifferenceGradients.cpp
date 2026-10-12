@@ -198,9 +198,6 @@ void test_pointwise(const gsl::not_null<std::mt19937*> gen) {
 
 struct Metavariables {
   using component_list = tmpl::list<>;
-  struct SubcellOptions {
-    static constexpr bool subcell_enabled_at_external_boundary = false;
-  };
 };
 struct Component {};
 

@@ -75,12 +75,11 @@ namespace Actions {
  * exchanges: overwrite the stored gradients with
  * `finite_difference_potential_gradients` of the fourth-order derivatives of
  * the physical fields (`Ccz4::fd::spacetime_derivatives`, using the ghost data
- * of the first exchange), so that the second exchange sends them to the DG
- * neighbors.
+ * of the first exchange and of the external boundaries), so that the second
+ * exchange sends them to the DG neighbors.
  *
- * \details Finite-difference elements at external boundaries are not
- * supported. It is an `ERROR` if the lapse and shift are not evolved, since
- * the DG elements always evolve them.
+ * \details It is an `ERROR` if the lapse and shift are not evolved, since the
+ * DG elements always evolve them.
  */
 struct ComputeFiniteDifferenceGradients {
   template <typename DbTags, typename... InboxTags, typename ArrayIndex,
@@ -91,10 +90,6 @@ struct ComputeFiniteDifferenceGradients {
       const Parallel::GlobalCache<Metavariables>& /*cache*/,
       const ArrayIndex& /*array_index*/, const ActionList /*meta*/,
       const ParallelComponent* const /*meta*/) {
-    static_assert(
-        not Metavariables::SubcellOptions::subcell_enabled_at_external_boundary,
-        "Finite-difference elements at external boundaries are not "
-        "supported.");
     if (not db::get<::Ccz4::fd::Tags::EvolveLapseAndShift>(box)) {
       ERROR(
           "The CCZ4 gradient-projection DG elements always evolve the lapse "

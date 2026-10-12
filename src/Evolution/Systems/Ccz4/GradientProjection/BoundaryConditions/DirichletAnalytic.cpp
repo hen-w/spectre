@@ -13,18 +13,50 @@
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/TaggedTuple.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
+#include "Domain/CoordinateMaps/CoordinateMap.hpp"
+#include "Domain/ElementMap.hpp"
+#include "Domain/Structure/Direction.hpp"
+#include "Evolution/DgSubcell/GhostZoneLogicalCoordinates.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/Reconstructor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/PointwiseFields.hpp"
 #include "Evolution/Systems/Ccz4/Solutions/Factory.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Evolution/TypeTraits.hpp"
+#include "NumericalAlgorithms/Spectral/Mesh.hpp"
 #include "PointwiseFunctions/AnalyticSolutions/AnalyticSolution.hpp"
 #include "PointwiseFunctions/GeneralRelativity/Tags.hpp"
 #include "Utilities/CallWithDynamicType.hpp"
 #include "Utilities/ErrorHandling/Error.hpp"
 #include "Utilities/Gsl.hpp"
+#include "Utilities/TMPL.hpp"
 
 namespace Ccz4::GradientProjection::BoundaryConditions {
+namespace {
+// The fields `AnalyticTags` of the analytic prescription at the given points.
+template <typename... AnalyticTags>
+tuples::TaggedTuple<AnalyticTags...> analytic_variables(
+    const evolution::initial_data::InitialData& analytic_prescription,
+    const tnsr::I<DataVector, 3>& coords, const double time,
+    tmpl::list<AnalyticTags...> /*meta*/) {
+  return call_with_dynamic_type<tuples::TaggedTuple<AnalyticTags...>,
+                                ::Ccz4::Solutions::all_solutions>(
+      &analytic_prescription, [&coords, &time](const auto* const initial_data) {
+        if constexpr (is_analytic_solution_v<
+                          std::decay_t<decltype(*initial_data)>>) {
+          return initial_data->variables(coords, time,
+                                         tmpl::list<AnalyticTags...>{});
+        } else {
+          (void)time;
+          ERROR(
+              "The CCZ4 gradient-projection DirichletAnalytic boundary "
+              "condition requires an analytic solution.");
+        }
+      });
+}
+}  // namespace
+
 DirichletAnalytic::DirichletAnalytic(CkMigrateMessage* const msg)
     : BoundaryCondition(msg) {}
 
@@ -123,21 +155,8 @@ std::optional<std::string> DirichletAnalytic::dg_ghost(
       ::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>,
       ::Ccz4::Tags::FieldA<DataVector, 3>, ::Ccz4::Tags::FieldB<DataVector, 3>,
       ::Ccz4::Tags::FieldD<DataVector, 3>, ::Ccz4::Tags::FieldP<DataVector, 3>>;
-  const auto values =
-      call_with_dynamic_type<tuples::tagged_tuple_from_typelist<analytic_tags>,
-                             ::Ccz4::Solutions::all_solutions>(
-          analytic_prescription_.get(),
-          [&coords, &time](const auto* const initial_data) {
-            if constexpr (is_analytic_solution_v<
-                              std::decay_t<decltype(*initial_data)>>) {
-              return initial_data->variables(coords, time, analytic_tags{});
-            } else {
-              (void)time;
-              ERROR(
-                  "The CCZ4 gradient-projection DirichletAnalytic boundary "
-                  "condition requires an analytic solution.");
-            }
-          });
+  const auto values = analytic_variables(*analytic_prescription_, coords, time,
+                                         analytic_tags{});
   *conformal_metric = get<::Ccz4::Tags::ConformalMetric<DataVector, 3>>(values);
   *conformal_factor = get<::Ccz4::Tags::ConformalFactor<DataVector>>(values);
   *a_tilde = get<::Ccz4::Tags::ATilde<DataVector, 3>>(values);
@@ -154,5 +173,41 @@ std::optional<std::string> DirichletAnalytic::dg_ghost(
                           get<::Ccz4::Tags::FieldD<DataVector, 3>>(values),
                           get<::Ccz4::Tags::FieldP<DataVector, 3>>(values));
   return std::nullopt;
+}
+
+void DirichletAnalytic::fd_ghost(
+    const gsl::not_null<tnsr::ii<DataVector, 3>*> conformal_metric,
+    const gsl::not_null<Scalar<DataVector>*> conformal_factor,
+    const gsl::not_null<tnsr::ii<DataVector, 3>*> a_tilde,
+    const gsl::not_null<Scalar<DataVector>*> trace_extrinsic_curvature,
+    const gsl::not_null<Scalar<DataVector>*> theta,
+    const gsl::not_null<tnsr::I<DataVector, 3>*> gamma_hat,
+    const gsl::not_null<Scalar<DataVector>*> lapse,
+    const gsl::not_null<tnsr::I<DataVector, 3>*> shift,
+    const gsl::not_null<tnsr::I<DataVector, 3>*> b,
+    const Direction<3>& direction, const Mesh<3>& subcell_mesh,
+    const double time, const domain::FunctionsOfTimeMap& functions_of_time,
+    const ElementMap<3, Frame::Grid>& logical_to_grid_map,
+    const domain::CoordinateMapBase<Frame::Grid, Frame::Inertial, 3>&
+        grid_to_inertial_map,
+    const ::Ccz4::fd::Reconstructor& reconstructor) const {
+  const auto ghost_inertial_coords = grid_to_inertial_map(
+      logical_to_grid_map(
+          evolution::dg::subcell::fd::ghost_zone_logical_coordinates(
+              subcell_mesh, reconstructor.ghost_zone_size(), direction)),
+      time, functions_of_time);
+  const auto values =
+      analytic_variables(*analytic_prescription_, ghost_inertial_coords, time,
+                         ::Ccz4::fd::System::original_evolved_variables_tags{});
+  *conformal_metric = get<::Ccz4::Tags::ConformalMetric<DataVector, 3>>(values);
+  *conformal_factor = get<::Ccz4::Tags::ConformalFactor<DataVector>>(values);
+  *a_tilde = get<::Ccz4::Tags::ATilde<DataVector, 3>>(values);
+  *trace_extrinsic_curvature =
+      get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(values);
+  *theta = get<::Ccz4::Tags::Theta<DataVector>>(values);
+  *gamma_hat = get<::Ccz4::Tags::GammaHat<DataVector, 3>>(values);
+  *lapse = get<gr::Tags::Lapse<DataVector>>(values);
+  *shift = get<gr::Tags::Shift<DataVector, 3>>(values);
+  *b = get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(values);
 }
 }  // namespace Ccz4::GradientProjection::BoundaryConditions

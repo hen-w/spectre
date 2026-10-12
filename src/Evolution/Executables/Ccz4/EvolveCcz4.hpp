@@ -256,8 +256,10 @@ struct EvolutionMetavars {
     using evolved_vars_tags = typename system::variables_tag::tags_list;
 
     static constexpr bool subcell_enabled = use_dg_subcell;
-    // Finite-difference elements at external boundaries are not supported.
-    static constexpr bool subcell_enabled_at_external_boundary = false;
+    // Finite-difference elements at external boundaries take the ghost data
+    // of these boundaries from the boundary conditions
+    // (Ccz4::fd::BoundaryConditionGhostData).
+    static constexpr bool subcell_enabled_at_external_boundary = true;
 
     // We send `ghost_zone_size` cell-centered grid points for variable
     // reconstruction, of which we need `ghost_zone_size-1` for reconstruction

@@ -9,6 +9,7 @@ set(LIBRARY_SOURCES
   FiniteDifference/Test_MomentumConstraintCompute.cpp
   FiniteDifference/Test_SpatialZ4ConstraintUpCompute.cpp
   FiniteDifference/Test_ApplyFilter.cpp
+  FiniteDifference/Test_BoundaryConditionGhostData.cpp
   FiniteDifference/Test_Characteristics.cpp
   FiniteDifference/Test_ConstraintCharacteristics.cpp
   FiniteDifference/Test_Derivatives.cpp
