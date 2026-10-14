@@ -453,6 +453,70 @@ Matrix interpolation_matrix(
     const Mesh<Dim>& mesh,
     const tnsr::I<DataType, Dim, Frame::ElementLogical>& points);
 
+// Lagrange interpolation stencil of degree `degree` on a window of
+// `degree + 1` consecutive source points: one-sided at the ends of the source
+// grid, otherwise the window containing the target whose end points are most
+// symmetric about it (the same choice as the hard-coded low-order stencils).
+std::vector<double> fd_stencil_lagrange(const DataVector& xi_source,
+                                        const double xi_target,
+                                        const size_t degree) {
+  ASSERT(std::is_sorted(std::begin(xi_source), std::end(xi_source)),
+         "xi_source = " << xi_source);
+  const size_t num_of_pts = xi_source.size();
+  const size_t width = degree + 1;
+  ASSERT(num_of_pts >= width,
+         "Need at least " << width << " points for degree-" << degree
+                          << " interpolation (got " << num_of_pts << ")");
+  const auto xi_u =
+      std::upper_bound(std::begin(xi_source), std::end(xi_source), xi_target);
+  size_t start = 0;
+  if (xi_u == std::begin(xi_source)) {
+    start = 0;
+  } else if (xi_u == std::end(xi_source)) {
+    start = num_of_pts - width;
+  } else {
+    const auto iu =
+        static_cast<size_t>(std::distance(std::begin(xi_source), xi_u));
+    double best_imbalance = std::numeric_limits<double>::max();
+    const size_t s_min = iu >= width - 1 ? iu - (width - 1) : 0;
+    const size_t s_max = std::min(iu - 1, num_of_pts - width);
+    for (size_t s0 = s_min; s0 <= s_max; ++s0) {
+      const double imbalance =
+          std::abs((xi_target - xi_source[s0]) -
+                   (xi_source[s0 + width - 1] - xi_target));
+      if (imbalance < best_imbalance) {
+        best_imbalance = imbalance;
+        start = s0;
+      }
+    }
+  }
+  std::vector<double> w(num_of_pts, 0.0);
+  for (size_t i = start; i < start + width; ++i) {
+    double weight = 1.0;
+    for (size_t j = start; j < start + width; ++j) {
+      if (j != i) {
+        weight *= (xi_target - xi_source[j]) / (xi_source[i] - xi_source[j]);
+      }
+    }
+    w[i] = weight;
+  }
+  return w;
+}
+
+// Quintic (6-point) interpolation.
+template <>
+std::vector<double> fd_stencil<5>(const DataVector& xi_source,
+                                  const double xi_target) {
+  return fd_stencil_lagrange(xi_source, xi_target, 5);
+}
+
+// Sextic (7-point) interpolation.
+template <>
+std::vector<double> fd_stencil<6>(const DataVector& xi_source,
+                                  const double xi_target) {
+  return fd_stencil_lagrange(xi_source, xi_target, 6);
+}
+
 template <typename DataType>
 Matrix interpolation_matrix(
     const Mesh<1>& mesh,
@@ -486,10 +550,18 @@ Matrix interpolation_matrix(
           stencil = fd_stencil<4>(xi_source, xi_target);
           break;
         }
+        case 5: {
+          stencil = fd_stencil<5>(xi_source, xi_target);
+          break;
+        }
+        case 6: {
+          stencil = fd_stencil<6>(xi_source, xi_target);
+          break;
+        }
         default:
           ERROR("Unsupported fd_to_fd_interp_order: "
                 << fd_to_fd_interp_order.value_or(default_order)
-                << "; expected 1, 2, 3, or 4.");
+                << "; expected 1 to 6.");
       }
       for (size_t i = 0; i < number_of_source_points; ++i) {
         result(p, i) = stencil[i];
@@ -559,10 +631,20 @@ Matrix interpolation_matrix(
           eta_stencil = fd_stencil<4>(eta_source, eta_target);
           break;
         }
+        case 5: {
+          xi_stencil = fd_stencil<5>(xi_source, xi_target);
+          eta_stencil = fd_stencil<5>(eta_source, eta_target);
+          break;
+        }
+        case 6: {
+          xi_stencil = fd_stencil<6>(xi_source, xi_target);
+          eta_stencil = fd_stencil<6>(eta_source, eta_target);
+          break;
+        }
         default:
           ERROR("Unsupported fd_to_fd_interp_order: "
                 << fd_to_fd_interp_order.value_or(default_order)
-                << "; expected 1, 2, 3, or 4.");
+                << "; expected 1 to 6.");
       }
       for (size_t j = 0, s = 0; j < mesh.extents(1); ++j) {
         for (size_t i = 0; i < mesh.extents(0); ++i) {
@@ -690,10 +772,22 @@ Matrix interpolation_matrix(
           zeta_stencil = fd_stencil<4>(zeta_source, zeta_target);
           break;
         }
+        case 5: {
+          xi_stencil = fd_stencil<5>(xi_source, xi_target);
+          eta_stencil = fd_stencil<5>(eta_source, eta_target);
+          zeta_stencil = fd_stencil<5>(zeta_source, zeta_target);
+          break;
+        }
+        case 6: {
+          xi_stencil = fd_stencil<6>(xi_source, xi_target);
+          eta_stencil = fd_stencil<6>(eta_source, eta_target);
+          zeta_stencil = fd_stencil<6>(zeta_source, zeta_target);
+          break;
+        }
         default:
           ERROR("Unsupported fd_to_fd_interp_order: "
                 << fd_to_fd_interp_order.value_or(default_order)
-                << "; expected 1, 2, 3, or 4.");
+                << "; expected 1 to 6.");
       }
       for (size_t k = 0, s = 0; k < mesh.extents(2); ++k) {
         for (size_t j = 0; j < mesh.extents(1); ++j) {

@@ -208,9 +208,9 @@ class SubcellOptions {
     using type = size_t;
     static constexpr Options::String help = {
         "The interpolation order to use when interpolating from FD block to FD "
-        "block."};
+        "block (1 to 6)."};
     static constexpr type lower_bound() { return 1; }
-    static constexpr type upper_bound() { return 4; }
+    static constexpr type upper_bound() { return 6; }
   };
 
   /// \brief Subcell steps per slab in regions allowed to do subcell
