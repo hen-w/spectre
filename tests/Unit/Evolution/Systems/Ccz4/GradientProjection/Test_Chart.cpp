@@ -3,9 +3,11 @@
 
 #include "Framework/TestingFramework.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
@@ -16,6 +18,7 @@
 #include "Framework/Pypp.hpp"
 #include "Framework/SetupLocalPythonEnvironment.hpp"
 #include "Framework/TestHelpers.hpp"
+#include "Utilities/ErrorHandling/FloatingPointExceptions.hpp"
 #include "Utilities/Gsl.hpp"
 
 namespace {
@@ -34,6 +37,12 @@ gp::Matrix3 identity() {
 }
 
 double trace(const gp::Matrix3& m) { return m(0, 0) + m(1, 1) + m(2, 2); }
+
+double determinant(const gp::Matrix3& m) {
+  return m(0, 0) * (m(1, 1) * m(2, 2) - m(1, 2) * m(2, 1)) -
+         m(0, 1) * (m(1, 0) * m(2, 2) - m(1, 2) * m(2, 0)) +
+         m(0, 2) * (m(1, 0) * m(2, 1) - m(1, 1) * m(2, 0));
+}
 
 // The fixed STF basis is orthonormal, matches the archived model ordering and
 // encodes the trace-free part only.
@@ -71,37 +80,93 @@ void test_stf_basis(const gsl::not_null<std::mt19937*> gen) {
   }
 }
 
-// LAPACK dsyev through blaze: ascending eigenvalues, eigenvectors in the
-// columns, for rotated anisotropic and repeated spectra.
+// The eigensystem of a symmetric matrix whose eigenvalues are bounded by
+// `scale`: ascending eigenvalues with the trace and determinant of the
+// matrix, orthonormal eigenvectors in the columns, and A Q = Q diag(lambda).
+std::array<double, 3> checked_eigensystem(const gp::Matrix3& matrix,
+                                          const double scale) {
+  CAPTURE(matrix);
+  std::array<double, 3> values{};
+  gp::Matrix3 vectors{};
+  gp::symmetric_eigensystem(make_not_null(&values), make_not_null(&vectors),
+                            matrix);
+  CHECK(values[0] <= values[1]);
+  CHECK(values[1] <= values[2]);
+  CHECK(values[0] + values[1] + values[2] ==
+        approx(trace(matrix)).scale(scale));
+  CHECK(values[0] * values[1] * values[2] ==
+        approx(determinant(matrix)).scale(scale * scale * scale));
+  CHECK(helpers::max_abs(blaze::trans(vectors) * vectors - identity()) < 1e-14);
+  gp::Matrix3 values_diagonal{};
+  for (size_t i = 0; i < 3; ++i) {
+    values_diagonal(i, i) = gsl::at(values, i);
+  }
+  CHECK(helpers::max_abs(matrix * vectors - vectors * values_diagonal) <
+        1e-14 * scale);
+  return values;
+}
+
+// The Jacobi eigensolver on rotated spectra (anisotropic, repeated, nearly
+// repeated, mixed-sign, widely spread and tiny), on random matrices, on
+// already diagonal matrices (no rotation, so exact), and on non-finite input.
 void test_eigensystem(const gsl::not_null<std::mt19937*> gen) {
   for (const auto& spectrum :
        std::vector<std::array<double, 3>>{{{0.3, 2.0, 7.0}},
                                           {{1.0, 1.0, 4.0}},
                                           {{2.0, 2.0, 2.0}},
-                                          {{1.0e-4, 1.0, 1.0e4}}}) {
-    const gp::Matrix3 rotation = helpers::random_rotation(gen);
-    gp::Matrix3 diagonal{};
-    for (size_t i = 0; i < 3; ++i) {
-      diagonal(i, i) = gsl::at(spectrum, i);
+                                          {{1.0, 1.0 + 1.0e-12, 2.0}},
+                                          {{0.3, 0.3, 0.3 + 1.0e-9}},
+                                          {{-0.2, 0.1, 0.1 + 1.0e-14}},
+                                          {{-0.3, 0.1, 0.2}},
+                                          {{-1.0e-3, 0.0, 1.0e-3}},
+                                          {{1.0e-4, 1.0, 1.0e4}},
+                                          {{1.0e-30, 2.0e-30, 4.0e-30}}}) {
+    CAPTURE(spectrum);
+    for (size_t sample = 0; sample < 10; ++sample) {
+      const gp::Matrix3 rotation = helpers::random_rotation(gen);
+      gp::Matrix3 diagonal{};
+      for (size_t i = 0; i < 3; ++i) {
+        diagonal(i, i) = gsl::at(spectrum, i);
+      }
+      const double scale =
+          std::max(std::abs(spectrum[0]), std::abs(spectrum[2]));
+      const std::array<double, 3> values = checked_eigensystem(
+          rotation * diagonal * blaze::trans(rotation), scale);
+      for (size_t i = 0; i < 3; ++i) {
+        CHECK(gsl::at(values, i) == approx(gsl::at(spectrum, i)).scale(scale));
+      }
     }
-    const gp::Matrix3 matrix = rotation * diagonal * blaze::trans(rotation);
-    std::array<double, 3> values{};
-    gp::Matrix3 vectors{};
-    gp::symmetric_eigensystem(make_not_null(&values), make_not_null(&vectors),
-                              matrix);
-    for (size_t i = 0; i < 3; ++i) {
-      CHECK(gsl::at(values, i) ==
-            approx(gsl::at(spectrum, i)).scale(spectrum[2]));
-    }
-    CHECK(helpers::max_abs(blaze::trans(vectors) * vectors - identity()) <
-          1e-14);
-    gp::Matrix3 values_diagonal{};
-    for (size_t i = 0; i < 3; ++i) {
-      values_diagonal(i, i) = gsl::at(values, i);
-    }
-    CHECK(helpers::max_abs(matrix * vectors - vectors * values_diagonal) <
-          1e-13 * spectrum[2]);
   }
+  for (size_t sample = 0; sample < 1000; ++sample) {
+    const gp::Matrix3 matrix = helpers::random_symmetric(gen, 1.0);
+    checked_eigensystem(matrix, 3.0 * helpers::max_abs(matrix));
+  }
+
+  std::array<double, 3> values{};
+  gp::Matrix3 vectors{};
+  gp::symmetric_eigensystem(make_not_null(&values), make_not_null(&vectors),
+                            gp::Matrix3{});
+  CHECK(values == std::array<double, 3>{});
+  CHECK(helpers::max_abs(vectors - identity()) == 0.0);
+  gp::Matrix3 diagonal{};
+  diagonal(0, 0) = 3.0;
+  diagonal(1, 1) = -1.0;
+  diagonal(2, 2) = 2.0;
+  gp::symmetric_eigensystem(make_not_null(&values), make_not_null(&vectors),
+                            diagonal);
+  CHECK(values == std::array<double, 3>{{-1.0, 2.0, 3.0}});
+  CHECK(helpers::max_abs(vectors - gp::Matrix3{{0.0, 0.0, 1.0},
+                                               {1.0, 0.0, 0.0},
+                                               {0.0, 1.0, 0.0}}) == 0.0);
+
+  // Non-finite input is an error, not a NaN eigensystem.
+  const ScopedFpeState disable_fpes(false);
+  gp::Matrix3 not_finite = identity();
+  not_finite(1, 1) = std::numeric_limits<double>::quiet_NaN();
+  CHECK_THROWS_WITH(
+      gp::symmetric_eigensystem(make_not_null(&values), make_not_null(&vectors),
+                                not_finite),
+      Catch::Matchers::ContainsSubstring("non-finite"));
 }
 
 // The chart maps against SciPy's matrix exponential, logarithm and Frechet
@@ -207,11 +272,46 @@ void test_chart_maps(const gsl::not_null<std::mt19937*> gen) {
                         "The conformal metric is not positive definite"));
 }
 
+// The eigenbasis maps: the conversions are inverse to each other, the
+// eigenbasis metric is that of the chart, and combining maps in the
+// eigenbasis with one conversion of each matrix agrees with the maps.
+void test_eigenbasis_maps(const gsl::not_null<std::mt19937*> gen) {
+  for (const auto& spectrum :
+       std::vector<std::array<double, 3>>{{{0.0, 0.0, 0.0}},
+                                          {{0.1, 0.1, -0.2}},
+                                          {{0.4, -0.1, -0.3}},
+                                          {{1.2, -0.3, -0.9}}}) {
+    CAPTURE(spectrum);
+    const gp::LogMetricChart chart{
+        helpers::log_metric_with_spectrum(gen, spectrum)};
+    const gp::Matrix3 x = helpers::random_symmetric(gen, 1.0);
+    const gp::Matrix3 y = helpers::random_symmetric(gen, 1.0);
+    const gp::Matrix3 x_hat = chart.to_eigenbasis(x);
+    const gp::Matrix3 y_hat = chart.to_eigenbasis(y);
+    CHECK(helpers::max_abs(chart.from_eigenbasis(x_hat) - x) < 1e-14);
+    const gp::Matrix3 metric = chart.metric();
+    CHECK(helpers::max_abs(chart.from_eigenbasis(chart.eigenbasis_metric()) -
+                           metric) < 1e-14 * helpers::max_abs(metric));
+    const gp::Matrix3 combined = chart.tangent(x) +
+                                 chart.second_derivative(x, y) -
+                                 2.0 * chart.inverse_tangent(y);
+    const gp::Matrix3 combined_hat =
+        chart.eigenbasis_tangent(x_hat) +
+        chart.eigenbasis_second_derivative(x_hat, y_hat) -
+        2.0 * chart.eigenbasis_inverse_tangent(y_hat);
+    CHECK(helpers::max_abs(chart.from_eigenbasis(combined_hat) - combined) <
+          1e-13 * (helpers::max_abs(combined) + 1.0));
+  }
+}
+
 // Divided differences of exp against high-precision Python Decimal values.
+// Node spans up to 1 use the truncated series, whose truncation error is
+// below the unit roundoff, so there only rounding errors remain; a span of
+// exactly 1 is the series' worst case.
 void test_divided_differences(const gsl::not_null<std::mt19937*> gen) {
   std::uniform_real_distribution<double> center(-3.0, 3.0);
   for (const double gap : {0.0, 1.0e-15, 1.0e-12, 1.0e-8, 1.0e-4, 0.1, 0.5,
-                           0.99, 1.01, 2.0, 6.0}) {
+                           0.99, 1.0, 1.01, 2.0, 6.0}) {
     for (size_t sample = 0; sample < 3; ++sample) {
       const double x = center(*gen);
       const double y = x + gap;
@@ -226,10 +326,13 @@ void test_divided_differences(const gsl::not_null<std::mt19937*> gen) {
                {{x, y, z}}, {{x, x, y}}, {{y, x, y}}, {{z, y, x}}}) {
         const double second =
             gp::exp_second_divided_difference(nodes[0], nodes[1], nodes[2]);
-        CHECK(second ==
-              approx(pypp::call<double>(module, "exp_second_divided_difference",
-                                        nodes[0], nodes[1], nodes[2]))
-                  .epsilon(2e-14));
+        const double expected =
+            pypp::call<double>(module, "exp_second_divided_difference",
+                               nodes[0], nodes[1], nodes[2]);
+        CHECK(second == approx(expected).epsilon(2e-14));
+        if (gap <= 1.0) {
+          CHECK(std::abs(second - expected) < 2e-15 * expected);
+        }
       }
     }
   }
@@ -265,6 +368,10 @@ void test_potential_rhs(const gsl::not_null<std::mt19937*> gen, const double f,
     const double lapse = state.u[gp::PotentialIndex::lapse];
     const gp::PotentialVector rhs =
         gp::potential_rhs(chart, state.u, state.w, state.q, f);
+    // The shift-gradient terms, built once and shared by the calls below.
+    const gp::ShiftGradientTerms shift_terms{chart, state.q};
+    CHECK(gp::potential_rhs(chart, shift_terms, state.u, state.w, state.q, f) ==
+          rhs);
     const DataVector expected = pypp::call<DataVector>(
         module, "original_rhs", to_data_vector(state.u),
         to_data_vector(state.w), to_data_vector(state.q), f);
@@ -347,6 +454,9 @@ void test_potential_rhs(const gsl::not_null<std::mt19937*> gen, const double f,
       const gp::PotentialVector derivative =
           gp::potential_rhs_potential_derivative(chart, state.u, state.w,
                                                  state.q, delta_u);
+      CHECK(gp::potential_rhs_potential_derivative(chart, shift_terms, state.u,
+                                                   state.w, state.q,
+                                                   delta_u) == derivative);
       const gp::PotentialVector u_plus = add(state.u, delta_u, step);
       const gp::PotentialVector u_minus = add(state.u, delta_u, -step);
       const gp::PotentialVector difference =
@@ -411,8 +521,10 @@ void test_chart_from_physical(const gsl::not_null<std::mt19937*> gen) {
   }
   gp::PotentialVector u{};
   gp::VelocityVector w{};
+  gp::LogMetricChart encoded_chart{};
   const auto traces =
-      gp::chart_from_physical(make_not_null(&u), make_not_null(&w), physical);
+      gp::chart_from_physical(make_not_null(&u), make_not_null(&w),
+                              make_not_null(&encoded_chart), physical);
   CHECK(std::abs(traces[0]) < 1e-14);
   CHECK(std::abs(traces[1]) < 1e-13);
   for (size_t a = 0; a < gp::number_of_potentials; ++a) {
@@ -423,26 +535,72 @@ void test_chart_from_physical(const gsl::not_null<std::mt19937*> gen) {
   for (size_t a = 0; a < gp::number_of_velocities; ++a) {
     CHECK(gsl::at(w, a) == approx(gsl::at(state.w, a)));
   }
-  // Off-constraint data is reported through the traces.
+  // The chart of the encoded H, without decomposing H again.
+  CHECK(helpers::chart_difference(encoded_chart,
+                                  gp::LogMetricChart{gp::stf_decode(
+                                      &u[gp::PotentialIndex::log_metric])},
+                                  gen) < 1e-13);
+  // Off-constraint data is reported through the traces, and the chart is
+  // still that of the encoded, trace-free H.
   gp::PhysicalPointState off_constraint = physical;
   off_constraint.conformal_metric *= 1.1;
   off_constraint.a_tilde += 0.2 * physical.conformal_metric;
-  const auto off_traces = gp::chart_from_physical(
-      make_not_null(&u), make_not_null(&w), off_constraint);
+  const auto off_traces =
+      gp::chart_from_physical(make_not_null(&u), make_not_null(&w),
+                              make_not_null(&encoded_chart), off_constraint);
   CHECK(off_traces[0] == approx(1.5 * std::log(1.1)));
   CHECK(off_traces[1] == approx(0.6 / 1.1));
+  CHECK(helpers::chart_difference(encoded_chart,
+                                  gp::LogMetricChart{gp::stf_decode(
+                                      &u[gp::PotentialIndex::log_metric])},
+                                  gen) < 1e-13);
 
   gp::PhysicalPointState bad_lapse = physical;
   bad_lapse.lapse = 0.0;
   CHECK_THROWS_WITH(
-      gp::chart_from_physical(make_not_null(&u), make_not_null(&w), bad_lapse),
+      gp::chart_from_physical(make_not_null(&u), make_not_null(&w),
+                              make_not_null(&encoded_chart), bad_lapse),
       Catch::Matchers::ContainsSubstring("The lapse must be positive"));
   gp::PhysicalPointState bad_phi = physical;
   bad_phi.conformal_factor = -1.0;
   CHECK_THROWS_WITH(
-      gp::chart_from_physical(make_not_null(&u), make_not_null(&w), bad_phi),
+      gp::chart_from_physical(make_not_null(&u), make_not_null(&w),
+                              make_not_null(&encoded_chart), bad_phi),
       Catch::Matchers::ContainsSubstring(
           "The conformal factor must be positive"));
+}
+
+// The chart of the trace-free part keeps the eigenvectors and agrees with the
+// chart decomposed from H - tr(H) I / 3, also when it comes from a metric off
+// the unit-determinant surface.
+void test_trace_free(const gsl::not_null<std::mt19937*> gen) {
+  for (const auto& spectrum :
+       std::vector<std::array<double, 3>>{{{0.0, 0.0, 0.0}},
+                                          {{0.1, 0.1, -0.2}},
+                                          {{0.4, -0.1, -0.3}},
+                                          {{1.2, -0.3, -0.9}}}) {
+    for (const double trace_of_h : {0.0, 1.0e-12, 0.05, -0.7}) {
+      CAPTURE(spectrum);
+      CAPTURE(trace_of_h);
+      const gp::Matrix3 trace_free_h =
+          helpers::log_metric_with_spectrum(gen, spectrum);
+      const gp::LogMetricChart expected{trace_free_h};
+      const gp::LogMetricChart chart{trace_free_h +
+                                     (trace_of_h / 3.0) * identity()};
+      const gp::LogMetricChart trace_free = chart.trace_free();
+      CHECK(helpers::max_abs(trace_free.eigenvectors() -
+                             chart.eigenvectors()) == 0.0);
+      const auto& h = trace_free.log_eigenvalues();
+      CHECK(std::abs(h[0] + h[1] + h[2]) < 1e-14);
+      CHECK(helpers::chart_difference(trace_free, expected, gen) < 1e-13);
+      // Condition number lambda_max / lambda_min of the metric, which bounds
+      // the accuracy of the round trip through it.
+      const double condition = std::exp(2.0 * (h[2] - h[0]));
+      CHECK(helpers::chart_difference(
+                gp::LogMetricChart::from_metric(chart.metric()).trace_free(),
+                expected, gen) < 1e-15 * (100.0 + condition));
+    }
+  }
 }
 
 // Charts are kept in the DataBox between actions, so they serialize; the
@@ -465,6 +623,7 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.GradientProjection.Chart",
   test_stf_basis(make_not_null(&gen));
   test_eigensystem(make_not_null(&gen));
   test_chart_maps(make_not_null(&gen));
+  test_eigenbasis_maps(make_not_null(&gen));
   test_divided_differences(make_not_null(&gen));
   for (const double f : {1.0, 0.5, 1.25}) {
     CAPTURE(f);
@@ -473,5 +632,6 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.GradientProjection.Chart",
   // Small conformal factors exercise the 1 / phi of P.
   test_potential_rhs(make_not_null(&gen), 1.0, {{0.02, 0.1}});
   test_chart_from_physical(make_not_null(&gen));
+  test_trace_free(make_not_null(&gen));
   test_chart_serialization(make_not_null(&gen));
 }

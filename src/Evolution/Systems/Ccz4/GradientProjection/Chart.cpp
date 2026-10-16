@@ -5,10 +5,10 @@
 
 #include <algorithm>
 #include <array>
-#include <blaze/math/lapack/clapack/syev.h>
 #include <cmath>
 #include <cstddef>
 #include <pup.h>
+#include <utility>
 
 #include "DataStructures/StaticMatrix.hpp"
 #include "Utilities/ErrorHandling/Error.hpp"
@@ -21,10 +21,10 @@ const double inv_sqrt2 = 1.0 / std::sqrt(2.0);
 const double inv_sqrt6 = 1.0 / std::sqrt(6.0);
 const double sqrt2 = std::sqrt(2.0);
 
-// 1/(j+2)! for j = 0, ..., 24: the coefficients of the series in
+// 1/(j+2)! for j = 0, ..., 16: the coefficients of the series in
 // exp_second_divided_difference.
-constexpr std::array<double, 25> series_inverse_factorials = []() {
-  std::array<double, 25> result{};
+constexpr std::array<double, 17> series_inverse_factorials = []() {
+  std::array<double, 17> result{};
   double factorial = 2.0;
   result[0] = 1.0 / factorial;
   for (size_t j = 1; j < result.size(); ++j) {
@@ -34,7 +34,32 @@ constexpr std::array<double, 25> series_inverse_factorials = []() {
   return result;
 }();
 
-// W_ij = g_jk B_i^k + g_ik B_j^k - 2/3 g_ij d for a symmetric g.
+// The position of t_rs = t_sr among the 6 distinct tangent coefficients,
+// indexed by r + 3 s.
+constexpr std::array<size_t, 9> tangent_index{{0, 1, 2, 1, 3, 4, 2, 4, 5}};
+
+// The position of 4 f[2h_r, 2h_t, 2h_s] among the 10 distinct second
+// coefficients, indexed by r + 3 t + 9 s; the divided difference is symmetric
+// in its arguments.
+constexpr std::array<size_t, 27> second_index = []() {
+  std::array<size_t, 27> result{};
+  size_t position = 0;
+  for (size_t a = 0; a < 3; ++a) {
+    for (size_t b = a; b < 3; ++b) {
+      for (size_t c = b; c < 3; ++c) {
+        result[a + 3 * b + 9 * c] = result[a + 3 * c + 9 * b] =
+            result[b + 3 * a + 9 * c] = result[b + 3 * c + 9 * a] =
+                result[c + 3 * a + 9 * b] = result[c + 3 * b + 9 * a] =
+                    position;
+        ++position;
+      }
+    }
+  }
+  return result;
+}();
+
+// W_ij = g_jk B_i^k + g_ik B_j^k - 2/3 g_ij d for a symmetric g, with g and B
+// in the same orthonormal basis.
 Matrix3 shift_strain(const Matrix3& metric, const Matrix3& shift_gradient) {
   const double divergence =
       shift_gradient(0, 0) + shift_gradient(1, 1) + shift_gradient(2, 2);
@@ -107,7 +132,9 @@ double exp_second_divided_difference(const double x, const double y,
   double h_012 = 1.0;
   double sum = series_inverse_factorials[0];
   // With |d| <= 2/3 the j-th term is bounded by (2/3)^j / (2 j!), so the
-  // terms beyond j = 24 are below 1e-27 while the sum exceeds 0.25.
+  // terms beyond j = 16 add up to less than 1.5e-18, while the sum exceeds
+  // 0.25: the truncation error is below 6e-18 relative, under the
+  // double-precision unit roundoff 1.1e-16.
   for (size_t j = 1; j < series_inverse_factorials.size(); ++j) {
     h_2 *= d2;
     h_12 = d1 * h_12 + h_2;
@@ -120,26 +147,104 @@ double exp_second_divided_difference(const double x, const double y,
 void symmetric_eigensystem(
     const gsl::not_null<std::array<double, 3>*> eigenvalues,
     const gsl::not_null<Matrix3*> eigenvectors, const Matrix3& matrix) {
-  // Copy into a contiguous column-major buffer for LAPACK.
-  std::array<double, 9> buffer{};
   for (size_t j = 0; j < 3; ++j) {
     for (size_t i = 0; i < 3; ++i) {
-      gsl::at(buffer, i + 3 * j) = 0.5 * (matrix(i, j) + matrix(j, i));
+      if (not std::isfinite(matrix(i, j))) {
+        ERROR("The matrix has a non-finite entry:\n" << matrix);
+      }
     }
   }
-  std::array<double, 32> work{};
-  blaze::blas_int_t info = 0;
-  blaze::syev('V', 'L', 3, buffer.data(), 3, eigenvalues->data(), work.data(),
-              static_cast<blaze::blas_int_t>(work.size()), &info);
-  if (info != 0) {
-    ERROR("LAPACK dsyev failed with info = " << info << " for the matrix\n"
-                                             << matrix);
-  }
+  // Cyclic Jacobi iteration on the symmetric part of the matrix: the rotation
+  // in the (p, q) plane zeroes the entry A_pq, the off-diagonal entries
+  // converge quadratically to zero and the diagonal to the eigenvalues. The
+  // eigenvectors are the product of the rotations.
+  std::array<double, 3>& diagonal = *eigenvalues;
+  diagonal = {{matrix(0, 0), matrix(1, 1), matrix(2, 2)}};
+  // off[r] is the entry A_pq of the plane (p, q) that excludes the index r.
+  std::array<double, 3> off{{0.5 * (matrix(1, 2) + matrix(2, 1)),
+                             0.5 * (matrix(0, 2) + matrix(2, 0)),
+                             0.5 * (matrix(0, 1) + matrix(1, 0))}};
+  Matrix3& vectors = *eigenvectors;
   for (size_t j = 0; j < 3; ++j) {
     for (size_t i = 0; i < 3; ++i) {
-      (*eigenvectors)(i, j) = gsl::at(buffer, i + 3 * j);
+      vectors(i, j) = i == j ? 1.0 : 0.0;
     }
   }
+  // The planes (p, q) and the index r they exclude.
+  constexpr std::array<std::array<size_t, 3>, 3> planes{
+      {{{0, 1, 2}}, {{0, 2, 1}}, {{1, 2, 0}}}};
+  constexpr size_t maximum_sweeps = 50;
+  for (size_t sweep = 0; sweep < maximum_sweeps; ++sweep) {
+    if (off[0] == 0.0 and off[1] == 0.0 and off[2] == 0.0) {
+      // Ascending eigenvalues, with the eigenvectors permuted alike.
+      const auto swap = [&diagonal, &vectors](const size_t i, const size_t j) {
+        std::swap(gsl::at(diagonal, i), gsl::at(diagonal, j));
+        for (size_t k = 0; k < 3; ++k) {
+          std::swap(vectors(k, i), vectors(k, j));
+        }
+      };
+      if (diagonal[1] < diagonal[0]) {
+        swap(0, 1);
+      }
+      if (diagonal[2] < diagonal[1]) {
+        swap(1, 2);
+      }
+      if (diagonal[1] < diagonal[0]) {
+        swap(0, 1);
+      }
+      return;
+    }
+    for (const auto& [p, q, r] : planes) {
+      double& a_pq = gsl::at(off, r);
+      if (a_pq == 0.0) {
+        continue;
+      }
+      double& a_pp = gsl::at(diagonal, p);
+      double& a_qq = gsl::at(diagonal, q);
+      // An entry below the rounding of both diagonal entries it couples is
+      // dropped instead of rotated.
+      const double hundred_a_pq = 100.0 * std::abs(a_pq);
+      if (std::abs(a_pp) + hundred_a_pq == std::abs(a_pp) and
+          std::abs(a_qq) + hundred_a_pq == std::abs(a_qq)) {
+        a_pq = 0.0;
+        continue;
+      }
+      // t = tan(phi) of the rotation angle |phi| <= pi / 4 that zeroes A_pq,
+      // the smaller root of t^2 + 2 theta t - 1 = 0. For A_pq below the
+      // rounding of A_qq - A_pp the root is A_pq / (A_qq - A_pp) to rounding
+      // (and theta^2 could overflow).
+      const double difference = a_qq - a_pp;
+      double t = 0.0;
+      if (std::abs(difference) + hundred_a_pq == std::abs(difference)) {
+        t = a_pq / difference;
+      } else {
+        const double theta = 0.5 * difference / a_pq;
+        t = std::copysign(
+            1.0 / (std::abs(theta) + std::sqrt(1.0 + theta * theta)), theta);
+      }
+      const double c = 1.0 / std::sqrt(1.0 + t * t);
+      const double s = t * c;
+      const double tau = s / (1.0 + c);
+      a_pp -= t * a_pq;
+      a_qq += t * a_pq;
+      a_pq = 0.0;
+      // The other entries of rows p and q: A_rp = off[q] and A_rq = off[p].
+      double& a_rp = gsl::at(off, q);
+      double& a_rq = gsl::at(off, p);
+      const double old_a_rp = a_rp;
+      a_rp -= s * (a_rq + tau * old_a_rp);
+      a_rq += s * (old_a_rp - tau * a_rq);
+      for (size_t k = 0; k < 3; ++k) {
+        const double v_p = vectors(k, p);
+        const double v_q = vectors(k, q);
+        vectors(k, p) = v_p - s * (v_q + tau * v_p);
+        vectors(k, q) = v_q + s * (v_p - tau * v_q);
+      }
+    }
+  }
+  ERROR("The Jacobi eigenvalue iteration did not converge in "
+        << maximum_sweeps << " sweeps for the matrix\n"
+        << matrix);
 }
 
 LogMetricChart::LogMetricChart(const Matrix3& log_metric) {
@@ -168,6 +273,25 @@ LogMetricChart LogMetricChart::from_metric(const Matrix3& metric) {
                         q};
 }
 
+LogMetricChart LogMetricChart::trace_free() const {
+  // Every coefficient is a divided difference of exp(2 h) at the eigenvalues,
+  // so shifting them by -mean scales it by exp(-2 mean).
+  const double mean = (h_[0] + h_[1] + h_[2]) / 3.0;
+  const double scale = std::exp(-2.0 * mean);
+  LogMetricChart result{};
+  result.h_ = {{h_[0] - mean, h_[1] - mean, h_[2] - mean}};
+  result.q_ = q_;
+  for (size_t i = 0; i < tangent_coefficients_.size(); ++i) {
+    gsl::at(result.tangent_coefficients_, i) =
+        scale * gsl::at(tangent_coefficients_, i);
+  }
+  for (size_t i = 0; i < second_coefficients_.size(); ++i) {
+    gsl::at(result.second_coefficients_, i) =
+        scale * gsl::at(second_coefficients_, i);
+  }
+  return result;
+}
+
 void LogMetricChart::pup(PUP::er& p) {
   p | h_;
   p | q_;
@@ -193,30 +317,24 @@ bool operator!=(const LogMetricChart& lhs, const LogMetricChart& rhs) {
 }
 
 void LogMetricChart::compute_coefficients() {
+  // t_rs = 2 e^{h_r} e^{h_s} sinhc(h_r - h_s) = t_sr.
+  const std::array<double, 3> exp_h{
+      {std::exp(h_[0]), std::exp(h_[1]), std::exp(h_[2])}};
   for (size_t r = 0; r < 3; ++r) {
-    for (size_t s = 0; s < 3; ++s) {
-      gsl::at(tangent_coefficients_, r + 3 * s) =
-          2.0 * std::exp(gsl::at(h_, r) + gsl::at(h_, s)) *
+    for (size_t s = r; s < 3; ++s) {
+      gsl::at(tangent_coefficients_, gsl::at(tangent_index, r + 3 * s)) =
+          2.0 * gsl::at(exp_h, r) * gsl::at(exp_h, s) *
           sinhc(gsl::at(h_, r) - gsl::at(h_, s));
     }
   }
   for (size_t r = 0; r < 3; ++r) {
     for (size_t t = r; t < 3; ++t) {
       for (size_t s = t; s < 3; ++s) {
-        const double value =
+        gsl::at(second_coefficients_,
+                gsl::at(second_index, r + 3 * t + 9 * s)) =
             4.0 * exp_second_divided_difference(2.0 * gsl::at(h_, r),
                                                 2.0 * gsl::at(h_, t),
                                                 2.0 * gsl::at(h_, s));
-        // The divided difference is symmetric in its arguments.
-        for (const auto& [i, j, k] :
-             std::array<std::array<size_t, 3>, 6>{{{{r, t, s}},
-                                                   {{r, s, t}},
-                                                   {{t, r, s}},
-                                                   {{t, s, r}},
-                                                   {{s, r, t}},
-                                                   {{s, t, r}}}}) {
-          gsl::at(second_coefficients_, i + 3 * j + 9 * k) = value;
-        }
       }
     }
   }
@@ -226,8 +344,57 @@ Matrix3 LogMetricChart::to_eigenbasis(const Matrix3& x) const {
   return blaze::trans(q_) * x * q_;
 }
 
-Matrix3 LogMetricChart::from_eigenbasis(const Matrix3& x) const {
-  return q_ * x * blaze::trans(q_);
+Matrix3 LogMetricChart::from_eigenbasis(const Matrix3& x_hat) const {
+  return q_ * x_hat * blaze::trans(q_);
+}
+
+Matrix3 LogMetricChart::eigenbasis_metric() const {
+  // t_rr = 2 e^{2 h_r}
+  Matrix3 result{};
+  for (size_t r = 0; r < 3; ++r) {
+    result(r, r) =
+        0.5 * gsl::at(tangent_coefficients_, gsl::at(tangent_index, r + 3 * r));
+  }
+  return result;
+}
+
+Matrix3 LogMetricChart::eigenbasis_tangent(const Matrix3& x_hat) const {
+  Matrix3 result{};
+  for (size_t s = 0; s < 3; ++s) {
+    for (size_t r = 0; r < 3; ++r) {
+      result(r, s) = x_hat(r, s) * gsl::at(tangent_coefficients_,
+                                           gsl::at(tangent_index, r + 3 * s));
+    }
+  }
+  return result;
+}
+
+Matrix3 LogMetricChart::eigenbasis_inverse_tangent(const Matrix3& x_hat) const {
+  Matrix3 result{};
+  for (size_t s = 0; s < 3; ++s) {
+    for (size_t r = 0; r < 3; ++r) {
+      result(r, s) = x_hat(r, s) / gsl::at(tangent_coefficients_,
+                                           gsl::at(tangent_index, r + 3 * s));
+    }
+  }
+  return result;
+}
+
+Matrix3 LogMetricChart::eigenbasis_second_derivative(
+    const Matrix3& x_hat, const Matrix3& y_hat) const {
+  Matrix3 result{};
+  for (size_t s = 0; s < 3; ++s) {
+    for (size_t r = 0; r < 3; ++r) {
+      double value = 0.0;
+      for (size_t t = 0; t < 3; ++t) {
+        value += gsl::at(second_coefficients_,
+                         gsl::at(second_index, r + 3 * t + 9 * s)) *
+                 (x_hat(r, t) * y_hat(t, s) + y_hat(r, t) * x_hat(t, s));
+      }
+      result(r, s) = value;
+    }
+  }
+  return result;
 }
 
 Matrix3 LogMetricChart::eigen_function(
@@ -261,47 +428,24 @@ Matrix3 LogMetricChart::inverse_sqrt_metric() const {
 }
 
 Matrix3 LogMetricChart::tangent(const Matrix3& x) const {
-  Matrix3 rotated = to_eigenbasis(x);
-  for (size_t s = 0; s < 3; ++s) {
-    for (size_t r = 0; r < 3; ++r) {
-      rotated(r, s) *= gsl::at(tangent_coefficients_, r + 3 * s);
-    }
-  }
-  return from_eigenbasis(rotated);
+  return from_eigenbasis(eigenbasis_tangent(to_eigenbasis(x)));
 }
 
 Matrix3 LogMetricChart::inverse_tangent(const Matrix3& x) const {
-  Matrix3 rotated = to_eigenbasis(x);
-  for (size_t s = 0; s < 3; ++s) {
-    for (size_t r = 0; r < 3; ++r) {
-      rotated(r, s) /= gsl::at(tangent_coefficients_, r + 3 * s);
-    }
-  }
-  return from_eigenbasis(rotated);
+  return from_eigenbasis(eigenbasis_inverse_tangent(to_eigenbasis(x)));
 }
 
 Matrix3 LogMetricChart::second_derivative(const Matrix3& x,
                                           const Matrix3& y) const {
-  const Matrix3 x_rotated = to_eigenbasis(x);
-  const Matrix3 y_rotated = to_eigenbasis(y);
-  Matrix3 result{};
-  for (size_t s = 0; s < 3; ++s) {
-    for (size_t r = 0; r < 3; ++r) {
-      double value = 0.0;
-      for (size_t t = 0; t < 3; ++t) {
-        value += gsl::at(second_coefficients_, r + 3 * t + 9 * s) *
-                 (x_rotated(r, t) * y_rotated(t, s) +
-                  y_rotated(r, t) * x_rotated(t, s));
-      }
-      result(r, s) = value;
-    }
-  }
-  return from_eigenbasis(result);
+  return from_eigenbasis(
+      eigenbasis_second_derivative(to_eigenbasis(x), to_eigenbasis(y)));
 }
 
 std::array<double, 2> chart_from_physical(
     const gsl::not_null<PotentialVector*> u,
-    const gsl::not_null<VelocityVector*> w, const PhysicalPointState& state) {
+    const gsl::not_null<VelocityVector*> w,
+    const gsl::not_null<LogMetricChart*> chart,
+    const PhysicalPointState& state) {
   if (not(state.conformal_factor > 0.0)) {
     ERROR("The conformal factor must be positive, but is "
           << state.conformal_factor);
@@ -309,10 +453,10 @@ std::array<double, 2> chart_from_physical(
   if (not(state.lapse > 0.0)) {
     ERROR("The lapse must be positive, but is " << state.lapse);
   }
-  const LogMetricChart chart =
+  const LogMetricChart full_chart =
       LogMetricChart::from_metric(state.conformal_metric);
-  const Matrix3 log_metric = chart.log_metric();
-  const Matrix3 a = 2.0 * chart.inverse_tangent(state.a_tilde);
+  const Matrix3 log_metric = full_chart.log_metric();
+  const Matrix3 a = 2.0 * full_chart.inverse_tangent(state.a_tilde);
   const std::array<double, 5> encoded_h = stf_encode(log_metric);
   const std::array<double, 5> encoded_a = stf_encode(a);
   for (size_t c = 0; c < 5; ++c) {
@@ -329,20 +473,34 @@ std::array<double, 2> chart_from_physical(
     gsl::at(*w, VelocityIndex::gamma_hat + i) = gsl::at(state.gamma_hat, i);
     gsl::at(*w, VelocityIndex::b + i) = gsl::at(state.b, i);
   }
-  const auto& h = chart.log_eigenvalues();
+  *chart = full_chart.trace_free();
+  const auto& h = full_chart.log_eigenvalues();
   return {{h[0] + h[1] + h[2], a(0, 0) + a(1, 1) + a(2, 2)}};
+}
+
+ShiftGradientTerms::ShiftGradientTerms(const LogMetricChart& chart,
+                                       const GradientVector& q)
+    : eigenbasis_shift_gradient(chart.to_eigenbasis(shift_gradient_matrix(q))),
+      eigenbasis_strain_over_tangent(chart.eigenbasis_inverse_tangent(
+          shift_strain(chart.eigenbasis_metric(), eigenbasis_shift_gradient))) {
 }
 
 PotentialVector potential_rhs(const LogMetricChart& chart,
                               const PotentialVector& u, const VelocityVector& w,
                               const GradientVector& q, const double f) {
+  return potential_rhs(chart, ShiftGradientTerms{chart, q}, u, w, q, f);
+}
+
+PotentialVector potential_rhs(const LogMetricChart& chart,
+                              const ShiftGradientTerms& shift_terms,
+                              const PotentialVector& u, const VelocityVector& w,
+                              const GradientVector& q, const double f) {
   const double lapse = u[PotentialIndex::lapse];
-  const Matrix3 strain = shift_strain(chart.metric(), shift_gradient_matrix(q));
   const double divergence = q[0][PotentialIndex::shift] +
                             q[1][PotentialIndex::shift + 1] +
                             q[2][PotentialIndex::shift + 2];
-  const std::array<double, 5> shift_term =
-      stf_encode(chart.inverse_tangent(strain));
+  const std::array<double, 5> shift_term = stf_encode(
+      chart.from_eigenbasis(shift_terms.eigenbasis_strain_over_tangent));
   PotentialVector result{};
   for (size_t a = 0; a < 5; ++a) {
     double advection = 0.0;
@@ -380,16 +538,24 @@ PotentialVector potential_rhs_potential_derivative(
     const LogMetricChart& chart, const PotentialVector& u,
     const VelocityVector& w, const GradientVector& q,
     const PotentialVector& delta_u) {
-  const Matrix3 metric = chart.metric();
-  const Matrix3 shift_gradient = shift_gradient_matrix(q);
-  const Matrix3 delta_log_metric =
-      stf_decode(&delta_u[PotentialIndex::log_metric]);
-  const Matrix3 strain_over_tangent =
-      chart.inverse_tangent(shift_strain(metric, shift_gradient));
-  const Matrix3 delta_strain = chart.inverse_tangent(
-      shift_strain(chart.tangent(delta_log_metric), shift_gradient) -
-      chart.second_derivative(delta_log_metric, strain_over_tangent));
-  const std::array<double, 5> delta_shift_term = stf_encode(delta_strain);
+  return potential_rhs_potential_derivative(chart, ShiftGradientTerms{chart, q},
+                                            u, w, q, delta_u);
+}
+
+PotentialVector potential_rhs_potential_derivative(
+    const LogMetricChart& chart, const ShiftGradientTerms& shift_terms,
+    const PotentialVector& u, const VelocityVector& w, const GradientVector& q,
+    const PotentialVector& delta_u) {
+  // In the eigenbasis of H.
+  const Matrix3 delta_log_metric_hat =
+      chart.to_eigenbasis(stf_decode(&delta_u[PotentialIndex::log_metric]));
+  const Matrix3 delta_strain_hat = chart.eigenbasis_inverse_tangent(
+      shift_strain(chart.eigenbasis_tangent(delta_log_metric_hat),
+                   shift_terms.eigenbasis_shift_gradient) -
+      chart.eigenbasis_second_derivative(
+          delta_log_metric_hat, shift_terms.eigenbasis_strain_over_tangent));
+  const std::array<double, 5> delta_shift_term =
+      stf_encode(chart.from_eigenbasis(delta_strain_hat));
   const double delta_lapse = delta_u[PotentialIndex::lapse];
   PotentialVector result{};
   for (size_t a = 0; a < 5; ++a) {

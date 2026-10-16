@@ -102,8 +102,10 @@ void test_local_chart_fields(const gsl::not_null<std::mt19937*> gen) {
     chart.set(s, state.u, state.w);
   }
   gp::LocalChartFields local{n};
-  gp::local_chart_fields(make_not_null(&local), chart.conformal_metric,
-                         chart.conformal_factor, chart.a_tilde, chart.lapse);
+  std::vector<gp::LogMetricChart> local_charts{};
+  gp::local_chart_fields(make_not_null(&local), make_not_null(&local_charts),
+                         chart.conformal_metric, chart.conformal_factor,
+                         chart.a_tilde, chart.lapse);
   const auto custom = Approx::custom().epsilon(1e-12).scale(1.0);
   CHECK_ITERABLE_CUSTOM_APPROX(get<gp::Tags::LogConformalMetric>(local),
                                chart.log_conformal_metric, custom);
@@ -119,32 +121,48 @@ void test_local_chart_fields(const gsl::not_null<std::mt19937*> gen) {
     CHECK(charts[s] == gp::LogMetricChart{gp::stf_decode(
                            &u_s[gp::PotentialIndex::log_metric])});
   }
+  // The charts from local_chart_fields reuse the eigendecomposition of the
+  // metric and agree with those decomposed from the local H.
+  REQUIRE(local_charts.size() == n);
+  const gp::PotentialFields local_u{get<gp::Tags::LogConformalMetric>(local),
+                                    chart.conformal_factor, chart.lapse,
+                                    chart.shift};
+  for (size_t s = 0; s < n; ++s) {
+    const gp::PotentialVector u_s = gp::potentials_at(local_u, s);
+    CHECK(helpers::chart_difference(local_charts[s],
+                                    gp::LogMetricChart{gp::stf_decode(
+                                        &u_s[gp::PotentialIndex::log_metric])},
+                                    gen) < 1e-13);
+  }
 
   tnsr::ii<DataVector, 3> off_constraint = chart.conformal_metric;
   for (auto& component : off_constraint) {
     component *= 1.0 + 1.0e-6;
   }
-  CHECK_THROWS_WITH(gp::local_chart_fields(
-                        make_not_null(&local), off_constraint,
-                        chart.conformal_factor, chart.a_tilde, chart.lapse),
-                    Catch::Matchers::ContainsSubstring(
-                        "off the algebraic-constraint surface"));
+  CHECK_THROWS_WITH(
+      gp::local_chart_fields(
+          make_not_null(&local), make_not_null(&local_charts), off_constraint,
+          chart.conformal_factor, chart.a_tilde, chart.lapse),
+      Catch::Matchers::ContainsSubstring(
+          "off the algebraic-constraint surface"));
   tnsr::ii<DataVector, 3> traceful = chart.a_tilde;
   for (size_t i = 0; i < 3; ++i) {
     traceful.get(i, i) += 1.0e-6 * chart.conformal_metric.get(i, i);
   }
-  CHECK_THROWS_WITH(
-      gp::local_chart_fields(make_not_null(&local), chart.conformal_metric,
-                             chart.conformal_factor, traceful, chart.lapse),
-      Catch::Matchers::ContainsSubstring(
-          "off the algebraic-constraint surface"));
+  CHECK_THROWS_WITH(gp::local_chart_fields(
+                        make_not_null(&local), make_not_null(&local_charts),
+                        chart.conformal_metric, chart.conformal_factor,
+                        traceful, chart.lapse),
+                    Catch::Matchers::ContainsSubstring(
+                        "off the algebraic-constraint surface"));
   Scalar<DataVector> negative_phi = chart.conformal_factor;
   get(negative_phi)[3] = -0.1;
-  CHECK_THROWS_WITH(
-      gp::local_chart_fields(make_not_null(&local), chart.conformal_metric,
-                             negative_phi, chart.a_tilde, chart.lapse),
-      Catch::Matchers::ContainsSubstring(
-          "The conformal factor must be positive"));
+  CHECK_THROWS_WITH(gp::local_chart_fields(make_not_null(&local),
+                                           make_not_null(&local_charts),
+                                           chart.conformal_metric, negative_phi,
+                                           chart.a_tilde, chart.lapse),
+                    Catch::Matchers::ContainsSubstring(
+                        "The conformal factor must be positive"));
 }
 
 // The volume mutator on chart potentials that are quadratic polynomials in
@@ -240,10 +258,13 @@ void test_compute_volume_targets(const gsl::not_null<std::mt19937*> gen) {
   CHECK(all_zero(dt_vars));
 
   // The targets from independently formed derivatives of the local chart
-  // fields and of the physical fields.
+  // fields and of the physical fields, with the charts decomposed from the
+  // local H anew (not those of local_chart_fields).
   gp::LocalChartFields local{n};
-  gp::local_chart_fields(make_not_null(&local), chart.conformal_metric,
-                         chart.conformal_factor, chart.a_tilde, chart.lapse);
+  std::vector<gp::LogMetricChart> local_charts{};
+  gp::local_chart_fields(make_not_null(&local), make_not_null(&local_charts),
+                         chart.conformal_metric, chart.conformal_factor,
+                         chart.a_tilde, chart.lapse);
   const auto& mesh = geometry.mesh;
   const auto& inverse_jacobian = geometry.inverse_jacobian;
   const auto d_a = derivative<gp::Tags::TransformedATilde>(

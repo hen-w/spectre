@@ -73,13 +73,14 @@ KernelInputs kernel_inputs(const PotentialFields& u,
     for (size_t c = 0; c < 5; ++c) {
       gsl::at(a_s, c) = a.get(c)[s];
     }
-    const Matrix3 a_matrix = stf_decode(a_s.data());
     const double lapse = u_s[PotentialIndex::lapse];
     const double conformal_factor = u_s[PotentialIndex::conformal_factor];
-    std::array<Matrix3, 3> q_h{};
+    // a and the D_i H in the eigenbasis of H, each converted once.
+    const Matrix3 a_hat = chart.to_eigenbasis(stf_decode(a_s.data()));
+    std::array<Matrix3, 3> q_h_hat{};
     for (size_t i = 0; i < 3; ++i) {
-      gsl::at(q_h, i) =
-          stf_decode(&gsl::at(q_s, i)[PotentialIndex::log_metric]);
+      gsl::at(q_h_hat, i) = chart.to_eigenbasis(
+          stf_decode(&gsl::at(q_s, i)[PotentialIndex::log_metric]));
     }
 
     // Auxiliary fields.
@@ -88,7 +89,9 @@ KernelInputs kernel_inputs(const PotentialFields& u,
       result.field_a.get(i)[s] = q_i[PotentialIndex::lapse] / lapse;
       result.field_p.get(i)[s] =
           q_i[PotentialIndex::conformal_factor] / conformal_factor;
-      const Matrix3 field_d = 0.5 * chart.tangent(gsl::at(q_h, i));
+      const Matrix3 field_d =
+          0.5 *
+          chart.from_eigenbasis(chart.eigenbasis_tangent(gsl::at(q_h_hat, i)));
       for (size_t j = 0; j < 3; ++j) {
         for (size_t k = j; k < 3; ++k) {
           result.field_d.get(i, j, k)[s] = field_d(j, k);
@@ -130,9 +133,12 @@ KernelInputs kernel_inputs(const PotentialFields& u,
           gsl::at(d_q_h_ji, c) = dq(j, i, PotentialIndex::log_metric + c);
         }
         const Matrix3 d_field_d =
-            0.5 * (0.5 * chart.tangent(stf_decode(d_q_h_ij.data()) +
-                                       stf_decode(d_q_h_ji.data())) +
-                   chart.second_derivative(gsl::at(q_h, i), gsl::at(q_h, j)));
+            0.5 * chart.from_eigenbasis(
+                      0.5 * chart.eigenbasis_tangent(chart.to_eigenbasis(
+                                stf_decode(d_q_h_ij.data()) +
+                                stf_decode(d_q_h_ji.data()))) +
+                      chart.eigenbasis_second_derivative(gsl::at(q_h_hat, i),
+                                                         gsl::at(q_h_hat, j)));
         for (size_t k = 0; k < 3; ++k) {
           for (size_t l = k; l < 3; ++l) {
             result.d_field_d.get(i, j, k, l)[s] = d_field_d(k, l);
@@ -148,8 +154,11 @@ KernelInputs kernel_inputs(const PotentialFields& u,
         gsl::at(d_a_k, c) = d_a.get(k, c)[s];
       }
       const Matrix3 d_a_tilde =
-          0.5 * (chart.tangent(stf_decode(d_a_k.data())) +
-                 chart.second_derivative(gsl::at(q_h, k), a_matrix));
+          0.5 *
+          chart.from_eigenbasis(
+              chart.eigenbasis_tangent(
+                  chart.to_eigenbasis(stf_decode(d_a_k.data()))) +
+              chart.eigenbasis_second_derivative(gsl::at(q_h_hat, k), a_hat));
       for (size_t i = 0; i < 3; ++i) {
         for (size_t j = i; j < 3; ++j) {
           result.d_a_tilde.get(k, i, j)[s] = d_a_tilde(i, j);
@@ -363,19 +372,24 @@ void volume_targets(
     const VelocityVector w_s = velocities_at(w, s);
     const GradientVector q_s = gradients_at(q, s);
     const LogMetricChart& chart = charts[s];
-    const PotentialVector rhs = potential_rhs(chart, u_s, w_s, q_s, f);
+    const ShiftGradientTerms shift_terms{chart, q_s};
+    const PotentialVector rhs =
+        potential_rhs(chart, shift_terms, u_s, w_s, q_s, f);
 
-    // Chart rate of a from the physical ATilde rate.
+    // Chart rate of a from the physical ATilde rate, in the eigenbasis of H.
     Matrix3 physical_a_tilde_rate{};
     for (size_t i = 0; i < 3; ++i) {
       for (size_t j = 0; j < 3; ++j) {
         physical_a_tilde_rate(i, j) = rates.a_tilde.get(i, j)[s];
       }
     }
-    const std::array<double, 5> a_rate = stf_encode(chart.inverse_tangent(
-        2.0 * physical_a_tilde_rate -
-        chart.second_derivative(stf_decode(&rhs[PotentialIndex::log_metric]),
-                                stf_decode(&w_s[VelocityIndex::a]))));
+    const std::array<double, 5> a_rate =
+        stf_encode(chart.from_eigenbasis(chart.eigenbasis_inverse_tangent(
+            2.0 * chart.to_eigenbasis(physical_a_tilde_rate) -
+            chart.eigenbasis_second_derivative(
+                chart.to_eigenbasis(
+                    stf_decode(&rhs[PotentialIndex::log_metric])),
+                chart.to_eigenbasis(stf_decode(&w_s[VelocityIndex::a]))))));
 
     // Ordering term (1/6) g^{ki} (D_i B_j^j - D_j B_i^j).
     std::array<double, 3> curl_covector{};
@@ -411,7 +425,7 @@ void volume_targets(
           potential_rhs(chart, u_s, velocity_derivatives_at(d_w, i, s),
                         gradient_derivatives_at(d_q, i, s), f);
       const PotentialVector lower_order = potential_rhs_potential_derivative(
-          chart, u_s, w_s, q_s, gsl::at(q_s, i));
+          chart, shift_terms, u_s, w_s, q_s, gsl::at(q_s, i));
       for (size_t a_index = 0; a_index < number_of_potentials; ++a_index) {
         dt_q->get(i, a_index)[s] =
             gsl::at(principal, a_index) + gsl::at(lower_order, a_index);
@@ -458,9 +472,9 @@ void ComputeVolumeTargets::apply(
   const auto& a_tilde = get<::Ccz4::Tags::ATilde<DataVector, 3>>(vars);
   const auto& lapse = get<gr::Tags::Lapse<DataVector>>(vars);
 
-  // 1. The local nodal H and a.
-  local_chart_fields(chart_fields, conformal_metric, conformal_factor, a_tilde,
-                     lapse);
+  // 1. The local nodal H and a, and the charts of H.
+  local_chart_fields(chart_fields, charts, conformal_metric, conformal_factor,
+                     a_tilde, lapse);
   const LocalChartFields& chart = *chart_fields;
   const auto d_chart =
       partial_derivatives<typename LocalChartFields::tags_list>(
@@ -514,7 +528,6 @@ void ComputeVolumeTargets::apply(
                         Frame::Inertial>>(d_curvature),
       get<::Tags::deriv<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>,
                         tmpl::size_t<3>, Frame::Inertial>>(d_gauge)};
-  *charts = log_metric_charts(u);
   targets->initialize(number_of_points);
   volume_targets(make_not_null(&get<Tags::VelocityTarget>(*targets)),
                  make_not_null(&get<Tags::GradientTarget>(*targets)),

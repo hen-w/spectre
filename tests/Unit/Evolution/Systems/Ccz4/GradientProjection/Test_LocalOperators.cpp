@@ -12,6 +12,7 @@
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/EagerMath/DeterminantAndInverse.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/LocalOperators.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/TestHelpers.hpp"
 #include "Framework/TestHelpers.hpp"
@@ -114,6 +115,32 @@ void test_fit(const Geometry& geometry,
                           abs(gsl::at(targets, i)));
     }
     CHECK(std::abs(inner_product) < 1e-11 * target_scale);
+  }
+
+  // All potentials fitted together, as in the scheme (the dense products act
+  // on all fields at once), give each field's own fit.
+  std::array<std::array<DataVector, gp::number_of_potentials>, 3> all_targets{};
+  std::array<std::array<const DataVector*, gp::number_of_potentials>, 3>
+      target_pointers{};
+  std::array<double, gp::number_of_potentials> means{};
+  for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+    for (size_t i = 0; i < 3; ++i) {
+      gsl::at(gsl::at(all_targets, i), a) = random_field(gen, n);
+      gsl::at(gsl::at(target_pointers, i), a) =
+          &gsl::at(gsl::at(all_targets, i), a);
+    }
+    gsl::at(means, a) = 0.1 * static_cast<double>(a) - 0.2;
+  }
+  std::array<DataVector, gp::number_of_potentials> fitted_together{};
+  operators.fit(make_not_null(&fitted_together), target_pointers, means);
+  for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+    operators.fit(make_not_null(&fitted),
+                  {{{{&gsl::at(all_targets[0], a)}},
+                    {{&gsl::at(all_targets[1], a)}},
+                    {{&gsl::at(all_targets[2], a)}}}},
+                  {{gsl::at(means, a)}});
+    CHECK_ITERABLE_CUSTOM_APPROX(gsl::at(fitted_together, a), fitted[0],
+                                 Approx::custom().epsilon(1e-12).scale(1.0));
   }
 }
 

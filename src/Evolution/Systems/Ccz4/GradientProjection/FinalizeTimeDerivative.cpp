@@ -79,7 +79,9 @@ void finalized_chart_rates(
     const GradientVector target_s = gradients_at(dt_q_target, s);
     const GradientVector fitted_gradient_s = gradients_at(*fitted_gradient, s);
     const LogMetricChart& chart = charts[s];
-    const PotentialVector rhs = potential_rhs(chart, u_s, w_s, q_s, f);
+    const ShiftGradientTerms shift_terms{chart, q_s};
+    const PotentialVector rhs =
+        potential_rhs(chart, shift_terms, u_s, w_s, q_s, f);
     GradientVector defect{};
     PotentialVector rhs_minus_fit{};
     for (size_t a = 0; a < number_of_potentials; ++a) {
@@ -92,8 +94,8 @@ void finalized_chart_rates(
     }
     const PotentialVector gradient_defect_term =
         potential_rhs(chart, u_s, VelocityVector{}, defect, f);
-    const PotentialVector nonlinear_term =
-        potential_rhs_potential_derivative(chart, u_s, w_s, q_s, rhs_minus_fit);
+    const PotentialVector nonlinear_term = potential_rhs_potential_derivative(
+        chart, shift_terms, u_s, w_s, q_s, rhs_minus_fit);
     PotentialVector correction_input{};
     for (size_t a = 0; a < number_of_potentials; ++a) {
       gsl::at(correction_input, a) =
@@ -154,18 +156,22 @@ void FinalizeTimeDerivative::apply(
 
   // 4. Conversion to the physical rates.
   for (size_t s = 0; s < number_of_points; ++s) {
-    const PotentialVector u_s = potentials_at(u, s);
     const VelocityVector w_s = velocities_at(w, s);
     const PotentialVector r_s = potentials_at(u_rate, s);
     const VelocityVector w_rate_s = velocities_at(w_rate, s);
     const LogMetricChart& chart = charts[s];
-    const Matrix3 log_metric_rate =
-        stf_decode(&r_s[PotentialIndex::log_metric]);
-    const Matrix3 metric_rate = chart.tangent(log_metric_rate);
+    // The H rate in the eigenbasis of H, converted once.
+    const Matrix3 log_metric_rate_hat =
+        chart.to_eigenbasis(stf_decode(&r_s[PotentialIndex::log_metric]));
+    const Matrix3 metric_rate =
+        chart.from_eigenbasis(chart.eigenbasis_tangent(log_metric_rate_hat));
     const Matrix3 a_tilde_rate =
-        0.5 * (chart.tangent(stf_decode(&w_rate_s[VelocityIndex::a])) +
-               chart.second_derivative(log_metric_rate,
-                                       stf_decode(&w_s[VelocityIndex::a])));
+        0.5 * chart.from_eigenbasis(
+                  chart.eigenbasis_tangent(chart.to_eigenbasis(
+                      stf_decode(&w_rate_s[VelocityIndex::a]))) +
+                  chart.eigenbasis_second_derivative(
+                      log_metric_rate_hat,
+                      chart.to_eigenbasis(stf_decode(&w_s[VelocityIndex::a]))));
     for (size_t i = 0; i < 3; ++i) {
       for (size_t j = i; j < 3; ++j) {
         dt_conformal_metric->get(i, j)[s] = metric_rate(i, j);
@@ -209,13 +215,12 @@ void FinalizeTimeDerivative::apply(
                           Frame::Inertial>& inverse_jacobian,
     const LocalOperators& local_operators, const Scalar<DataVector>& eta) {
   LocalChartFields chart_fields{mesh.number_of_grid_points()};
-  local_chart_fields(make_not_null(&chart_fields), conformal_metric,
-                     conformal_factor, a_tilde, lapse);
-  const PotentialFields u{get<Tags::LogConformalMetric>(chart_fields),
-                          conformal_factor, lapse, shift};
+  std::vector<LogMetricChart> charts{};
+  local_chart_fields(make_not_null(&chart_fields), make_not_null(&charts),
+                     conformal_metric, conformal_factor, a_tilde, lapse);
   apply(dt_conformal_metric, dt_conformal_factor, dt_a_tilde,
         dt_trace_extrinsic_curvature, dt_theta, dt_gamma_hat, dt_lapse,
-        dt_shift, dt_b, chart_fields, log_metric_charts(u), conformal_factor,
+        dt_shift, dt_b, chart_fields, charts, conformal_factor,
         trace_extrinsic_curvature, theta, gamma_hat, lapse, shift, b, q,
         dt_u_target, dt_w_target, dt_q_target, mesh, inverse_jacobian,
         local_operators, eta);

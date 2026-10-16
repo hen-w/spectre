@@ -77,11 +77,11 @@ double UpwindGradientProjection::dg_package_data(
     state.lapse = get(lapse)[s];
     PotentialVector u_s{};
     VelocityVector w_s{};
-    checked_chart_from_physical(make_not_null(&u_s), make_not_null(&w_s), state,
-                                "face");
+    LogMetricChart chart{};
+    checked_chart_from_physical(make_not_null(&u_s), make_not_null(&w_s),
+                                make_not_null(&chart), state, "face");
     set_potentials_at(packaged_u, s, u_s);
     set_velocities_at(packaged_w, s, w_s);
-    const LogMetricChart chart{stf_decode(&u_s[PotentialIndex::log_metric])};
     largest_speed =
         std::max(largest_speed,
                  largest_characteristic_speed(

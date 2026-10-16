@@ -22,9 +22,10 @@
 namespace Ccz4::GradientProjection {
 void checked_chart_from_physical(const gsl::not_null<PotentialVector*> u,
                                  const gsl::not_null<VelocityVector*> w,
+                                 const gsl::not_null<LogMetricChart*> chart,
                                  const PhysicalPointState& state,
                                  const char* const context) {
-  const std::array<double, 2> traces = chart_from_physical(u, w, state);
+  const std::array<double, 2> traces = chart_from_physical(u, w, chart, state);
   double a_norm = 0.0;
   for (size_t c = 0; c < 5; ++c) {
     a_norm += square(gsl::at(*w, VelocityIndex::a + c));
@@ -41,13 +42,15 @@ void checked_chart_from_physical(const gsl::not_null<PotentialVector*> u,
   }
 }
 
-void local_chart_fields(const gsl::not_null<LocalChartFields*> chart,
-                        const tnsr::ii<DataVector, 3>& conformal_metric,
-                        const Scalar<DataVector>& conformal_factor,
-                        const tnsr::ii<DataVector, 3>& a_tilde,
-                        const Scalar<DataVector>& lapse) {
+void local_chart_fields(
+    const gsl::not_null<LocalChartFields*> chart,
+    const gsl::not_null<std::vector<LogMetricChart>*> charts,
+    const tnsr::ii<DataVector, 3>& conformal_metric,
+    const Scalar<DataVector>& conformal_factor,
+    const tnsr::ii<DataVector, 3>& a_tilde, const Scalar<DataVector>& lapse) {
   const size_t number_of_points = get(lapse).size();
   chart->initialize(number_of_points);
+  charts->resize(number_of_points);
   auto& log_metric = get<Tags::LogConformalMetric>(*chart);
   auto& a = get<Tags::TransformedATilde>(*chart);
   for (size_t s = 0; s < number_of_points; ++s) {
@@ -62,8 +65,8 @@ void local_chart_fields(const gsl::not_null<LocalChartFields*> chart,
     state.lapse = get(lapse)[s];
     PotentialVector u_s{};
     VelocityVector w_s{};
-    checked_chart_from_physical(make_not_null(&u_s), make_not_null(&w_s), state,
-                                "volume");
+    checked_chart_from_physical(make_not_null(&u_s), make_not_null(&w_s),
+                                make_not_null(&(*charts)[s]), state, "volume");
     for (size_t c = 0; c < 5; ++c) {
       log_metric.get(c)[s] = gsl::at(u_s, PotentialIndex::log_metric + c);
       a.get(c)[s] = gsl::at(w_s, VelocityIndex::a + c);

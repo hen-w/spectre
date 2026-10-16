@@ -41,9 +41,7 @@ void finite_difference_potential_gradients(
           << ").");
     }
     // The chart of the trace-free H, as on the DG elements.
-    const std::array<double, 5> log_metric =
-        stf_encode(full_chart.log_metric());
-    const LogMetricChart chart{stf_decode(log_metric.data())};
+    const LogMetricChart chart = full_chart.trace_free();
     for (size_t i = 0; i < 3; ++i) {
       Matrix3 metric_derivative{};
       for (size_t j = 0; j < 3; ++j) {

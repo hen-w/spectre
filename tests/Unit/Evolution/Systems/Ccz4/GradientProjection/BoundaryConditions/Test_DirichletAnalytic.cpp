@@ -98,7 +98,9 @@ gp::PotentialVector potentials(const KerrSchild& solution,
   state.lapse = get(get<gr::Tags::Lapse<DataVector>>(values))[0];
   gp::PotentialVector u{};
   gp::VelocityVector w{};
-  gp::chart_from_physical(make_not_null(&u), make_not_null(&w), state);
+  gp::LogMetricChart chart{};
+  gp::chart_from_physical(make_not_null(&u), make_not_null(&w),
+                          make_not_null(&chart), state);
   return u;
 }
 

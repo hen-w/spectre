@@ -41,18 +41,22 @@ using LocalChartFields =
  */
 void checked_chart_from_physical(gsl::not_null<PotentialVector*> u,
                                  gsl::not_null<VelocityVector*> w,
+                                 gsl::not_null<LogMetricChart*> chart,
                                  const PhysicalPointState& state,
                                  const char* context);
 
 /*!
  * \brief The local chart fields \f$H=\frac12\log\tilde\gamma\f$ and
- * \f$a=2\mathcal T_H^{-1}\tilde A\f$ at every grid point, see
- * `checked_chart_from_physical`.
+ * \f$a=2\mathcal T_H^{-1}\tilde A\f$, and the `LogMetricChart` of \f$H\f$, at
+ * every grid point, see `checked_chart_from_physical`.
  *
  * \details These are the only transformed fields of the scheme; the other
- * potentials and velocities are the physical fields themselves.
+ * potentials and velocities are the physical fields themselves. The charts
+ * reuse the eigendecompositions of \f$\tilde\gamma\f$, so they agree with
+ * `log_metric_charts` of the potentials to rounding.
  */
 void local_chart_fields(gsl::not_null<LocalChartFields*> chart,
+                        gsl::not_null<std::vector<LogMetricChart>*> charts,
                         const tnsr::ii<DataVector, 3>& conformal_metric,
                         const Scalar<DataVector>& conformal_factor,
                         const tnsr::ii<DataVector, 3>& a_tilde,

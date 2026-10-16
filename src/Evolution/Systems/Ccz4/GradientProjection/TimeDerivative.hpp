@@ -169,8 +169,9 @@ void volume_targets(
  * \details From the physical fields:
  * 1. the local nodal \f$H\f$ and \f$a\f$ are constructed (`local_chart_fields`,
  *    an `ERROR` off the algebraic-constraint surface) into
- *    `Tags::StepChartFields`, and their charts (`log_metric_charts`) into
- *    `Tags::StepCharts`, which `FinalizeTimeDerivative` reuses;
+ *    `Tags::StepChartFields`, and the charts of \f$H\f$ from the same
+ *    eigendecompositions into `Tags::StepCharts`, which
+ *    `FinalizeTimeDerivative` reuses;
  * 2. the stored gradients are overwritten by
  *    \f$q_i=(D_iH,D_i\phi,D_i\alpha,D_i\beta)\f$ with the ordinary
  *    element-local derivative \f$D_i\f$;

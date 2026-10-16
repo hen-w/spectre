@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -112,6 +113,43 @@ inline gp::Matrix3 random_rotation(const gsl::not_null<std::mt19937*> gen) {
   }
   const gp::Matrix3 inverse = blaze::inv(identity - antisymmetric);
   return (identity + antisymmetric) * inverse;
+}
+
+/*!
+ * \brief The largest difference between two charts of the same \f$H\f$: of
+ * their eigenvalues, and of their maps on random symmetric matrices relative
+ * to the size of the maps (at least one).
+ *
+ * \details The eigenvectors of two such charts can differ by signs and, for
+ * repeated eigenvalues, by rotations within the eigenspace, so the charts are
+ * compared through what they compute.
+ */
+inline double chart_difference(const gp::LogMetricChart& chart,
+                               const gp::LogMetricChart& expected,
+                               const gsl::not_null<std::mt19937*> gen) {
+  const auto relative = [](const gp::Matrix3& value,
+                           const gp::Matrix3& expected_value) {
+    return max_abs(value - expected_value) /
+           std::max(max_abs(expected_value), 1.0);
+  };
+  double result = 0.0;
+  for (size_t r = 0; r < 3; ++r) {
+    result = std::max(result, std::abs(gsl::at(chart.log_eigenvalues(), r) -
+                                       gsl::at(expected.log_eigenvalues(), r)));
+  }
+  result =
+      std::max(result, relative(chart.log_metric(), expected.log_metric()));
+  result = std::max(result, relative(chart.metric(), expected.metric()));
+  result = std::max(
+      result, relative(chart.inverse_metric(), expected.inverse_metric()));
+  const gp::Matrix3 x = random_symmetric(gen, 1.0);
+  const gp::Matrix3 y = random_symmetric(gen, 1.0);
+  result = std::max(result, relative(chart.tangent(x), expected.tangent(x)));
+  result = std::max(
+      result, relative(chart.inverse_tangent(x), expected.inverse_tangent(x)));
+  result = std::max(result, relative(chart.second_derivative(x, y),
+                                     expected.second_derivative(x, y)));
+  return result;
 }
 
 /// \f$H=R\,\mathrm{diag}(h)R^T\f$ with trace-free \f$h\f$.

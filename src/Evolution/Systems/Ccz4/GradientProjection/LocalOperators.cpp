@@ -245,9 +245,16 @@ void LocalOperators::fit(
       scaled_rhs(point, field) = b_d[point] / sqrt_mass_[point];
     }
   }
+  // The dense products call BLAS through dgemm_: Blaze runs them with its own
+  // kernel or with whichever cblas_dgemm is linked first, which may be an
+  // unoptimized reference implementation, and LIBXSMM (dgemm_<true>) is meant
+  // for small matrices.
   const auto q_1 = blaze::submatrix(orthonormal_basis_, 0, 1, number_of_points,
                                     reduced_size);
-  Matrix reduced = blaze::trans(q_1) * scaled_rhs;
+  Matrix reduced(reduced_size, NumberOfFields);
+  dgemm_('T', 'N', reduced_size, NumberOfFields, number_of_points, 1.0,
+         q_1.data(), q_1.spacing(), scaled_rhs.data(), scaled_rhs.spacing(),
+         0.0, reduced.data(), reduced.spacing());
   blaze::blas_int_t info = 0;
   blaze::potrs('L', static_cast<blaze::blas_int_t>(reduced_size),
                static_cast<blaze::blas_int_t>(NumberOfFields),
@@ -258,8 +265,6 @@ void LocalOperators::fit(
   if (info != 0) {
     ERROR("Cholesky solve of the gradient fit failed with info = " << info);
   }
-  // BLAS directly: the Blaze product dispatches to whichever cblas_dgemm is
-  // linked first, which may be an unoptimized reference implementation.
   Matrix scaled_fit(number_of_points, NumberOfFields);
   dgemm_('N', 'N', number_of_points, NumberOfFields, reduced_size, 1.0,
          q_1.data(), q_1.spacing(), reduced.data(), reduced.spacing(), 0.0,

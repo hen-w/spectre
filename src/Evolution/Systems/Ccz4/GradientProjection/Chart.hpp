@@ -110,8 +110,8 @@ double exp_second_divided_difference(double x, double y, double z);
  * \brief The logarithmic conformal-metric chart at a point.
  *
  * \details The conformal metric is \f$g=e^{2H}\f$ with symmetric \f$H\f$. The
- * chart stores the library (LAPACK `dsyev`) eigendecomposition
- * \f$H=Q\,\mathrm{diag}(h_r)Q^T\f$ and evaluates, without differentiating
+ * chart stores the eigendecomposition \f$H=Q\,\mathrm{diag}(h_r)Q^T\f$ (see
+ * `symmetric_eigensystem`) and evaluates, without differentiating
  * eigenvectors,
  *
  * - the tangent map \f$\mathcal T_HX=D(e^{2H})[X]\f$, which acts entrywise in
@@ -123,10 +123,15 @@ double exp_second_divided_difference(double x, double y, double z);
  *   \f$4\sum_t f[2h_r,2h_t,2h_s](X_{rt}Y_{ts}+Y_{rt}X_{ts})\f$, \f$f=\exp\f$.
  *
  * At \f$H=0\f$, \f$\mathcal T_HX=2X\f$ and \f$\mathcal S_H[X,Y]=2(XY+YX)\f$.
+ *
+ * The `eigenbasis_` maps act on components \f$\hat X=Q^TXQ\f$ in the
+ * eigenbasis (see `to_eigenbasis`) and return such components, so a caller
+ * applying several maps to the same matrices converts each matrix once.
  */
 class LogMetricChart {
  public:
-  /// A default-constructed chart is not valid; it exists for serialization.
+  /// A default-constructed chart is not valid; it exists for serialization
+  /// and to be assigned to.
   LogMetricChart() = default;
 
   /// Decompose the logarithm \f$H\f$ (symmetric) directly.
@@ -139,6 +144,16 @@ class LogMetricChart {
    * never clipped.
    */
   static LogMetricChart from_metric(const Matrix3& metric);
+
+  /*!
+   * \brief The chart of the trace-free part \f$H-\frac13(\mathrm{tr}H)I\f$.
+   *
+   * \details It has the eigenvectors of \f$H\f$ and the eigenvalues shifted by
+   * \f$-\frac13\mathrm{tr}H\f$, which scales every coefficient by
+   * \f$e^{-\frac23\mathrm{tr}H}\f$, so nothing is decomposed or evaluated
+   * again.
+   */
+  LogMetricChart trace_free() const;
 
   /// \f$H\f$.
   Matrix3 log_metric() const;
@@ -158,6 +173,21 @@ class LogMetricChart {
   /// \f$\mathcal S_H[X,Y]\f$.
   Matrix3 second_derivative(const Matrix3& x, const Matrix3& y) const;
 
+  /// The components \f$\hat X=Q^TXQ\f$ of \f$X\f$ in the eigenbasis of
+  /// \f$H\f$.
+  Matrix3 to_eigenbasis(const Matrix3& x) const;
+  /// \f$X=Q\hat XQ^T\f$, the inverse of `to_eigenbasis`.
+  Matrix3 from_eigenbasis(const Matrix3& x_hat) const;
+  /// The metric in the eigenbasis, \f$\mathrm{diag}(e^{2h_r})\f$.
+  Matrix3 eigenbasis_metric() const;
+  /// `tangent` on eigenbasis components.
+  Matrix3 eigenbasis_tangent(const Matrix3& x_hat) const;
+  /// `inverse_tangent` on eigenbasis components.
+  Matrix3 eigenbasis_inverse_tangent(const Matrix3& x_hat) const;
+  /// `second_derivative` on eigenbasis components.
+  Matrix3 eigenbasis_second_derivative(const Matrix3& x_hat,
+                                       const Matrix3& y_hat) const;
+
   /// Eigenvalues \f$h_r\f$ of \f$H\f$ in ascending order.
   const std::array<double, 3>& log_eigenvalues() const { return h_; }
   /// Eigenvectors of \f$H\f$ (columns).
@@ -173,24 +203,28 @@ class LogMetricChart {
   LogMetricChart(const std::array<double, 3>& log_eigenvalues,
                  const Matrix3& eigenvectors);
   void compute_coefficients();
-  Matrix3 to_eigenbasis(const Matrix3& x) const;
-  Matrix3 from_eigenbasis(const Matrix3& x) const;
   Matrix3 eigen_function(const std::array<double, 3>& values) const;
 
   std::array<double, 3> h_{};
   Matrix3 q_{};
-  // t_rs
-  std::array<double, 9> tangent_coefficients_{};
-  // 4 f[2h_r, 2h_t, 2h_s] indexed by r + 3 t + 9 s
-  std::array<double, 27> second_coefficients_{};
+  // The 6 distinct t_rs = t_sr
+  std::array<double, 6> tangent_coefficients_{};
+  // The 10 distinct 4 f[2h_r, 2h_t, 2h_s], symmetric in r, t and s
+  std::array<double, 10> second_coefficients_{};
 };
 
 bool operator!=(const LogMetricChart& lhs, const LogMetricChart& rhs);
 
 /*!
  * \brief Symmetric eigendecomposition \f$A=Q\,\mathrm{diag}(\lambda)Q^T\f$ of
- * a symmetric \f$3\times3\f$ matrix using LAPACK `dsyev`. Eigenvalues are
- * ascending and eigenvectors are the columns of the returned matrix.
+ * a symmetric \f$3\times3\f$ matrix by cyclic Jacobi rotations. Eigenvalues
+ * are ascending and eigenvectors are the columns of the returned matrix.
+ *
+ * \details Each rotation zeroes one off-diagonal entry, and the iteration
+ * ends when every off-diagonal entry is below the rounding of both diagonal
+ * entries it couples. The eigenvectors are the product of the rotations, so
+ * they are orthonormal to rounding also for repeated eigenvalues. It is an
+ * `ERROR` if the matrix has a non-finite entry.
  */
 void symmetric_eigensystem(gsl::not_null<std::array<double, 3>*> eigenvalues,
                            gsl::not_null<Matrix3*> eigenvectors,
@@ -215,19 +249,21 @@ struct PhysicalPointState {
  * \brief Convert the physical state to the chart potentials \f$u\f$ and
  * velocities \f$w\f$.
  *
- * \details The potentials are \f$H=\frac12\log\tilde\gamma\f$ from the library
- * eigendecomposition, \f$\phi\f$, \f$\alpha\f$, \f$\beta\f$ and
- * \f$a=2\mathcal T_H^{-1}\tilde A\f$. The encodings of \f$H\f$ and \f$a\f$
- * discard their Euclidean traces
+ * \details The potentials are \f$H=\frac12\log\tilde\gamma\f$ from the
+ * eigendecomposition of \f$\tilde\gamma\f$, \f$\phi\f$, \f$\alpha\f$,
+ * \f$\beta\f$ and \f$a=2\mathcal T_H^{-1}\tilde A\f$. The encodings of \f$H\f$
+ * and \f$a\f$ discard their Euclidean traces
  * \f$\mathrm{tr}H=\frac12\log\det\tilde\gamma\f$ and
  * \f$\mathrm{tr}\,a=\tilde\gamma^{ij}\tilde A_{ij}\f$, which vanish on the
  * algebraic-constraint surface; they are returned (in this order) so callers
- * can verify that no off-constraint information is dropped. It is an `ERROR`
- * if \f$\tilde\gamma\f$ is not positive definite or \f$\phi\f$ or
- * \f$\alpha\f$ is not positive.
+ * can verify that no off-constraint information is dropped. `chart` is set to
+ * the chart of the encoded, trace-free \f$H\f$ (`LogMetricChart::trace_free`),
+ * from the same eigendecomposition. It is an `ERROR` if \f$\tilde\gamma\f$ is
+ * not positive definite or \f$\phi\f$ or \f$\alpha\f$ is not positive.
  */
 std::array<double, 2> chart_from_physical(gsl::not_null<PotentialVector*> u,
                                           gsl::not_null<VelocityVector*> w,
+                                          gsl::not_null<LogMetricChart*> chart,
                                           const PhysicalPointState& state);
 
 /*!
@@ -251,6 +287,28 @@ PotentialVector potential_rhs(const LogMetricChart& chart,
                               const GradientVector& q, double f);
 
 /*!
+ * \brief The terms of `potential_rhs` and `potential_rhs_potential_derivative`
+ * that depend only on the chart and on the gradients \f$q\f$, in the
+ * eigenbasis of \f$H\f$: \f$Q^TBQ\f$ and \f$Q^T(\mathcal T_H^{-1}W)Q\f$.
+ *
+ * \details Built once per point, they are shared by all the calls there with
+ * the same chart and \f$q\f$.
+ */
+struct ShiftGradientTerms {
+  ShiftGradientTerms(const LogMetricChart& chart, const GradientVector& q);
+  /// \f$Q^TBQ\f$
+  Matrix3 eigenbasis_shift_gradient{};
+  /// \f$Q^T(\mathcal T_H^{-1}W)Q\f$
+  Matrix3 eigenbasis_strain_over_tangent{};
+};
+
+/// `potential_rhs` with the `ShiftGradientTerms` of `chart` and `q`.
+PotentialVector potential_rhs(const LogMetricChart& chart,
+                              const ShiftGradientTerms& shift_terms,
+                              const PotentialVector& u, const VelocityVector& w,
+                              const GradientVector& q, double f);
+
+/*!
  * \brief The directional derivative \f$R_u\,\delta u\f$ at fixed \f$(w,q)\f$,
  * including the \f$H\f$ dependence of both \f$g\f$ and
  * \f$\mathcal T_H^{-1}\f$:
@@ -269,6 +327,13 @@ PotentialVector potential_rhs(const LogMetricChart& chart,
 PotentialVector potential_rhs_potential_derivative(
     const LogMetricChart& chart, const PotentialVector& u,
     const VelocityVector& w, const GradientVector& q,
+    const PotentialVector& delta_u);
+
+/// `potential_rhs_potential_derivative` with the `ShiftGradientTerms` of
+/// `chart` and `q`.
+PotentialVector potential_rhs_potential_derivative(
+    const LogMetricChart& chart, const ShiftGradientTerms& shift_terms,
+    const PotentialVector& u, const VelocityVector& w, const GradientVector& q,
     const PotentialVector& delta_u);
 
 /*!
