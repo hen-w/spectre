@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstddef>
+#include <vector>
 
 #include "DataStructures/DataBox/PrefixHelpers.hpp"
 #include "DataStructures/DataBox/Prefixes.hpp"
@@ -75,6 +76,14 @@ KernelInputs kernel_inputs(const PotentialFields& u,
                            const DerivTransformedATilde::type& d_a,
                            const DerivPotentialGradients::type& d_q);
 
+/// `kernel_inputs` with the `log_metric_charts` of `u` already computed.
+KernelInputs kernel_inputs(const PotentialFields& u,
+                           const std::vector<LogMetricChart>& charts,
+                           const Tags::TransformedATilde::type& a,
+                           const Tags::PotentialGradients::type& q,
+                           const DerivTransformedATilde::type& d_a,
+                           const DerivPotentialGradients::type& d_q);
+
 /// The physical rates of the production kernel.
 struct KernelRates {
   tnsr::ii<DataVector, 3> conformal_metric;
@@ -138,6 +147,19 @@ void volume_targets(gsl::not_null<Tags::VelocityTarget::type*> dt_w,
                     const Scalar<DataVector>& eta,
                     const Scalar<DataVector>& k_0, double f);
 
+/// `volume_targets` with the `log_metric_charts` of `u` already computed.
+void volume_targets(
+    gsl::not_null<Tags::VelocityTarget::type*> dt_w,
+    gsl::not_null<Tags::GradientTarget::type*> dt_q,
+    gsl::not_null<Tags::PotentialRateTarget::type*> dt_u,
+    const tnsr::ii<DataVector, 3>& conformal_metric,
+    const tnsr::ii<DataVector, 3>& a_tilde, const PotentialFields& u,
+    const std::vector<LogMetricChart>& charts, const VelocityFields& w,
+    const Tags::PotentialGradients::type& q, const VelocityDerivatives& d_w,
+    const DerivPotentialGradients::type& d_q, const Scalar<DataVector>& kappa_1,
+    const Scalar<DataVector>& kappa_2, double kappa_3,
+    const Scalar<DataVector>& eta, const Scalar<DataVector>& k_0, double f);
+
 /*!
  * \brief The volume evaluation of a right-hand side, run before
  * `evolution::dg::Actions::ComputeTimeDerivative` (and also the
@@ -146,7 +168,9 @@ void volume_targets(gsl::not_null<Tags::VelocityTarget::type*> dt_w,
  *
  * \details From the physical fields:
  * 1. the local nodal \f$H\f$ and \f$a\f$ are constructed (`local_chart_fields`,
- *    an `ERROR` off the algebraic-constraint surface);
+ *    an `ERROR` off the algebraic-constraint surface) into
+ *    `Tags::StepChartFields`, and their charts (`log_metric_charts`) into
+ *    `Tags::StepCharts`, which `FinalizeTimeDerivative` reuses;
  * 2. the stored gradients are overwritten by
  *    \f$q_i=(D_iH,D_i\phi,D_i\alpha,D_i\beta)\f$ with the ordinary
  *    element-local derivative \f$D_i\f$;
@@ -179,13 +203,27 @@ struct ComputeVolumeTargets : tt::ConformsTo<db::protocols::Mutator> {
   /// The generic DG action allocates no volume temporaries.
   using temporary_tags = tmpl::list<>;
   using return_tags =
-      tmpl::list<variables_tag, dt_variables_tag, Tags::RhsTargets>;
+      tmpl::list<variables_tag, dt_variables_tag, Tags::RhsTargets,
+                 Tags::StepChartFields, Tags::StepCharts>;
   using argument_tags = tmpl::list<
       domain::Tags::Mesh<3>,
       domain::Tags::InverseJacobian<3, Frame::ElementLogical, Frame::Inertial>,
       ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
       ::Ccz4::Tags::Eta<DataVector>, ::Ccz4::Tags::K0<DataVector>>;
 
+  static void apply(
+      gsl::not_null<typename variables_tag::type*> evolved_variables,
+      gsl::not_null<typename dt_variables_tag::type*> dt_evolved_variables,
+      gsl::not_null<typename Tags::RhsTargets::type*> targets,
+      gsl::not_null<typename Tags::StepChartFields::type*> chart_fields,
+      gsl::not_null<std::vector<LogMetricChart>*> charts, const Mesh<3>& mesh,
+      const InverseJacobian<DataVector, 3, Frame::ElementLogical,
+                            Frame::Inertial>& inverse_jacobian,
+      const Scalar<DataVector>& kappa_1, const Scalar<DataVector>& kappa_2,
+      double kappa_3, const Scalar<DataVector>& eta,
+      const Scalar<DataVector>& k_0);
+
+  /// `apply` with the chart fields and charts in local buffers.
   static void apply(
       gsl::not_null<typename variables_tag::type*> evolved_variables,
       gsl::not_null<typename dt_variables_tag::type*> dt_evolved_variables,

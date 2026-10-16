@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstddef>
+#include <vector>
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Matrix.hpp"
@@ -89,6 +90,12 @@ class LocalOperators {
 
   /// Apply the top-shell filter in place.
   void apply_filter(gsl::not_null<DataVector*> field) const;
+
+  /// Apply the top-shell filter in place to each of `fields`: the same as
+  /// `apply_filter` on each field, with the projections of all fields computed
+  /// by one matrix-matrix product.
+  void apply_filter(
+      const std::vector<gsl::not_null<DataVector*>>& fields) const;
 
   /// Error if `mesh` differs from the mesh the operators were built for.
   void check_mesh(const Mesh<3>& mesh) const;

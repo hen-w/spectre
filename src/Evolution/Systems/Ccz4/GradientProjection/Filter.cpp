@@ -4,6 +4,7 @@
 #include "Evolution/Systems/Ccz4/GradientProjection/Filter.hpp"
 
 #include <cstddef>
+#include <vector>
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
@@ -34,17 +35,20 @@ void FilterAndEnforceConstraints::apply(
     return;
   }
   local_operators.check_mesh(mesh);
+  std::vector<gsl::not_null<DataVector*>> fields{};
+  fields.reserve(a_tilde->size() + 2 + gamma_hat->size() + b->size());
   for (auto& component : *a_tilde) {
-    local_operators.apply_filter(make_not_null(&component));
+    fields.emplace_back(&component);
   }
-  local_operators.apply_filter(make_not_null(&get(*trace_extrinsic_curvature)));
-  local_operators.apply_filter(make_not_null(&get(*theta)));
+  fields.emplace_back(&get(*trace_extrinsic_curvature));
+  fields.emplace_back(&get(*theta));
   for (auto& component : *gamma_hat) {
-    local_operators.apply_filter(make_not_null(&component));
+    fields.emplace_back(&component);
   }
   for (auto& component : *b) {
-    local_operators.apply_filter(make_not_null(&component));
+    fields.emplace_back(&component);
   }
+  local_operators.apply_filter(fields);
   ::Ccz4::fd::enforce_algebraic_constraints(conformal_metric, a_tilde);
 }
 }  // namespace Ccz4::GradientProjection

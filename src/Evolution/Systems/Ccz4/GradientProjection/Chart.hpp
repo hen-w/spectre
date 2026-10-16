@@ -9,6 +9,12 @@
 
 #include "Utilities/Gsl.hpp"
 
+/// \cond
+namespace PUP {
+class er;
+}  // namespace PUP
+/// \endcond
+
 /// Pointwise algebra of the CCZ4 gradient-projection scheme.
 namespace Ccz4::GradientProjection {
 /// A full \f$3\times3\f$ matrix used for symmetric tensors in the chart.
@@ -120,6 +126,9 @@ double exp_second_divided_difference(double x, double y, double z);
  */
 class LogMetricChart {
  public:
+  /// A default-constructed chart is not valid; it exists for serialization.
+  LogMetricChart() = default;
+
   /// Decompose the logarithm \f$H\f$ (symmetric) directly.
   explicit LogMetricChart(const Matrix3& log_metric);
 
@@ -154,7 +163,13 @@ class LogMetricChart {
   /// Eigenvectors of \f$H\f$ (columns).
   const Matrix3& eigenvectors() const { return q_; }
 
+  // NOLINTNEXTLINE(google-runtime-references)
+  void pup(PUP::er& p);
+
  private:
+  /// Exact equality of the eigensystem and all coefficients.
+  friend bool operator==(const LogMetricChart& lhs, const LogMetricChart& rhs);
+
   LogMetricChart(const std::array<double, 3>& log_eigenvalues,
                  const Matrix3& eigenvectors);
   void compute_coefficients();
@@ -169,6 +184,8 @@ class LogMetricChart {
   // 4 f[2h_r, 2h_t, 2h_s] indexed by r + 3 t + 9 s
   std::array<double, 27> second_coefficients_{};
 };
+
+bool operator!=(const LogMetricChart& lhs, const LogMetricChart& rhs);
 
 /*!
  * \brief Symmetric eigendecomposition \f$A=Q\,\mathrm{diag}(\lambda)Q^T\f$ of

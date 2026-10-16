@@ -620,8 +620,13 @@ void emplace_element(
   for (const auto& component : get<gp::Tags::PotentialGradients>(vars)) {
     CHECK(max(abs(component)) == 0.0);
   }
-  // The right-hand-side targets exist (empty) after initialization.
+  // The right-hand-side targets and the chart buffers exist (empty) after
+  // initialization.
   CHECK(get_tag<targets_tag>(*runner, id).number_of_grid_points() == 0);
+  CHECK(
+      get_tag<gp::Tags::StepChartFields>(*runner, id).number_of_grid_points() ==
+      0);
+  CHECK(get_tag<gp::Tags::StepCharts>(*runner, id).empty());
 }
 
 // The step actions, without and with a spatially varying Gamma-driver damping
@@ -739,6 +744,23 @@ void test_step_actions(const bool damped) {
     CHECK(part<physical_tags>(get_tag<variables_tag>(runner, id)) ==
           part<physical_tags>(before));
     check_rates_zero(get_tag<dt_variables_tag>(runner, id));
+    // The chart fields and charts of the state, kept for
+    // FinalizeTimeDerivative.
+    gp::LocalChartFields expected_chart_fields{};
+    gp::local_chart_fields(
+        make_not_null(&expected_chart_fields),
+        get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(before),
+        get<Ccz4::Tags::ConformalFactor<DataVector>>(before),
+        get<Ccz4::Tags::ATilde<DataVector, 3>>(before),
+        get<gr::Tags::Lapse<DataVector>>(before));
+    CHECK(get_tag<gp::Tags::StepChartFields>(runner, id) ==
+          expected_chart_fields);
+    CHECK(get_tag<gp::Tags::StepCharts>(runner, id) ==
+          gp::log_metric_charts(gp::PotentialFields{
+              get<gp::Tags::LogConformalMetric>(expected_chart_fields),
+              get<Ccz4::Tags::ConformalFactor<DataVector>>(before),
+              get<gr::Tags::Lapse<DataVector>>(before),
+              get<gr::Tags::Shift<DataVector, 3>>(before)}));
   }
   const Targets volume_targets = get_tag<targets_tag>(runner, id);
 

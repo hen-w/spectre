@@ -4,11 +4,13 @@
 #pragma once
 
 #include <cstddef>
+#include <vector>
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
 #include "DataStructures/Variables.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/PointwiseFields.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Tags.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/TMPL.hpp"
@@ -55,6 +57,10 @@ void local_chart_fields(gsl::not_null<LocalChartFields*> chart,
                         const Scalar<DataVector>& conformal_factor,
                         const tnsr::ii<DataVector, 3>& a_tilde,
                         const Scalar<DataVector>& lapse);
+
+/// The `LogMetricChart` of the logarithmic conformal metric \f$H\f$ of `u` at
+/// every grid point.
+std::vector<LogMetricChart> log_metric_charts(const PotentialFields& u);
 
 /*!
  * \brief Assemble \f$q_i=D_iu=(D_iH,D_i\phi,D_i\alpha,D_i\beta)\f$ from the

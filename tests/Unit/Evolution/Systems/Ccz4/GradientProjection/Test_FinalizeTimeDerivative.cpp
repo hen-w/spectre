@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <random>
+#include <vector>
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
@@ -505,6 +506,29 @@ void test_shift_damping_limits(const gsl::not_null<std::mt19937*> gen,
     }
   }
 }
+
+// The overload taking the charts of u computed ahead (as ComputeVolumeTargets
+// keeps them for FinalizeTimeDerivative) gives identical rates.
+void test_precomputed_charts(const gsl::not_null<std::mt19937*> gen) {
+  const ElementData data = make_element(gen, true);
+  const size_t n = data.geometry.mesh.number_of_grid_points();
+  const Scalar<DataVector> eta = varying_eta(data.geometry);
+  const double f = 0.5;
+  const ChartRates expected = chart_rates(data, data.dt_w, eta, f);
+  const gp::PotentialFields u = data.chart.potentials();
+  ChartRates rates{gp::Tags::PotentialRateTarget::type{n},
+                   gp::Tags::VelocityTarget::type{n},
+                   gp::Tags::GradientTarget::type{n}};
+  gp::finalized_chart_rates(
+      make_not_null(&rates.u_rate), make_not_null(&rates.w_rate),
+      make_not_null(&rates.fitted_gradient), u, gp::log_metric_charts(u),
+      data.chart.velocities(), data.q, data.dt_u, data.dt_w, data.dt_q,
+      data.geometry.mesh, data.geometry.inverse_jacobian, data.operators, eta,
+      f);
+  CHECK(rates.u_rate == expected.u_rate);
+  CHECK(rates.w_rate == expected.w_rate);
+  CHECK(rates.fitted_gradient == expected.fitted_gradient);
+}
 }  // namespace
 
 // [[TimeOut, 20]]
@@ -529,4 +553,5 @@ SPECTRE_TEST_CASE(
   }
   test_physical_rates(make_not_null(&gen), false);
   test_physical_rates(make_not_null(&gen), true);
+  test_precomputed_charts(make_not_null(&gen));
 }

@@ -163,6 +163,23 @@ void test_filter(const Geometry& geometry,
       filtered,
       DataVector{projected_x + gp::shell_filter_gain * (x - projected_x)},
       Approx::custom().epsilon(1e-12).scale(1.0));
+
+  // Filtering several fields at once filters each of them, up to the
+  // summation order of the matrix products; an empty list is a no-op.
+  const std::vector<DataVector> originals{x, y, projected_x};
+  std::vector<DataVector> batch = originals;
+  std::vector<gsl::not_null<DataVector*>> batch_fields{};
+  for (auto& field : batch) {
+    batch_fields.emplace_back(&field);
+  }
+  operators.apply_filter(batch_fields);
+  for (size_t i = 0; i < batch.size(); ++i) {
+    DataVector expected = originals[i];
+    operators.apply_filter(make_not_null(&expected));
+    CHECK_ITERABLE_CUSTOM_APPROX(batch[i], expected,
+                                 Approx::custom().epsilon(1e-12).scale(1.0));
+  }
+  operators.apply_filter(std::vector<gsl::not_null<DataVector*>>{});
 }
 
 // On an affine element the Legendre modes are orthogonal in the LGL mass

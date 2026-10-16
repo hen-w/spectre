@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <vector>
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
@@ -24,6 +25,25 @@ void finalized_chart_rates(
     const gsl::not_null<Tags::GradientTarget::type*> fitted_gradient,
     const PotentialFields& u, const VelocityFields& w,
     const Tags::PotentialGradients::type& q,
+    const Tags::PotentialRateTarget::type& dt_u_target,
+    const Tags::VelocityTarget::type& dt_w_target,
+    const Tags::GradientTarget::type& dt_q_target, const Mesh<3>& mesh,
+    const InverseJacobian<DataVector, 3, Frame::ElementLogical,
+                          Frame::Inertial>& inverse_jacobian,
+    const LocalOperators& local_operators, const Scalar<DataVector>& eta,
+    const double f) {
+  finalized_chart_rates(u_rate, w_rate, fitted_gradient, u,
+                        log_metric_charts(u), w, q, dt_u_target, dt_w_target,
+                        dt_q_target, mesh, inverse_jacobian, local_operators,
+                        eta, f);
+}
+
+void finalized_chart_rates(
+    const gsl::not_null<Tags::PotentialRateTarget::type*> u_rate,
+    const gsl::not_null<Tags::VelocityTarget::type*> w_rate,
+    const gsl::not_null<Tags::GradientTarget::type*> fitted_gradient,
+    const PotentialFields& u, const std::vector<LogMetricChart>& charts,
+    const VelocityFields& w, const Tags::PotentialGradients::type& q,
     const Tags::PotentialRateTarget::type& dt_u_target,
     const Tags::VelocityTarget::type& dt_w_target,
     const Tags::GradientTarget::type& dt_q_target, const Mesh<3>& mesh,
@@ -58,7 +78,7 @@ void finalized_chart_rates(
     const PotentialVector r_s = potentials_at(*u_rate, s);
     const GradientVector target_s = gradients_at(dt_q_target, s);
     const GradientVector fitted_gradient_s = gradients_at(*fitted_gradient, s);
-    const LogMetricChart chart{stf_decode(&u_s[PotentialIndex::log_metric])};
+    const LogMetricChart& chart = charts[s];
     const PotentialVector rhs = potential_rhs(chart, u_s, w_s, q_s, f);
     GradientVector defect{};
     PotentialVector rhs_minus_fit{};
@@ -105,9 +125,9 @@ void FinalizeTimeDerivative::apply(
     const gsl::not_null<Scalar<DataVector>*> dt_lapse,
     const gsl::not_null<tnsr::I<DataVector, 3>*> dt_shift,
     const gsl::not_null<tnsr::I<DataVector, 3>*> dt_b,
-    const tnsr::ii<DataVector, 3>& conformal_metric,
+    const typename Tags::StepChartFields::type& chart_fields,
+    const std::vector<LogMetricChart>& charts,
     const Scalar<DataVector>& conformal_factor,
-    const tnsr::ii<DataVector, 3>& a_tilde,
     const Scalar<DataVector>& trace_extrinsic_curvature,
     const Scalar<DataVector>& theta, const tnsr::I<DataVector, 3>& gamma_hat,
     const Scalar<DataVector>& lapse, const tnsr::I<DataVector, 3>& shift,
@@ -119,20 +139,18 @@ void FinalizeTimeDerivative::apply(
                           Frame::Inertial>& inverse_jacobian,
     const LocalOperators& local_operators, const Scalar<DataVector>& eta) {
   const size_t number_of_points = mesh.number_of_grid_points();
-  LocalChartFields local_chart{number_of_points};
-  local_chart_fields(make_not_null(&local_chart), conformal_metric,
-                     conformal_factor, a_tilde, lapse);
-  const PotentialFields u{get<Tags::LogConformalMetric>(local_chart),
+  const PotentialFields u{get<Tags::LogConformalMetric>(chart_fields),
                           conformal_factor, lapse, shift};
-  const VelocityFields w{get<Tags::TransformedATilde>(local_chart),
+  const VelocityFields w{get<Tags::TransformedATilde>(chart_fields),
                          trace_extrinsic_curvature, theta, gamma_hat, b};
   Tags::PotentialRateTarget::type u_rate{number_of_points};
   Tags::VelocityTarget::type w_rate{number_of_points};
   Tags::GradientTarget::type fitted_gradient{number_of_points};
   finalized_chart_rates(make_not_null(&u_rate), make_not_null(&w_rate),
-                        make_not_null(&fitted_gradient), u, w, q, dt_u_target,
-                        dt_w_target, dt_q_target, mesh, inverse_jacobian,
-                        local_operators, eta, ::Ccz4::fd::System::f);
+                        make_not_null(&fitted_gradient), u, charts, w, q,
+                        dt_u_target, dt_w_target, dt_q_target, mesh,
+                        inverse_jacobian, local_operators, eta,
+                        ::Ccz4::fd::System::f);
 
   // 4. Conversion to the physical rates.
   for (size_t s = 0; s < number_of_points; ++s) {
@@ -140,7 +158,7 @@ void FinalizeTimeDerivative::apply(
     const VelocityVector w_s = velocities_at(w, s);
     const PotentialVector r_s = potentials_at(u_rate, s);
     const VelocityVector w_rate_s = velocities_at(w_rate, s);
-    const LogMetricChart chart{stf_decode(&u_s[PotentialIndex::log_metric])};
+    const LogMetricChart& chart = charts[s];
     const Matrix3 log_metric_rate =
         stf_decode(&r_s[PotentialIndex::log_metric]);
     const Matrix3 metric_rate = chart.tangent(log_metric_rate);
@@ -165,5 +183,41 @@ void FinalizeTimeDerivative::apply(
       dt_b->get(i)[s] = gsl::at(w_rate_s, VelocityIndex::b + i);
     }
   }
+}
+
+void FinalizeTimeDerivative::apply(
+    const gsl::not_null<tnsr::ii<DataVector, 3>*> dt_conformal_metric,
+    const gsl::not_null<Scalar<DataVector>*> dt_conformal_factor,
+    const gsl::not_null<tnsr::ii<DataVector, 3>*> dt_a_tilde,
+    const gsl::not_null<Scalar<DataVector>*> dt_trace_extrinsic_curvature,
+    const gsl::not_null<Scalar<DataVector>*> dt_theta,
+    const gsl::not_null<tnsr::I<DataVector, 3>*> dt_gamma_hat,
+    const gsl::not_null<Scalar<DataVector>*> dt_lapse,
+    const gsl::not_null<tnsr::I<DataVector, 3>*> dt_shift,
+    const gsl::not_null<tnsr::I<DataVector, 3>*> dt_b,
+    const tnsr::ii<DataVector, 3>& conformal_metric,
+    const Scalar<DataVector>& conformal_factor,
+    const tnsr::ii<DataVector, 3>& a_tilde,
+    const Scalar<DataVector>& trace_extrinsic_curvature,
+    const Scalar<DataVector>& theta, const tnsr::I<DataVector, 3>& gamma_hat,
+    const Scalar<DataVector>& lapse, const tnsr::I<DataVector, 3>& shift,
+    const tnsr::I<DataVector, 3>& b, const Tags::PotentialGradients::type& q,
+    const Tags::PotentialRateTarget::type& dt_u_target,
+    const Tags::VelocityTarget::type& dt_w_target,
+    const Tags::GradientTarget::type& dt_q_target, const Mesh<3>& mesh,
+    const InverseJacobian<DataVector, 3, Frame::ElementLogical,
+                          Frame::Inertial>& inverse_jacobian,
+    const LocalOperators& local_operators, const Scalar<DataVector>& eta) {
+  LocalChartFields chart_fields{mesh.number_of_grid_points()};
+  local_chart_fields(make_not_null(&chart_fields), conformal_metric,
+                     conformal_factor, a_tilde, lapse);
+  const PotentialFields u{get<Tags::LogConformalMetric>(chart_fields),
+                          conformal_factor, lapse, shift};
+  apply(dt_conformal_metric, dt_conformal_factor, dt_a_tilde,
+        dt_trace_extrinsic_curvature, dt_theta, dt_gamma_hat, dt_lapse,
+        dt_shift, dt_b, chart_fields, log_metric_charts(u), conformal_factor,
+        trace_extrinsic_curvature, theta, gamma_hat, lapse, shift, b, q,
+        dt_u_target, dt_w_target, dt_q_target, mesh, inverse_jacobian,
+        local_operators, eta);
 }
 }  // namespace Ccz4::GradientProjection

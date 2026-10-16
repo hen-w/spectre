@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstddef>
+#include <vector>
 
 #include "DataStructures/DataBox/Tag.hpp"
 #include "DataStructures/DataVector.hpp"
@@ -26,8 +27,10 @@ using ChartVector =
  * \brief The logarithmic conformal metric \f$H=\frac12\log\tilde\gamma\f$ in
  * the basis of `stf_encode`.
  *
- * \details Only constructed in local temporaries from the physical conformal
- * metric, where it is differentiated or packaged; it is never stored.
+ * \details Constructed from the physical conformal metric, where it is
+ * differentiated or packaged. It is not evolved: within a step it is kept only
+ * from `ComputeVolumeTargets` to `FinalizeTimeDerivative`, see
+ * `StepChartFields`.
  */
 struct LogConformalMetric : db::SimpleTag {
   using type = ChartVector<5>;
@@ -37,7 +40,7 @@ struct LogConformalMetric : db::SimpleTag {
  * \brief The transformed trace-free extrinsic curvature
  * \f$a=2\mathcal T_H^{-1}\tilde A\f$ in the basis of `stf_encode`.
  *
- * \details Only constructed in local temporaries, see `LogConformalMetric`.
+ * \details Constructed and kept like `LogConformalMetric`.
  */
 struct TransformedATilde : db::SimpleTag {
   using type = ChartVector<5>;
@@ -81,6 +84,23 @@ struct PotentialRateTarget : db::SimpleTag {
  */
 using RhsTargets = ::Tags::Variables<
     tmpl::list<VelocityTarget, GradientTarget, PotentialRateTarget>>;
+
+/*!
+ * \brief The local chart fields \f$(H,a)\f$ of the current state.
+ *
+ * \details `ComputeVolumeTargets` computes them from the physical fields and
+ * `FinalizeTimeDerivative` reuses them; the evolved variables do not change in
+ * between. Like `RhsTargets`, this buffer is not part of the evolved state or
+ * the time-stepper history.
+ */
+using StepChartFields =
+    ::Tags::Variables<tmpl::list<LogConformalMetric, TransformedATilde>>;
+
+/// \brief The `LogMetricChart` of \f$H\f$ at each grid point of the current
+/// state, kept like `StepChartFields`.
+struct StepCharts : db::SimpleTag {
+  using type = std::vector<LogMetricChart>;
+};
 
 /// \brief The chart velocities \f$w\f$ packaged on a face.
 struct PackagedVelocities : db::SimpleTag {

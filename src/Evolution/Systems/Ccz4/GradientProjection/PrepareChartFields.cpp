@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <vector>
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
@@ -68,6 +69,17 @@ void local_chart_fields(const gsl::not_null<LocalChartFields*> chart,
       a.get(c)[s] = gsl::at(w_s, VelocityIndex::a + c);
     }
   }
+}
+
+std::vector<LogMetricChart> log_metric_charts(const PotentialFields& u) {
+  const size_t number_of_points = get(u.lapse).size();
+  std::vector<LogMetricChart> charts{};
+  charts.reserve(number_of_points);
+  for (size_t s = 0; s < number_of_points; ++s) {
+    const PotentialVector u_s = potentials_at(u, s);
+    charts.emplace_back(stf_decode(&u_s[PotentialIndex::log_metric]));
+  }
+  return charts;
 }
 
 void assemble_potential_gradients(

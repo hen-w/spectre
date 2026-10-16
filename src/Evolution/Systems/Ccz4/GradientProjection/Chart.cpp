@@ -8,15 +8,31 @@
 #include <blaze/math/lapack/clapack/syev.h>
 #include <cmath>
 #include <cstddef>
+#include <pup.h>
 
+#include "DataStructures/StaticMatrix.hpp"
 #include "Utilities/ErrorHandling/Error.hpp"
 #include "Utilities/Gsl.hpp"
+#include "Utilities/Serialization/PupStlCpp11.hpp"
 
 namespace Ccz4::GradientProjection {
 namespace {
 const double inv_sqrt2 = 1.0 / std::sqrt(2.0);
 const double inv_sqrt6 = 1.0 / std::sqrt(6.0);
 const double sqrt2 = std::sqrt(2.0);
+
+// 1/(j+2)! for j = 0, ..., 24: the coefficients of the series in
+// exp_second_divided_difference.
+constexpr std::array<double, 25> series_inverse_factorials = []() {
+  std::array<double, 25> result{};
+  double factorial = 2.0;
+  result[0] = 1.0 / factorial;
+  for (size_t j = 1; j < result.size(); ++j) {
+    factorial *= static_cast<double>(j + 2);
+    result[j] = 1.0 / factorial;
+  }
+  return result;
+}();
 
 // W_ij = g_jk B_i^k + g_ik B_j^k - 2/3 g_ij d for a symmetric g.
 Matrix3 shift_strain(const Matrix3& metric, const Matrix3& shift_gradient) {
@@ -89,16 +105,14 @@ double exp_second_divided_difference(const double x, const double y,
   double h_2 = 1.0;
   double h_12 = 1.0;
   double h_012 = 1.0;
-  double factorial = 2.0;
-  double sum = 0.5;
+  double sum = series_inverse_factorials[0];
   // With |d| <= 2/3 the j-th term is bounded by (2/3)^j / (2 j!), so the
   // terms beyond j = 24 are below 1e-27 while the sum exceeds 0.25.
-  for (size_t j = 1; j <= 24; ++j) {
+  for (size_t j = 1; j < series_inverse_factorials.size(); ++j) {
     h_2 *= d2;
     h_12 = d1 * h_12 + h_2;
     h_012 = d0 * h_012 + h_12;
-    factorial *= static_cast<double>(j + 2);
-    sum += h_012 / factorial;
+    sum += h_012 * gsl::at(series_inverse_factorials, j);
   }
   return std::exp(mean) * sum;
 }
@@ -152,6 +166,30 @@ LogMetricChart LogMetricChart::from_metric(const Matrix3& metric) {
   return LogMetricChart{{{0.5 * std::log(lambda[0]), 0.5 * std::log(lambda[1]),
                           0.5 * std::log(lambda[2])}},
                         q};
+}
+
+void LogMetricChart::pup(PUP::er& p) {
+  p | h_;
+  p | q_;
+  p | tangent_coefficients_;
+  p | second_coefficients_;
+}
+
+bool operator==(const LogMetricChart& lhs, const LogMetricChart& rhs) {
+  for (size_t j = 0; j < 3; ++j) {
+    for (size_t i = 0; i < 3; ++i) {
+      if (lhs.q_(i, j) != rhs.q_(i, j)) {
+        return false;
+      }
+    }
+  }
+  return lhs.h_ == rhs.h_ and
+         lhs.tangent_coefficients_ == rhs.tangent_coefficients_ and
+         lhs.second_coefficients_ == rhs.second_coefficients_;
+}
+
+bool operator!=(const LogMetricChart& lhs, const LogMetricChart& rhs) {
+  return not(lhs == rhs);
 }
 
 void LogMetricChart::compute_coefficients() {

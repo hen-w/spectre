@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <random>
+#include <vector>
 
 #include "DataStructures/DataBox/Prefixes.hpp"
 #include "DataStructures/DataVector.hpp"
@@ -108,6 +109,16 @@ void test_local_chart_fields(const gsl::not_null<std::mt19937*> gen) {
                                chart.log_conformal_metric, custom);
   CHECK_ITERABLE_CUSTOM_APPROX(get<gp::Tags::TransformedATilde>(local), chart.a,
                                custom);
+
+  // The charts of the log metric at every point, exactly as built pointwise.
+  const gp::PotentialFields u = chart.potentials();
+  const std::vector<gp::LogMetricChart> charts = gp::log_metric_charts(u);
+  REQUIRE(charts.size() == n);
+  for (size_t s = 0; s < n; ++s) {
+    const gp::PotentialVector u_s = gp::potentials_at(u, s);
+    CHECK(charts[s] == gp::LogMetricChart{gp::stf_decode(
+                           &u_s[gp::PotentialIndex::log_metric])});
+  }
 
   tnsr::ii<DataVector, 3> off_constraint = chart.conformal_metric;
   for (auto& component : off_constraint) {

@@ -444,6 +444,17 @@ void test_chart_from_physical(const gsl::not_null<std::mt19937*> gen) {
       Catch::Matchers::ContainsSubstring(
           "The conformal factor must be positive"));
 }
+
+// Charts are kept in the DataBox between actions, so they serialize; the
+// equality used for the round trip distinguishes different charts.
+void test_chart_serialization(const gsl::not_null<std::mt19937*> gen) {
+  const gp::LogMetricChart chart{
+      helpers::log_metric_with_spectrum(gen, {{0.4, -0.1, -0.3}})};
+  const gp::LogMetricChart flat_chart{gp::Matrix3{}};
+  test_serialization(chart);
+  test_serialization(flat_chart);
+  CHECK(chart != flat_chart);
+}
 }  // namespace
 
 SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.GradientProjection.Chart",
@@ -462,4 +473,5 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.GradientProjection.Chart",
   // Small conformal factors exercise the 1 / phi of P.
   test_potential_rhs(make_not_null(&gen), 1.0, {{0.02, 0.1}});
   test_chart_from_physical(make_not_null(&gen));
+  test_chart_serialization(make_not_null(&gen));
 }

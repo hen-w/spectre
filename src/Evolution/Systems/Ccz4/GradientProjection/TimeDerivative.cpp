@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <utility>
+#include <vector>
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
@@ -26,6 +27,15 @@
 
 namespace Ccz4::GradientProjection {
 KernelInputs kernel_inputs(const PotentialFields& u,
+                           const Tags::TransformedATilde::type& a,
+                           const Tags::PotentialGradients::type& q,
+                           const DerivTransformedATilde::type& d_a,
+                           const DerivPotentialGradients::type& d_q) {
+  return kernel_inputs(u, log_metric_charts(u), a, q, d_a, d_q);
+}
+
+KernelInputs kernel_inputs(const PotentialFields& u,
+                           const std::vector<LogMetricChart>& charts,
                            const Tags::TransformedATilde::type& a,
                            const Tags::PotentialGradients::type& q,
                            const DerivTransformedATilde::type& d_a,
@@ -58,7 +68,7 @@ KernelInputs kernel_inputs(const PotentialFields& u,
   for (size_t s = 0; s < number_of_points; ++s) {
     const PotentialVector u_s = potentials_at(u, s);
     const GradientVector q_s = gradients_at(q, s);
-    const LogMetricChart chart{stf_decode(&u_s[PotentialIndex::log_metric])};
+    const LogMetricChart& chart = charts[s];
     std::array<double, 5> a_s{};
     for (size_t c = 0; c < 5; ++c) {
       gsl::at(a_s, c) = a.get(c)[s];
@@ -326,16 +336,33 @@ void volume_targets(const gsl::not_null<Tags::VelocityTarget::type*> dt_w,
                     const Scalar<DataVector>& kappa_2, const double kappa_3,
                     const Scalar<DataVector>& eta,
                     const Scalar<DataVector>& k_0, const double f) {
+  volume_targets(dt_w, dt_q, dt_u, conformal_metric, a_tilde, u,
+                 log_metric_charts(u), w, q, d_w, d_q, kappa_1, kappa_2,
+                 kappa_3, eta, k_0, f);
+}
+
+void volume_targets(
+    const gsl::not_null<Tags::VelocityTarget::type*> dt_w,
+    const gsl::not_null<Tags::GradientTarget::type*> dt_q,
+    const gsl::not_null<Tags::PotentialRateTarget::type*> dt_u,
+    const tnsr::ii<DataVector, 3>& conformal_metric,
+    const tnsr::ii<DataVector, 3>& a_tilde, const PotentialFields& u,
+    const std::vector<LogMetricChart>& charts, const VelocityFields& w,
+    const Tags::PotentialGradients::type& q, const VelocityDerivatives& d_w,
+    const DerivPotentialGradients::type& d_q, const Scalar<DataVector>& kappa_1,
+    const Scalar<DataVector>& kappa_2, const double kappa_3,
+    const Scalar<DataVector>& eta, const Scalar<DataVector>& k_0,
+    const double f) {
   const size_t number_of_points = get(u.lapse).size();
-  const KernelRates rates =
-      kernel_rates(kernel_inputs(u, w.a, q, d_w.a, d_q), conformal_metric,
-                   a_tilde, u, w, d_w, kappa_1, kappa_2, kappa_3, eta, k_0, f);
+  const KernelRates rates = kernel_rates(
+      kernel_inputs(u, charts, w.a, q, d_w.a, d_q), conformal_metric, a_tilde,
+      u, w, d_w, kappa_1, kappa_2, kappa_3, eta, k_0, f);
 
   for (size_t s = 0; s < number_of_points; ++s) {
     const PotentialVector u_s = potentials_at(u, s);
     const VelocityVector w_s = velocities_at(w, s);
     const GradientVector q_s = gradients_at(q, s);
-    const LogMetricChart chart{stf_decode(&u_s[PotentialIndex::log_metric])};
+    const LogMetricChart& chart = charts[s];
     const PotentialVector rhs = potential_rhs(chart, u_s, w_s, q_s, f);
 
     // Chart rate of a from the physical ATilde rate.
@@ -400,6 +427,8 @@ void ComputeVolumeTargets::apply(
     const gsl::not_null<typename variables_tag::type*> evolved_variables,
     const gsl::not_null<typename dt_variables_tag::type*> dt_evolved_variables,
     const gsl::not_null<typename Tags::RhsTargets::type*> targets,
+    const gsl::not_null<typename Tags::StepChartFields::type*> chart_fields,
+    const gsl::not_null<std::vector<LogMetricChart>*> charts,
     const Mesh<3>& mesh,
     const InverseJacobian<DataVector, 3, Frame::ElementLogical,
                           Frame::Inertial>& inverse_jacobian,
@@ -430,9 +459,9 @@ void ComputeVolumeTargets::apply(
   const auto& lapse = get<gr::Tags::Lapse<DataVector>>(vars);
 
   // 1. The local nodal H and a.
-  LocalChartFields chart{number_of_points};
-  local_chart_fields(make_not_null(&chart), conformal_metric, conformal_factor,
-                     a_tilde, lapse);
+  local_chart_fields(chart_fields, conformal_metric, conformal_factor, a_tilde,
+                     lapse);
+  const LocalChartFields& chart = *chart_fields;
   const auto d_chart =
       partial_derivatives<typename LocalChartFields::tags_list>(
           chart, mesh, inverse_jacobian);
@@ -485,15 +514,33 @@ void ComputeVolumeTargets::apply(
                         Frame::Inertial>>(d_curvature),
       get<::Tags::deriv<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>,
                         tmpl::size_t<3>, Frame::Inertial>>(d_gauge)};
+  *charts = log_metric_charts(u);
   targets->initialize(number_of_points);
   volume_targets(make_not_null(&get<Tags::VelocityTarget>(*targets)),
                  make_not_null(&get<Tags::GradientTarget>(*targets)),
                  make_not_null(&get<Tags::PotentialRateTarget>(*targets)),
-                 conformal_metric, a_tilde, u, w, gradients, d_w,
+                 conformal_metric, a_tilde, u, *charts, w, gradients, d_w,
                  get<DerivPotentialGradients>(d_gradients), kappa_1, kappa_2,
                  kappa_3, eta, k_0, ::Ccz4::fd::System::f);
 
   // 5. Only FinalizeTimeDerivative writes physical rates.
   dt_evolved_variables->initialize(number_of_points, 0.0);
+}
+
+void ComputeVolumeTargets::apply(
+    const gsl::not_null<typename variables_tag::type*> evolved_variables,
+    const gsl::not_null<typename dt_variables_tag::type*> dt_evolved_variables,
+    const gsl::not_null<typename Tags::RhsTargets::type*> targets,
+    const Mesh<3>& mesh,
+    const InverseJacobian<DataVector, 3, Frame::ElementLogical,
+                          Frame::Inertial>& inverse_jacobian,
+    const Scalar<DataVector>& kappa_1, const Scalar<DataVector>& kappa_2,
+    const double kappa_3, const Scalar<DataVector>& eta,
+    const Scalar<DataVector>& k_0) {
+  typename Tags::StepChartFields::type chart_fields{};
+  std::vector<LogMetricChart> charts{};
+  apply(evolved_variables, dt_evolved_variables, targets,
+        make_not_null(&chart_fields), make_not_null(&charts), mesh,
+        inverse_jacobian, kappa_1, kappa_2, kappa_3, eta, k_0);
 }
 }  // namespace Ccz4::GradientProjection

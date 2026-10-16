@@ -7,11 +7,13 @@
 #include <cmath>
 #include <cstddef>
 #include <random>
+#include <vector>
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/PointwiseFields.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/PrepareChartFields.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Tags.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/TestHelpers.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/TimeDerivative.hpp"
@@ -593,6 +595,42 @@ void test_components(const gsl::not_null<std::mt19937*> gen, const double f) {
     }
   }
 }
+
+// The overloads taking the charts of u computed ahead (as ComputeVolumeTargets
+// keeps them for FinalizeTimeDerivative) give identical results.
+void test_precomputed_charts(const gsl::not_null<std::mt19937*> gen) {
+  const PointData point = random_point(gen, 0.4, 0.3, 0.3);
+  const gp::PotentialFields u = point.chart.potentials();
+  const std::vector<gp::LogMetricChart> charts = gp::log_metric_charts(u);
+
+  const auto inputs =
+      gp::kernel_inputs(u, point.chart.a, point.q, point.d_a, point.d_q);
+  const auto inputs_from_charts = gp::kernel_inputs(
+      u, charts, point.chart.a, point.q, point.d_a, point.d_q);
+  CHECK(inputs_from_charts.field_a == inputs.field_a);
+  CHECK(inputs_from_charts.field_b == inputs.field_b);
+  CHECK(inputs_from_charts.field_d == inputs.field_d);
+  CHECK(inputs_from_charts.field_p == inputs.field_p);
+  CHECK(inputs_from_charts.d_field_a == inputs.d_field_a);
+  CHECK(inputs_from_charts.d_field_b == inputs.d_field_b);
+  CHECK(inputs_from_charts.d_field_d == inputs.d_field_d);
+  CHECK(inputs_from_charts.d_field_p == inputs.d_field_p);
+  CHECK(inputs_from_charts.d_a_tilde == inputs.d_a_tilde);
+
+  const double f = 0.5;
+  const Gauge gauge{};
+  const Targets expected = targets(point, f, gauge);
+  Targets from_charts{};
+  gp::volume_targets(
+      make_not_null(&from_charts.dt_w), make_not_null(&from_charts.dt_q),
+      make_not_null(&from_charts.dt_u), point.chart.conformal_metric,
+      point.chart.a_tilde, u, charts, point.chart.velocities(), point.q,
+      point.d_w(), point.d_q, gauge.kappa_1, gauge.kappa_2, gauge.kappa_3,
+      gauge.eta, gauge.k_0, f);
+  CHECK(from_charts.dt_w == expected.dt_w);
+  CHECK(from_charts.dt_q == expected.dt_q);
+  CHECK(from_charts.dt_u == expected.dt_u);
+}
 }  // namespace
 
 // [[TimeOut, 30]]
@@ -604,6 +642,7 @@ SPECTRE_TEST_CASE(
   MAKE_GENERATOR(gen);
   test_kernel_inputs(make_not_null(&gen));
   test_variable_phi_inputs();
+  test_precomputed_charts(make_not_null(&gen));
   for (const double f : {1.0, 0.5, 1.25}) {
     CAPTURE(f);
     test_principal_part(make_not_null(&gen), f);

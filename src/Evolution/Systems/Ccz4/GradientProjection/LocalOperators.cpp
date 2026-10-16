@@ -28,6 +28,7 @@
 #include "NumericalAlgorithms/Spectral/ModalToNodalMatrix.hpp"
 #include "NumericalAlgorithms/Spectral/Quadrature.hpp"
 #include "NumericalAlgorithms/Spectral/QuadratureWeights.hpp"
+#include "Utilities/Blas.hpp"
 #include "Utilities/ErrorHandling/Error.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/Serialization/PupStlCpp11.hpp"
@@ -257,7 +258,12 @@ void LocalOperators::fit(
   if (info != 0) {
     ERROR("Cholesky solve of the gradient fit failed with info = " << info);
   }
-  const Matrix scaled_fit = q_1 * reduced;
+  // BLAS directly: the Blaze product dispatches to whichever cblas_dgemm is
+  // linked first, which may be an unoptimized reference implementation.
+  Matrix scaled_fit(number_of_points, NumberOfFields);
+  dgemm_('N', 'N', number_of_points, NumberOfFields, reduced_size, 1.0,
+         q_1.data(), q_1.spacing(), reduced.data(), reduced.spacing(), 0.0,
+         scaled_fit.data(), scaled_fit.spacing());
   for (size_t field = 0; field < NumberOfFields; ++field) {
     DataVector& result = gsl::at(*fields, field);
     result.destructive_resize(number_of_points);
@@ -290,6 +296,38 @@ void LocalOperators::apply_filter(
     const gsl::not_null<DataVector*> field) const {
   const DataVector projected = project_retained(*field);
   *field = shell_filter_gain * (*field) + (1.0 - shell_filter_gain) * projected;
+}
+
+void LocalOperators::apply_filter(
+    const std::vector<gsl::not_null<DataVector*>>& fields) const {
+  const size_t number_of_points = mesh_.number_of_grid_points();
+  const size_t number_of_fields = fields.size();
+  Matrix weighted(number_of_points, number_of_fields);
+  for (size_t field_index = 0; field_index < number_of_fields; ++field_index) {
+    const DataVector& field = *fields[field_index];
+    for (size_t point = 0; point < number_of_points; ++point) {
+      weighted(point, field_index) = sqrt_mass_[point] * field[point];
+    }
+  }
+  // The retained modes are the leading columns of the orthonormal basis.
+  Matrix coefficients(number_of_retained_modes_, number_of_fields);
+  dgemm_('T', 'N', number_of_retained_modes_, number_of_fields,
+         number_of_points, 1.0, orthonormal_basis_.data(),
+         orthonormal_basis_.spacing(), weighted.data(), weighted.spacing(), 0.0,
+         coefficients.data(), coefficients.spacing());
+  Matrix projected(number_of_points, number_of_fields);
+  dgemm_('N', 'N', number_of_points, number_of_fields,
+         number_of_retained_modes_, 1.0, orthonormal_basis_.data(),
+         orthonormal_basis_.spacing(), coefficients.data(),
+         coefficients.spacing(), 0.0, projected.data(), projected.spacing());
+  DataVector unweighted{number_of_points};
+  for (size_t field_index = 0; field_index < number_of_fields; ++field_index) {
+    for (size_t point = 0; point < number_of_points; ++point) {
+      unweighted[point] = projected(point, field_index) / sqrt_mass_[point];
+    }
+    DataVector& field = *fields[field_index];
+    field = shell_filter_gain * field + (1.0 - shell_filter_gain) * unweighted;
+  }
 }
 
 void LocalOperators::pup(PUP::er& p) {

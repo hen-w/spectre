@@ -43,8 +43,9 @@
 namespace Ccz4::GradientProjection {
 /*!
  * \brief Initialization mutator that builds the static per-element
- * `LocalOperators` and adds the (empty) right-hand-side target buffer
- * `Tags::RhsTargets`, which every right-hand side evaluation fills.
+ * `LocalOperators` and adds the (empty) buffers that every right-hand side
+ * evaluation fills: the right-hand-side targets `Tags::RhsTargets` and the
+ * chart data `Tags::StepChartFields` and `Tags::StepCharts`.
  *
  * It is an `ERROR` if the grid-to-inertial map is time dependent, since the
  * cached operators are valid only for a static mesh.
@@ -53,7 +54,8 @@ struct InitializeLocalOperators {
   using const_global_cache_tags = tmpl::list<>;
   using mutable_global_cache_tags = tmpl::list<>;
   using simple_tags_from_options = tmpl::list<>;
-  using simple_tags = tmpl::list<Tags::LocalOperators, Tags::RhsTargets>;
+  using simple_tags = tmpl::list<Tags::LocalOperators, Tags::RhsTargets,
+                                 Tags::StepChartFields, Tags::StepCharts>;
   using compute_tags = tmpl::list<>;
   using return_tags = tmpl::list<Tags::LocalOperators>;
   using argument_tags = tmpl::list<
