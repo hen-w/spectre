@@ -521,12 +521,13 @@ using CacheTuple = tuples::TaggedTuple<
     ::Tags::EventsAndTriggers<Triggers::WhenToCheck::AtSlabs>,
     evolution::Tags::BoundaryCorrection, ::dg::Tags::Formulation,
     domain::Tags::ExternalBoundaryConditions<3>,
-    evolution::initial_data::Tags::InitialData>;
+    evolution::initial_data::Tags::InitialData, gp::Tags::TopShellFilterGain>;
 using MutableCacheTuple =
     tuples::TaggedTuple<domain::Tags::FunctionsOfTimeInitialize>;
 
 const std::array<double, 3> element_lengths{{1.0, 1.3, 0.8}};
 constexpr double kappa_3 = 0.5;
+constexpr double top_shell_filter_gain = 0.3;
 constexpr size_t number_of_points = 27;
 
 // A periodic brick of 2^refinement_x elements along x, each of size
@@ -577,7 +578,8 @@ CacheTuple cache(const size_t order, const DomainCreator<3>& creator,
           correction.get_clone(),
           ::dg::Formulation::StrongInertial,
           creator.external_boundary_conditions(),
-          std::make_unique<Minkowski>()};
+          std::make_unique<Minkowski>(),
+          top_shell_filter_gain};
 }
 
 // Emplaces and initializes an element with the damping parameters kappa_1 and
@@ -636,7 +638,7 @@ void test_step_actions(const bool damped) {
   CAPTURE(damped);
   RecordState::calls.clear();
   const size_t order = 3;
-  const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0};
+  const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0, 1.0};
   MockRuntimeSystem runner{cache(order, brick(0), correction),
                            MutableCacheTuple{}};
   const ElementId<3> id = element_id(0, 0);
@@ -928,7 +930,8 @@ void test_step_actions(const bool damped) {
     const history_tag::type cleaned_history = get_tag<history_tag>(runner, id);
     CHECK(cleaned_history.size() == order - 1);
 
-    // FilterAndEnforceConstraints acts on the advanced state only.
+    // FilterAndEnforceConstraints acts on the advanced state only, with the
+    // gain from the global cache.
     const PhysicalVars before_filter =
         part<physical_tags>(get_tag<variables_tag>(runner, id));
     next();
@@ -940,7 +943,8 @@ void test_step_actions(const bool damped) {
                               Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>>(
         [&expected, &operators]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
           for (auto& component : get<Tag>(expected)) {
-            operators.apply_filter(make_not_null(&component));
+            operators.apply_filter(make_not_null(&component),
+                                   top_shell_filter_gain);
           }
         });
     Ccz4::fd::enforce_algebraic_constraints(
@@ -1147,7 +1151,8 @@ DataVector random_vector(const gsl::not_null<std::mt19937*> gen,
 // chart perturbations, mapped to chart rates at the background, equals the
 // model operator applied to the perturbation, for every combination of the
 // damping parameters kappa_1 and eta (the latter including the fitted shift
-// damping of FinalizeTimeDerivative).
+// damping of FinalizeTimeDerivative) at the scalar jump penalty sigma = 1, and
+// for sigma = 0 and 2.5 at one of them.
 void test_linearized_operator(const gsl::not_null<std::mt19937*> gen) {
   constexpr size_t refinement_x = 1;
   constexpr size_t elements_x = 2;
@@ -1158,16 +1163,20 @@ void test_linearized_operator(const gsl::not_null<std::mt19937*> gen) {
   const auto model_index = [](const size_t e, const size_t s) {
     return 3 * e + s % 3 + 3 * elements_x * (s / 3);
   };
-  for (const auto& [kappa_1, eta] :
-       std::array<std::array<double, 2>, 6>{{{{0.0, 0.0}},
-                                             {{0.3, 0.0}},
-                                             {{0.0, 0.1}},
-                                             {{0.3, 0.1}},
-                                             {{0.0, 1.0}},
-                                             {{0.3, 1.0}}}}) {
+  for (const auto& [kappa_1, eta, sigma] :
+       std::array<std::array<double, 3>, 8>{{{{0.0, 0.0, 1.0}},
+                                             {{0.3, 0.0, 1.0}},
+                                             {{0.0, 0.1, 1.0}},
+                                             {{0.3, 0.1, 1.0}},
+                                             {{0.0, 1.0, 1.0}},
+                                             {{0.3, 1.0, 1.0}},
+                                             {{0.3, 0.1, 0.0}},
+                                             {{0.3, 0.1, 2.5}}}}) {
     CAPTURE(kappa_1);
     CAPTURE(eta);
-    const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0};
+    CAPTURE(sigma);
+    const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0,
+                                                                       sigma};
     const auto creator = brick(refinement_x);
     MockRuntimeSystem runner{cache(3, creator, correction),
                              MutableCacheTuple{}};
@@ -1187,7 +1196,7 @@ void test_linearized_operator(const gsl::not_null<std::mt19937*> gen) {
       const auto expected = pypp::call<DataVector>(
           "GradientProjectionModel", "linearized_rates", delta,
           element_lengths[0], element_lengths[1], element_lengths[2], kappa_1,
-          eta, Ccz4::fd::System::f, static_cast<double>(elements_x));
+          eta, Ccz4::fd::System::f, static_cast<double>(elements_x), sigma);
       const auto custom =
           Approx::custom().epsilon(1.0e-8).scale(max(abs(expected)));
       CHECK_ITERABLE_CUSTOM_APPROX(chart_rates, expected, custom);
@@ -1199,8 +1208,9 @@ void test_linearized_operator(const gsl::not_null<std::mt19937*> gen) {
 // factor and lapse and a nonzero shift, against the model assembled from the
 // frozen log(phi) symbol conjugated by the scaling of the gradients of phi
 // (and the lapse-weighted damping), for every combination of zero and nonzero
-// kappa_1 and eta. About phi = 1 a missing factor of phi in R_phi, FieldP, P
-// or the normal operator would be invisible.
+// kappa_1 and eta at the scalar jump penalty sigma = 1, and for sigma = 0 and
+// 2.5 at one of them. About phi = 1 a missing factor of phi in R_phi, FieldP,
+// P or the normal operator would be invisible.
 void test_linearized_operator_about_background(
     const gsl::not_null<std::mt19937*> gen) {
   constexpr size_t refinement_x = 1;
@@ -1212,11 +1222,18 @@ void test_linearized_operator_about_background(
     return 3 * e + s % 3 + 3 * elements_x * (s / 3);
   };
   const Background background{0.8, 0.7, {{0.05, -0.03, 0.02}}};
-  for (const auto& [kappa_1, eta] : std::array<std::array<double, 2>, 4>{
-           {{{0.0, 0.0}}, {{0.3, 0.0}}, {{0.0, 1.0}}, {{0.3, 1.0}}}}) {
+  for (const auto& [kappa_1, eta, sigma] :
+       std::array<std::array<double, 3>, 6>{{{{0.0, 0.0, 1.0}},
+                                             {{0.3, 0.0, 1.0}},
+                                             {{0.0, 1.0, 1.0}},
+                                             {{0.3, 1.0, 1.0}},
+                                             {{0.3, 1.0, 0.0}},
+                                             {{0.3, 1.0, 2.5}}}}) {
     CAPTURE(kappa_1);
     CAPTURE(eta);
-    const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0};
+    CAPTURE(sigma);
+    const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0,
+                                                                       sigma};
     const auto creator = brick(refinement_x);
     MockRuntimeSystem runner{cache(3, creator, correction),
                              MutableCacheTuple{}};
@@ -1237,7 +1254,8 @@ void test_linearized_operator_about_background(
         eta, Ccz4::fd::System::f, static_cast<double>(elements_x),
         DataVector{background.conformal_factor, background.lapse,
                    background.shift[0], background.shift[1],
-                   background.shift[2]});
+                   background.shift[2]},
+        sigma);
     const auto custom =
         Approx::custom().epsilon(1.0e-8).scale(max(abs(expected)));
     CHECK_ITERABLE_CUSTOM_APPROX(chart_rates, expected, custom);
@@ -1269,7 +1287,7 @@ std::vector<ElementId<3>> sphere_elements(
 void test_sphere_minkowski(const double eta) {
   CAPTURE(eta);
   const auto creator = sphere();
-  const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0};
+  const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0, 1.0};
   MockRuntimeSystem runner{cache(3, creator, correction), MutableCacheTuple{}};
   const auto ids = sphere_elements(make_not_null(&runner), creator, 0.3, eta);
   const size_t total = 6 * number_of_points;
@@ -1292,7 +1310,7 @@ void test_sphere_minkowski(const double eta) {
 // external face has no value jump), and no time derivative.
 void test_external_lift_isolation(const gsl::not_null<std::mt19937*> gen) {
   const auto creator = sphere();
-  const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0};
+  const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0, 1.0};
   MockRuntimeSystem runner{cache(3, creator, correction), MutableCacheTuple{}};
   const auto ids = sphere_elements(make_not_null(&runner), creator, 0.3, 0.4);
   const size_t n = number_of_points;
@@ -1353,9 +1371,11 @@ void test_external_lift_isolation(const gsl::not_null<std::mt19937*> gen) {
 // space reproduces the curved-mesh linear model (independently assembling the
 // physical derivatives, face normals and lifts from the map's inverse
 // Jacobian, and pairing internal faces by node coordinates) including the
-// analytic exterior closure, for two external dissipation factors and three
-// values of eta. The errors on the radial (external) face nodes and on all
-// other nodes are checked separately.
+// analytic exterior closure, for every combination of the two options of the
+// boundary correction (two external dissipation factors and three internal
+// scalar jump penalties sigma) at eta = 0.1, and for three values of eta at
+// sigma = 1. The errors on the radial (external) face nodes and on all other
+// nodes are checked separately.
 void test_sphere_linearized(const gsl::not_null<std::mt19937*> gen) {
   const auto creator = sphere();
   const double kappa_1 = 0.3;
@@ -1364,17 +1384,22 @@ void test_sphere_linearized(const gsl::not_null<std::mt19937*> gen) {
   const auto model_index = [](const size_t e, const size_t s) {
     return e * number_of_points + s;
   };
-  for (const auto& [external_factor, eta] :
-       std::array<std::array<double, 2>, 6>{{{{1.0, 0.0}},
-                                             {{2.0, 0.0}},
-                                             {{1.0, 0.1}},
-                                             {{2.0, 0.1}},
-                                             {{1.0, 1.0}},
-                                             {{2.0, 1.0}}}}) {
+  for (const auto& [external_factor, eta, sigma] :
+       std::array<std::array<double, 3>, 10>{{{{1.0, 0.0, 1.0}},
+                                              {{2.0, 0.0, 1.0}},
+                                              {{1.0, 0.1, 1.0}},
+                                              {{2.0, 0.1, 1.0}},
+                                              {{1.0, 1.0, 1.0}},
+                                              {{2.0, 1.0, 1.0}},
+                                              {{1.0, 0.1, 0.0}},
+                                              {{2.0, 0.1, 0.0}},
+                                              {{1.0, 0.1, 2.5}},
+                                              {{2.0, 0.1, 2.5}}}}) {
     CAPTURE(external_factor);
     CAPTURE(eta);
+    CAPTURE(sigma);
     const gp::BoundaryCorrections::UpwindGradientProjection correction{
-        external_factor};
+        external_factor, sigma};
     MockRuntimeSystem runner{cache(3, creator, correction),
                              MutableCacheTuple{}};
     const auto ids =
@@ -1402,7 +1427,7 @@ void test_sphere_linearized(const gsl::not_null<std::mt19937*> gen) {
         make_not_null(&runner), ids, delta, total, model_index);
     const auto expected = pypp::call<DataVector>(
         "GradientProjectionModel", "linearized_rates_on_mesh", delta, geometry,
-        3.0, 6.0, kappa_1, eta, Ccz4::fd::System::f, external_factor);
+        3.0, 6.0, kappa_1, eta, Ccz4::fd::System::f, external_factor, sigma);
     const double scale = max(abs(expected));
     // The radial direction of each wedge is the third logical direction.
     double external_error = 0.0;

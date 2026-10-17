@@ -25,8 +25,10 @@
 namespace Ccz4::GradientProjection::BoundaryCorrections {
 
 UpwindGradientProjection::UpwindGradientProjection(
-    const double external_dissipation_factor)
-    : external_dissipation_factor_(external_dissipation_factor) {}
+    const double external_dissipation_factor,
+    const double internal_scalar_penalty)
+    : external_dissipation_factor_(external_dissipation_factor),
+      internal_scalar_penalty_(internal_scalar_penalty) {}
 
 UpwindGradientProjection::UpwindGradientProjection(CkMigrateMessage* msg)
     : BoundaryCorrection(msg) {}
@@ -39,6 +41,7 @@ UpwindGradientProjection::get_clone() const {
 void UpwindGradientProjection::pup(PUP::er& p) {
   BoundaryCorrection::pup(p);
   p | external_dissipation_factor_;
+  p | internal_scalar_penalty_;
 }
 
 double UpwindGradientProjection::dg_package_data(
@@ -114,7 +117,8 @@ void UpwindGradientProjection::dg_boundary_terms(
       ForExternalBoundary ? external_dissipation_factor_ : 1.0;
   // An analytic exterior state need not match outgoing fields. Penalizing
   // their jumps would impose extra boundary data beyond ordinary upwinding.
-  constexpr double scalar_penalty = ForExternalBoundary ? 0.0 : 1.0;
+  const double scalar_penalty =
+      ForExternalBoundary ? 0.0 : internal_scalar_penalty_;
   const size_t number_of_points = get<0>(u_int).size();
   for (size_t s = 0; s < number_of_points; ++s) {
     const PotentialVector u_int_s = potentials_at(u_int, s);

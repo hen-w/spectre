@@ -48,24 +48,25 @@ struct EnforceAlgebraicConstraints : tt::ConformsTo<db::protocols::Mutator> {
  * \details After the time stepper has advanced the physical state, each
  * stored component of the physical \f$\tilde A_{ij}\f$, \f$K\f$, \f$\Theta\f$,
  * \f$\hat\Gamma^i\f$ and \f$b^i\f$ is filtered with
- * `LocalOperators::apply_filter` (top tensor shell gain
- * `shell_filter_gain`); \f$\tilde\gamma\f$, \f$\phi\f$, \f$\alpha\f$ and
- * \f$\beta\f$ are not filtered. The algebraic constraints are then enforced,
+ * `LocalOperators::apply_filter` at the gain `Tags::TopShellFilterGain`;
+ * \f$\tilde\gamma\f$, \f$\phi\f$, \f$\alpha\f$ and \f$\beta\f$ are not
+ * filtered. The algebraic constraints are then enforced,
  * which restores the \f$\tilde\gamma\f$-trace of \f$\tilde A\f$ that the
  * componentwise filter does not preserve on a varying metric. The time-stepper
  * history is not modified. Like `UpdateU`, this does nothing on the unused
  * substeps of the self-start procedure, where the state is not advanced.
  */
 struct FilterAndEnforceConstraints : tt::ConformsTo<db::protocols::Mutator> {
+  using const_global_cache_tags = tmpl::list<Tags::TopShellFilterGain>;
   using return_tags = tmpl::list<::Ccz4::Tags::ConformalMetric<DataVector, 3>,
                                  ::Ccz4::Tags::ATilde<DataVector, 3>,
                                  gr::Tags::TraceExtrinsicCurvature<DataVector>,
                                  ::Ccz4::Tags::Theta<DataVector>,
                                  ::Ccz4::Tags::GammaHat<DataVector, 3>,
                                  ::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>;
-  using argument_tags =
-      tmpl::list<domain::Tags::Mesh<3>, Tags::LocalOperators,
-                 ::Tags::TimeStepId, ::Tags::Next<::Tags::TimeStepId>>;
+  using argument_tags = tmpl::list<domain::Tags::Mesh<3>, Tags::LocalOperators,
+                                   Tags::TopShellFilterGain, ::Tags::TimeStepId,
+                                   ::Tags::Next<::Tags::TimeStepId>>;
 
   static void apply(
       gsl::not_null<tnsr::ii<DataVector, 3>*> conformal_metric,
@@ -74,7 +75,7 @@ struct FilterAndEnforceConstraints : tt::ConformsTo<db::protocols::Mutator> {
       gsl::not_null<Scalar<DataVector>*> theta,
       gsl::not_null<tnsr::I<DataVector, 3>*> gamma_hat,
       gsl::not_null<tnsr::I<DataVector, 3>*> b, const Mesh<3>& mesh,
-      const LocalOperators& local_operators, const TimeStepId& time_step_id,
-      const TimeStepId& next_time_step_id);
+      const LocalOperators& local_operators, double top_shell_filter_gain,
+      const TimeStepId& time_step_id, const TimeStepId& next_time_step_id);
 };
 }  // namespace Ccz4::GradientProjection

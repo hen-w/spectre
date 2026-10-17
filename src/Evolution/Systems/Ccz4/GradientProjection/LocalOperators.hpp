@@ -20,9 +20,6 @@ class er;
 /// \endcond
 
 namespace Ccz4::GradientProjection {
-/// The gain applied to the highest tensor modal shell by the post-step filter.
-constexpr double shell_filter_gain = 0.1;
-
 /*!
  * \brief Static element-local operators: the constrained least-squares
  * gradient fit and the mass-weighted top-shell filter.
@@ -41,11 +38,11 @@ constexpr double shell_filter_gain = 0.1;
  *   \f$Z_0^TK_DZ_0\f$ is built once; it is an `ERROR` if this matrix has a
  *   relative eigenvalue below \f$10^{-12}\f$, indicating an additional
  *   nullspace or excessive numerical conditioning of the reduced system.
- * - `apply_filter` applies
- *   \f$F=\Pi+0.1(I-\Pi)\f$, where \f$\Pi\f$ is the \f$M\f$-orthogonal
- *   projector onto the tensor-product polynomials of degree at most
- *   \f$p_i-1\f$ in every logical direction. The removed shell
- *   \f$\max(l/p_0,m/p_1,n/p_2)=1\f$ contains the top mode in each direction.
+ * - `apply_filter` applies \f$F=\Pi+g(I-\Pi)\f$ with the given gain \f$g\f$,
+ *   where \f$\Pi\f$ is the \f$M\f$-orthogonal projector onto the
+ *   tensor-product polynomials of degree at most \f$p_i-1\f$ in every logical
+ *   direction. The removed shell \f$\max(l/p_0,m/p_1,n/p_2)=1\f$ contains the
+ *   top mode in each direction.
  *
  * Both use one mass-weighted QR factorization
  * \f$M^{1/2}B=QR\f$ of the Legendre Vandermonde matrix \f$B\f$ with columns
@@ -88,14 +85,14 @@ class LocalOperators {
   /// \f$\Pi v\f$.
   DataVector project_retained(const DataVector& field) const;
 
-  /// Apply the top-shell filter in place.
-  void apply_filter(gsl::not_null<DataVector*> field) const;
+  /// Apply the top-shell filter with the given `gain` in place.
+  void apply_filter(gsl::not_null<DataVector*> field, double gain) const;
 
-  /// Apply the top-shell filter in place to each of `fields`: the same as
-  /// `apply_filter` on each field, with the projections of all fields computed
-  /// by one matrix-matrix product.
-  void apply_filter(
-      const std::vector<gsl::not_null<DataVector*>>& fields) const;
+  /// Apply the top-shell filter with the given `gain` in place to each of
+  /// `fields`: the same as `apply_filter` on each field, with the projections
+  /// of all fields computed by one matrix-matrix product.
+  void apply_filter(const std::vector<gsl::not_null<DataVector*>>& fields,
+                    double gain) const;
 
   /// Error if `mesh` differs from the mesh the operators were built for.
   void check_mesh(const Mesh<3>& mesh) const;

@@ -28,7 +28,7 @@
  * ordinary gradients \f$q_i=D_iu\f$; evaluates the full production CCZ4
  * volume equations through the chart chain rule into temporary targets for
  * \f$(w,q_i)\f$; corrects these targets with the full upwind normal matrix and
- * a unit scalar jump penalty in a single DG exchange; fits \f$u_t\f$ by an
+ * a scalar jump penalty in a single DG exchange; fits \f$u_t\f$ by an
  * element-local constrained least-squares gradient fit; applies the
  * compatibility correction; and converts all rates to the physical fields.
  * After each step the physical \f$\tilde A,K,\Theta,\hat\Gamma,b\f$ are

@@ -297,14 +297,15 @@ DataVector LocalOperators::project_retained(const DataVector& field) const {
   return result;
 }
 
-void LocalOperators::apply_filter(
-    const gsl::not_null<DataVector*> field) const {
+void LocalOperators::apply_filter(const gsl::not_null<DataVector*> field,
+                                  const double gain) const {
   const DataVector projected = project_retained(*field);
-  *field = shell_filter_gain * (*field) + (1.0 - shell_filter_gain) * projected;
+  *field = gain * (*field) + (1.0 - gain) * projected;
 }
 
 void LocalOperators::apply_filter(
-    const std::vector<gsl::not_null<DataVector*>>& fields) const {
+    const std::vector<gsl::not_null<DataVector*>>& fields,
+    const double gain) const {
   const size_t number_of_points = mesh_.number_of_grid_points();
   const size_t number_of_fields = fields.size();
   Matrix weighted(number_of_points, number_of_fields);
@@ -331,7 +332,7 @@ void LocalOperators::apply_filter(
       unweighted[point] = projected(point, field_index) / sqrt_mass_[point];
     }
     DataVector& field = *fields[field_index];
-    field = shell_filter_gain * field + (1.0 - shell_filter_gain) * unweighted;
+    field = gain * field + (1.0 - gain) * unweighted;
   }
 }
 

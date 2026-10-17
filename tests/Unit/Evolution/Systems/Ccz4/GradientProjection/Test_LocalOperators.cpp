@@ -152,22 +152,7 @@ void test_filter(const Geometry& geometry,
   CHECK(operators.number_of_retained_modes() ==
         (extents[0] - 1) * (extents[1] - 1) * (extents[2] - 1));
 
-  // The retained space (degree <= p_i - 1 in every direction) is fixed
-  // exactly.
-  for (size_t l = 0; l + 1 < extents[0]; ++l) {
-    for (size_t m = 0; m + 1 < extents[1]; ++m) {
-      for (size_t n = 0; n + 1 < extents[2]; ++n) {
-        DataVector field = mode(geometry, l, m, n);
-        const DataVector original = field;
-        operators.apply_filter(make_not_null(&field));
-        CHECK_ITERABLE_CUSTOM_APPROX(
-            field, original, Approx::custom().epsilon(1e-12).scale(1.0));
-      }
-    }
-  }
-
-  // The projector is idempotent and self-adjoint in the mass inner product,
-  // and the filter is the gain on its mass-orthogonal complement.
+  // The projector is idempotent and self-adjoint in the mass inner product.
   const size_t n = geometry.mesh.number_of_grid_points();
   const DataVector x = random_field(gen, n);
   const DataVector y = random_field(gen, n);
@@ -178,35 +163,60 @@ void test_filter(const Geometry& geometry,
   CHECK(sum(operators.mass() * projected_x * y) ==
         approx(sum(operators.mass() * x * operators.project_retained(y)))
             .epsilon(1e-12));
-  DataVector complement = x - projected_x;
-  const DataVector original_complement = complement;
-  operators.apply_filter(make_not_null(&complement));
-  CHECK_ITERABLE_CUSTOM_APPROX(complement,
-                               gp::shell_filter_gain * original_complement,
-                               Approx::custom().epsilon(1e-12).scale(1.0));
-  DataVector filtered = x;
-  operators.apply_filter(make_not_null(&filtered));
-  CHECK_ITERABLE_CUSTOM_APPROX(
-      filtered,
-      DataVector{projected_x + gp::shell_filter_gain * (x - projected_x)},
-      Approx::custom().epsilon(1e-12).scale(1.0));
 
-  // Filtering several fields at once filters each of them, up to the
-  // summation order of the matrix products; an empty list is a no-op.
-  const std::vector<DataVector> originals{x, y, projected_x};
-  std::vector<DataVector> batch = originals;
-  std::vector<gsl::not_null<DataVector*>> batch_fields{};
-  for (auto& field : batch) {
-    batch_fields.emplace_back(&field);
-  }
-  operators.apply_filter(batch_fields);
-  for (size_t i = 0; i < batch.size(); ++i) {
-    DataVector expected = originals[i];
-    operators.apply_filter(make_not_null(&expected));
-    CHECK_ITERABLE_CUSTOM_APPROX(batch[i], expected,
+  for (const double gain : {0.0, 0.1, 0.37, 1.0}) {
+    CAPTURE(gain);
+    // The retained space (degree <= p_i - 1 in every direction) is fixed
+    // exactly.
+    for (size_t l = 0; l + 1 < extents[0]; ++l) {
+      for (size_t m = 0; m + 1 < extents[1]; ++m) {
+        for (size_t k = 0; k + 1 < extents[2]; ++k) {
+          DataVector field = mode(geometry, l, m, k);
+          const DataVector original = field;
+          operators.apply_filter(make_not_null(&field), gain);
+          CHECK_ITERABLE_CUSTOM_APPROX(
+              field, original, Approx::custom().epsilon(1e-12).scale(1.0));
+        }
+      }
+    }
+
+    // The filter is the gain on the mass-orthogonal complement.
+    DataVector complement = x - projected_x;
+    const DataVector original_complement = complement;
+    operators.apply_filter(make_not_null(&complement), gain);
+    CHECK_ITERABLE_CUSTOM_APPROX(complement, gain * original_complement,
                                  Approx::custom().epsilon(1e-12).scale(1.0));
+    DataVector filtered = x;
+    operators.apply_filter(make_not_null(&filtered), gain);
+    CHECK_ITERABLE_CUSTOM_APPROX(
+        filtered, DataVector{projected_x + gain * (x - projected_x)},
+        Approx::custom().epsilon(1e-12).scale(1.0));
+
+    // Filtering several fields at once filters each of them, up to the
+    // summation order of the matrix products; an empty list is a no-op.
+    const std::vector<DataVector> originals{x, y, projected_x};
+    std::vector<DataVector> batch = originals;
+    std::vector<gsl::not_null<DataVector*>> batch_fields{};
+    for (auto& field : batch) {
+      batch_fields.emplace_back(&field);
+    }
+    operators.apply_filter(batch_fields, gain);
+    for (size_t i = 0; i < batch.size(); ++i) {
+      DataVector expected = originals[i];
+      operators.apply_filter(make_not_null(&expected), gain);
+      CHECK_ITERABLE_CUSTOM_APPROX(batch[i], expected,
+                                   Approx::custom().epsilon(1e-12).scale(1.0));
+    }
+    operators.apply_filter(std::vector<gsl::not_null<DataVector*>>{}, gain);
+
+    // At unit gain both versions of the filter leave the fields unchanged.
+    if (gain == 1.0) {
+      CHECK(filtered == x);
+      for (size_t i = 0; i < batch.size(); ++i) {
+        CHECK(batch[i] == originals[i]);
+      }
+    }
   }
-  operators.apply_filter(std::vector<gsl::not_null<DataVector*>>{});
 }
 
 // On an affine element the Legendre modes are orthogonal in the LGL mass
@@ -216,18 +226,21 @@ void test_affine_shell(const Geometry& geometry) {
   const gp::LocalOperators operators{geometry.mesh, geometry.inverse_jacobian,
                                      geometry.det_inverse_jacobian};
   const auto& e = geometry.mesh.extents();
-  for (const auto& [l, m, n] :
-       std::vector<std::array<size_t, 3>>{{{e[0] - 1, 0, 0}},
-                                          {{0, e[1] - 1, 0}},
-                                          {{0, 0, e[2] - 1}},
-                                          {{e[0] - 1, 1, 0}},
-                                          {{1, e[1] - 1, e[2] - 1}},
-                                          {{e[0] - 1, e[1] - 1, e[2] - 1}}}) {
-    DataVector field = mode(geometry, l, m, n);
-    const DataVector original = field;
-    operators.apply_filter(make_not_null(&field));
-    CHECK_ITERABLE_CUSTOM_APPROX(field, gp::shell_filter_gain * original,
-                                 Approx::custom().epsilon(1e-12).scale(1.0));
+  for (const double gain : {0.0, 0.1, 0.37, 1.0}) {
+    CAPTURE(gain);
+    for (const auto& [l, m, n] :
+         std::vector<std::array<size_t, 3>>{{{e[0] - 1, 0, 0}},
+                                            {{0, e[1] - 1, 0}},
+                                            {{0, 0, e[2] - 1}},
+                                            {{e[0] - 1, 1, 0}},
+                                            {{1, e[1] - 1, e[2] - 1}},
+                                            {{e[0] - 1, e[1] - 1, e[2] - 1}}}) {
+      DataVector field = mode(geometry, l, m, n);
+      const DataVector original = field;
+      operators.apply_filter(make_not_null(&field), gain);
+      CHECK_ITERABLE_CUSTOM_APPROX(field, gain * original,
+                                   Approx::custom().epsilon(1e-12).scale(1.0));
+    }
   }
   CHECK(operators.volume() == approx(geometry.exact_volume));
 }

@@ -14,7 +14,25 @@
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/LocalOperators.hpp"
+#include "NumericalAlgorithms/DiscontinuousGalerkin/Tags/OptionsGroup.hpp"
+#include "Options/String.hpp"
 #include "Utilities/TMPL.hpp"
+
+/// Option tags of the CCZ4 gradient-projection scheme.
+namespace Ccz4::GradientProjection::OptionTags {
+/// \brief The gain of the post-step top-shell filter, see
+/// `Ccz4::GradientProjection::Tags::TopShellFilterGain`.
+struct TopShellFilterGain {
+  using type = double;
+  static constexpr Options::String help = {
+      "The factor multiplying the highest tensor modal shell of ATilde, K, "
+      "Theta, GammaHat and b on DG elements after every time step: 1 leaves "
+      "them unfiltered, 0 removes the shell."};
+  static type lower_bound() { return 0.0; }
+  static type upper_bound() { return 1.0; }
+  using group = ::dg::OptionTags::DiscontinuousGalerkinGroup;
+};
+}  // namespace Ccz4::GradientProjection::OptionTags
 
 namespace Ccz4::GradientProjection::Tags {
 /// A vector of `Size` chart components at each grid point.
@@ -121,5 +139,16 @@ struct PackagedPotentials : db::SimpleTag {
 /// `Ccz4::GradientProjection::LocalOperators`.
 struct LocalOperators : db::SimpleTag {
   using type = ::Ccz4::GradientProjection::LocalOperators;
+};
+
+/// \brief The gain \f$g\f$ of the post-step filter \f$F=\Pi+g(I-\Pi)\f$ on the
+/// highest tensor modal shell, see
+/// `Ccz4::GradientProjection::LocalOperators::apply_filter` and
+/// `Ccz4::GradientProjection::FilterAndEnforceConstraints`.
+struct TopShellFilterGain : db::SimpleTag {
+  using type = double;
+  using option_tags = tmpl::list<OptionTags::TopShellFilterGain>;
+  static constexpr bool pass_metavariables = false;
+  static type create_from_options(const type gain) { return gain; }
 };
 }  // namespace Ccz4::GradientProjection::Tags

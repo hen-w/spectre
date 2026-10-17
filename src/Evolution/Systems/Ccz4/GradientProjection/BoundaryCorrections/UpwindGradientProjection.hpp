@@ -32,9 +32,8 @@ class er;
 /// Boundary corrections of the CCZ4 gradient-projection scheme.
 namespace Ccz4::GradientProjection::BoundaryCorrections {
 /*!
- * \brief The full upwind correction of the temporary targets plus a unit
- * scalar jump penalty and the internal value-jump input of the potential
- * mean.
+ * \brief The full upwind correction of the temporary targets plus a scalar
+ * jump penalty and the internal value-jump input of the potential mean.
  *
  * \details Each element packages the chart fields \f$(w,q_1,q_2,q_3,u)\f$
  * (53 scalars per point) of its face values and its outward Euclidean unit
@@ -50,10 +49,10 @@ namespace Ccz4::GradientProjection::BoundaryCorrections {
  * (see `Ccz4::GradientProjection::NormalCharacteristics`) the target rates
  * receive
  * \f[
- *  Y_t\mathrel{+}=\frac12\mathcal L_f\{A_n+|A_n|+\sigma I_{43}\}[Y],\qquad
- *  \sigma=1,
+ *  Y_t\mathrel{+}=\frac12\mathcal L_f\{A_n+|A_n|+\sigma I_{43}\}[Y],
  * \f]
- * where \f$\mathcal L_f\f$ is the strong-form lift with the Euclidean normal
+ * where \f$\sigma\ge0\f$ is the scalar jump penalty `InternalScalarPenalty`,
+ * \f$\mathcal L_f\f$ is the strong-form lift with the Euclidean normal
  * magnitude and the normal matrix uses the Gamma-driver parameter
  * `Ccz4::fd::System::f`. The corrections are written to the targets of
  * `Ccz4::GradientProjection::Tags::RhsTargets`. On internal faces the
@@ -79,14 +78,22 @@ class UpwindGradientProjection final : public evolution::BoundaryCorrection {
         "central, 1 ordinary upwind, 2 doubled dissipation."};
     static type lower_bound() { return 0.0; }
   };
+  struct InternalScalarPenalty {
+    using type = double;
+    static constexpr Options::String help = {
+        "The scalar jump penalty sigma added to |A_n| on internal faces: 0 is "
+        "ordinary upwind. External boundaries have no scalar jump penalty."};
+    static type lower_bound() { return 0.0; }
+  };
 
-  using options = tmpl::list<ExternalDissipationFactor>;
+  using options = tmpl::list<ExternalDissipationFactor, InternalScalarPenalty>;
   static constexpr Options::String help = {
       "Full upwind correction of the CCZ4 gradient-projection targets with a "
-      "unit scalar jump penalty on internal faces only."};
+      "scalar jump penalty on internal faces only."};
 
   UpwindGradientProjection() = default;
-  explicit UpwindGradientProjection(double external_dissipation_factor);
+  UpwindGradientProjection(double external_dissipation_factor,
+                           double internal_scalar_penalty);
   UpwindGradientProjection(const UpwindGradientProjection&) = default;
   UpwindGradientProjection& operator=(const UpwindGradientProjection&) =
       default;
@@ -106,6 +113,7 @@ class UpwindGradientProjection final : public evolution::BoundaryCorrection {
   double external_dissipation_factor() const {
     return external_dissipation_factor_;
   }
+  double internal_scalar_penalty() const { return internal_scalar_penalty_; }
 
   using dg_package_field_tags =
       tmpl::list<Tags::PackagedVelocities, Tags::PackagedGradients,
@@ -155,6 +163,8 @@ class UpwindGradientProjection final : public evolution::BoundaryCorrection {
 
  private:
   double external_dissipation_factor_ =
+      std::numeric_limits<double>::signaling_NaN();
+  double internal_scalar_penalty_ =
       std::numeric_limits<double>::signaling_NaN();
 };
 }  // namespace Ccz4::GradientProjection::BoundaryCorrections

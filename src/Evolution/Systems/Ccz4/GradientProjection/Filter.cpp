@@ -29,8 +29,8 @@ void FilterAndEnforceConstraints::apply(
     const gsl::not_null<Scalar<DataVector>*> theta,
     const gsl::not_null<tnsr::I<DataVector, 3>*> gamma_hat,
     const gsl::not_null<tnsr::I<DataVector, 3>*> b, const Mesh<3>& mesh,
-    const LocalOperators& local_operators, const TimeStepId& time_step_id,
-    const TimeStepId& next_time_step_id) {
+    const LocalOperators& local_operators, const double top_shell_filter_gain,
+    const TimeStepId& time_step_id, const TimeStepId& next_time_step_id) {
   if (::SelfStart::step_unused(time_step_id, next_time_step_id)) {
     return;
   }
@@ -48,7 +48,7 @@ void FilterAndEnforceConstraints::apply(
   for (auto& component : *b) {
     fields.emplace_back(&component);
   }
-  local_operators.apply_filter(fields);
+  local_operators.apply_filter(fields, top_shell_filter_gain);
   ::Ccz4::fd::enforce_algebraic_constraints(conformal_metric, a_tilde);
 }
 }  // namespace Ccz4::GradientProjection

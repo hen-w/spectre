@@ -162,15 +162,15 @@ std::array<double, n43> target_at(const WType& w, const QType& q,
   return result;
 }
 
-// Expected -1/2 (A_n + factor (|A_n| + sigma I)) [Y] from the independently assembled
-// normal matrix and its eigenvector absolute value at the coefficient state
-// u_average (by default the arithmetic mean u_* = (u^- + u^+)/2), for the
-// configured Gamma-driver parameter Ccz4::fd::System::f.
+// Expected -1/2 (A_n + factor (|A_n| + sigma I)) [Y] from the independently
+// assembled normal matrix and its eigenvector absolute value at the coefficient
+// state u_average (by default the arithmetic mean u_* = (u^- + u^+)/2), for
+// the configured Gamma-driver parameter Ccz4::fd::System::f, with sigma =
+// scalar_penalty.
 std::array<double, n43> expected_correction(
     const Side& interior, const Side& exterior, const size_t s,
-    const double factor,
-    const std::optional<DataVector>& coefficient_state = std::nullopt,
-    const double scalar_penalty = 1.0) {
+    const double factor, const double scalar_penalty,
+    const std::optional<DataVector>& coefficient_state = std::nullopt) {
   DataVector u_average{gp::number_of_potentials};
   for (size_t a = 0; a < gp::number_of_potentials; ++a) {
     u_average[a] = 0.5 * (interior.u.get(a)[s] + exterior.u.get(a)[s]);
@@ -220,141 +220,151 @@ void test_against_reference(const gsl::not_null<std::mt19937*> gen) {
       random_raw_side(gen, n, normals, -1.0, make_not_null(&exterior_u),
                       make_not_null(&exterior_w));
   for (const double factor : {0.0, 1.0, 2.0}) {
-    const Correction correction{factor};
-    double largest_speed = 0.0;
-    const Side interior =
-        package(correction, interior_raw, make_not_null(&largest_speed));
-    // The packaged chart fields of the physical face values; H and a are
-    // recomputed and agree with the chart state to rounding.
-    for (size_t s = 0; s < n; ++s) {
-      const auto packaged_u = gp::potentials_at(interior.u, s);
-      const auto packaged_w = gp::velocities_at(interior.w, s);
-      for (size_t a = 0; a < gp::number_of_potentials; ++a) {
-        CHECK(gsl::at(packaged_u, a) ==
-              approx(gsl::at(interior_u[s], a)).epsilon(1e-12).scale(1.0));
+    for (const double sigma : {0.0, 1.0, 2.5}) {
+      CAPTURE(factor);
+      CAPTURE(sigma);
+      const Correction correction{factor, sigma};
+      double largest_speed = 0.0;
+      const Side interior =
+          package(correction, interior_raw, make_not_null(&largest_speed));
+      // The packaged chart fields of the physical face values; H and a are
+      // recomputed and agree with the chart state to rounding.
+      for (size_t s = 0; s < n; ++s) {
+        const auto packaged_u = gp::potentials_at(interior.u, s);
+        const auto packaged_w = gp::velocities_at(interior.w, s);
+        for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+          CHECK(gsl::at(packaged_u, a) ==
+                approx(gsl::at(interior_u[s], a)).epsilon(1e-12).scale(1.0));
+        }
+        for (size_t a = 0; a < gp::number_of_velocities; ++a) {
+          CHECK(gsl::at(packaged_w, a) ==
+                approx(gsl::at(interior_w[s], a)).epsilon(1e-12).scale(1.0));
+        }
+        // The conformal factor and the other physical potentials are copied.
+        CHECK(packaged_u[gp::PotentialIndex::conformal_factor] ==
+              get(interior_raw.chart.conformal_factor)[s]);
+        CHECK(packaged_u[gp::PotentialIndex::lapse] ==
+              get(interior_raw.chart.lapse)[s]);
       }
-      for (size_t a = 0; a < gp::number_of_velocities; ++a) {
-        CHECK(gsl::at(packaged_w, a) ==
-              approx(gsl::at(interior_w[s], a)).epsilon(1e-12).scale(1.0));
+      CHECK(interior.q == interior_raw.q);
+      CHECK(interior.normal == interior_raw.normal);
+      double expected_largest = 0.0;
+      for (size_t s = 0; s < n; ++s) {
+        const auto u = gp::potentials_at(interior.u, s);
+        const gp::LogMetricChart chart{
+            gp::stf_decode(&u[gp::PotentialIndex::log_metric])};
+        const gp::NormalCharacteristics characteristics{chart, u, normals[s],
+                                                        ::Ccz4::fd::System::f};
+        for (const double speed : characteristics.speeds()) {
+          expected_largest = std::max(expected_largest, std::abs(speed));
+        }
       }
-      // The conformal factor and the other physical potentials are copied.
-      CHECK(packaged_u[gp::PotentialIndex::conformal_factor] ==
-            get(interior_raw.chart.conformal_factor)[s]);
-      CHECK(packaged_u[gp::PotentialIndex::lapse] ==
-            get(interior_raw.chart.lapse)[s]);
-    }
-    CHECK(interior.q == interior_raw.q);
-    CHECK(interior.normal == interior_raw.normal);
-    double expected_largest = 0.0;
-    for (size_t s = 0; s < n; ++s) {
-      const auto u = gp::potentials_at(interior.u, s);
-      const gp::LogMetricChart chart{
-          gp::stf_decode(&u[gp::PotentialIndex::log_metric])};
-      const gp::NormalCharacteristics characteristics{chart, u, normals[s],
-                                                      ::Ccz4::fd::System::f};
-      for (const double speed : characteristics.speeds()) {
-        expected_largest = std::max(expected_largest, std::abs(speed));
-      }
-    }
-    CHECK(largest_speed == approx(expected_largest));
-    const Side exterior =
-        package(correction, exterior_raw, make_not_null(&largest_speed));
+      CHECK(largest_speed == approx(expected_largest));
+      const Side exterior =
+          package(correction, exterior_raw, make_not_null(&largest_speed));
 
-    // Internal faces always use unit dissipation and carry the value jump.
-    const Output internal =
-        boundary_terms<false>(correction, interior, exterior);
-    // External faces scale the dissipative part and carry no value jump.
-    const Output external =
-        boundary_terms<true>(correction, interior, exterior);
-    for (size_t s = 0; s < n; ++s) {
-      const auto internal_expected =
-          expected_correction(interior, exterior, s, 1.0);
-      const auto external_expected =
-          expected_correction(interior, exterior, s, factor, std::nullopt, 0.0);
-      const auto internal_actual = target_at(internal.w, internal.q, s);
-      const auto external_actual = target_at(external.w, external.q, s);
-      double scale = 1.0;
-      for (const double x : internal_expected) {
-        scale = std::max(scale, std::abs(x));
+      // Internal faces always use unit dissipation plus the scalar jump
+      // penalty sigma, and carry the value jump.
+      const Output internal =
+          boundary_terms<false>(correction, interior, exterior);
+      // External faces scale the dissipative part and carry neither the
+      // scalar jump penalty nor the value jump.
+      const Output external =
+          boundary_terms<true>(correction, interior, exterior);
+      for (size_t s = 0; s < n; ++s) {
+        const auto internal_expected =
+            expected_correction(interior, exterior, s, 1.0, sigma);
+        const auto external_expected =
+            expected_correction(interior, exterior, s, factor, 0.0);
+        const auto internal_actual = target_at(internal.w, internal.q, s);
+        const auto external_actual = target_at(external.w, external.q, s);
+        double scale = 1.0;
+        for (const double x : internal_expected) {
+          scale = std::max(scale, std::abs(x));
+        }
+        for (size_t row = 0; row < n43; ++row) {
+          CHECK(gsl::at(internal_actual, row) ==
+                approx(gsl::at(internal_expected, row))
+                    .scale(scale)
+                    .epsilon(1e-11));
+          CHECK(gsl::at(external_actual, row) ==
+                approx(gsl::at(external_expected, row))
+                    .scale(scale)
+                    .epsilon(1e-11));
+        }
+        for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+          CHECK(internal.u.get(a)[s] ==
+                approx(-0.5 * (exterior.u.get(a)[s] - interior.u.get(a)[s])));
+          CHECK(external.u.get(a)[s] == 0.0);
+        }
       }
-      for (size_t row = 0; row < n43; ++row) {
-        CHECK(gsl::at(internal_actual, row) ==
-              approx(gsl::at(internal_expected, row))
-                  .scale(scale)
-                  .epsilon(1e-11));
-        CHECK(gsl::at(external_actual, row) ==
-              approx(gsl::at(external_expected, row))
-                  .scale(scale)
-                  .epsilon(1e-11));
-      }
-      for (size_t a = 0; a < gp::number_of_potentials; ++a) {
-        CHECK(internal.u.get(a)[s] ==
-              approx(-0.5 * (exterior.u.get(a)[s] - interior.u.get(a)[s])));
-        CHECK(external.u.get(a)[s] == 0.0);
-      }
-    }
 
-    // The neighbor evaluates the same u_* with the reversed normal and jump:
-    // the sum of the two sides' corrections is -A_n [Y] and the difference
-    // is -(|A_n| + I) [Y]; the value-jump inputs are opposite.
-    const Output neighbor =
-        boundary_terms<false>(correction, exterior, interior);
-    for (size_t s = 0; s < n; ++s) {
-      const auto mine = target_at(internal.w, internal.q, s);
-      const auto theirs = target_at(neighbor.w, neighbor.q, s);
-      const auto central = expected_correction(interior, exterior, s, 0.0);
-      for (size_t row = 0; row < n43; ++row) {
-        CHECK(gsl::at(mine, row) + gsl::at(theirs, row) ==
-              approx(2.0 * gsl::at(central, row)).scale(10.0));
+      // The neighbor evaluates the same u_* with the reversed normal and
+      // jump: the sum of the two sides' corrections is -A_n [Y] and the
+      // difference is -(|A_n| + sigma I) [Y]; the value-jump inputs are
+      // opposite.
+      const Output neighbor =
+          boundary_terms<false>(correction, exterior, interior);
+      for (size_t s = 0; s < n; ++s) {
+        const auto mine = target_at(internal.w, internal.q, s);
+        const auto theirs = target_at(neighbor.w, neighbor.q, s);
+        const auto central =
+            expected_correction(interior, exterior, s, 0.0, 0.0);
+        for (size_t row = 0; row < n43; ++row) {
+          CHECK(gsl::at(mine, row) + gsl::at(theirs, row) ==
+                approx(2.0 * gsl::at(central, row)).scale(10.0));
+        }
+        for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+          CHECK(internal.u.get(a)[s] == approx(-neighbor.u.get(a)[s]));
+        }
       }
-      for (size_t a = 0; a < gp::number_of_potentials; ++a) {
-        CHECK(internal.u.get(a)[s] == approx(-neighbor.u.get(a)[s]));
-      }
-    }
 
-    // The neighbor normal is ignored: the correction uses only the interior
-    // normal and is unchanged by an arbitrary exterior normal.
-    {
-      Side other_normal = exterior;
-      for (size_t i = 0; i < 3; ++i) {
-        other_normal.normal.get(i) =
-            2.0 + static_cast<double>(i) - 0.3 * exterior.normal.get(i);
+      // The neighbor normal is ignored: the correction uses only the interior
+      // normal and is unchanged by an arbitrary exterior normal.
+      {
+        Side other_normal = exterior;
+        for (size_t i = 0; i < 3; ++i) {
+          other_normal.normal.get(i) =
+              2.0 + static_cast<double>(i) - 0.3 * exterior.normal.get(i);
+        }
+        const Output ignored =
+            boundary_terms<false>(correction, interior, other_normal);
+        CHECK(ignored.w == internal.w);
+        CHECK(ignored.q == internal.q);
+        CHECK(ignored.u == internal.u);
       }
-      const Output ignored =
-          boundary_terms<false>(correction, interior, other_normal);
-      CHECK(ignored.w == internal.w);
-      CHECK(ignored.q == internal.q);
-      CHECK(ignored.u == internal.u);
-    }
 
-    // Equal traces give no correction.
-    const Output equal = boundary_terms<false>(correction, interior, [&]() {
-      Side same = interior;
-      for (auto& component : same.normal) {
-        component *= -1.0;
+      // Equal traces give no correction.
+      const Output equal = boundary_terms<false>(correction, interior, [&]() {
+        Side same = interior;
+        for (auto& component : same.normal) {
+          component *= -1.0;
+        }
+        return same;
+      }());
+      for (const auto& component : equal.w) {
+        CHECK(max(abs(component)) == 0.0);
       }
-      return same;
-    }());
-    for (const auto& component : equal.w) {
-      CHECK(max(abs(component)) == 0.0);
-    }
-    for (const auto& component : equal.q) {
-      CHECK(max(abs(component)) == 0.0);
-    }
-    for (const auto& component : equal.u) {
-      CHECK(max(abs(component)) == 0.0);
+      for (const auto& component : equal.q) {
+        CHECK(max(abs(component)) == 0.0);
+      }
+      for (const auto& component : equal.u) {
+        CHECK(max(abs(component)) == 0.0);
+      }
     }
   }
 }
 
 // Upwind sign: a jump along a single characteristic mode with speed lambda
-// (A_n r = lambda r for Y_t = A^i d_i Y) gets -1/2 (lambda + |lambda| + 1) r,
-// which after the strong-form lift (which subtracts L_f times the returned
-// value) adds L_f (lambda + 1/2) r for an incoming (lambda > 0) mode and only
-// the scalar penalty L_f r / 2 for an outgoing one.
+// (A_n r = lambda r for Y_t = A^i d_i Y) gets
+// -1/2 (lambda + |lambda| + sigma) r, which after the strong-form lift (which
+// subtracts L_f times the returned value) adds L_f (lambda + sigma / 2) r for
+// an incoming (lambda > 0) mode and only the scalar penalty sigma L_f r / 2
+// for an outgoing one (nothing for sigma = 0).
 // At external faces the scalar penalty is absent, so outgoing modes receive
 // no correction while incoming modes receive the ordinary upwind correction.
-void test_upwind_sign() {
+void test_upwind_sign(const double sigma) {
+  CAPTURE(sigma);
   gp::PotentialVector u{};
   u[gp::PotentialIndex::lapse] = 0.8;
   u[gp::PotentialIndex::conformal_factor] = 0.9;
@@ -363,7 +373,7 @@ void test_upwind_sign() {
   const gp::LogMetricChart chart{gp::Matrix3{}};
   const gp::NormalCharacteristics characteristics{chart, u, normal,
                                                   ::Ccz4::fd::System::f};
-  const Correction correction{1.0};
+  const Correction correction{1.0, sigma};
   for (size_t k = 0; k < gp::number_of_normal_components; ++k) {
     if (gp::NormalCharacteristics::is_kernel_field(k)) {
       continue;
@@ -391,11 +401,12 @@ void test_upwind_sign() {
       component *= -1.0;
     }
     const Output output = boundary_terms<false>(correction, interior, exterior);
-    const Output external = boundary_terms<true>(correction, interior, exterior);
+    const Output external =
+        boundary_terms<true>(correction, interior, exterior);
     const auto actual = target_at(output.w, output.q, 0);
     const auto external_actual = target_at(external.w, external.q, 0);
     const auto mode = target_at(exterior.w, exterior.q, 0);
-    const double expected_factor = -0.5 * (speed + std::abs(speed) + 1.0);
+    const double expected_factor = -0.5 * (speed + std::abs(speed) + sigma);
     const double external_factor = -0.5 * (speed + std::abs(speed));
     double scale = 1.0;
     for (const double x : mode) {
@@ -422,7 +433,7 @@ void test_permutation(const gsl::not_null<std::mt19937*> gen) {
   std::vector<std::array<double, 3>> normals(n, {{0.0, 0.0, 1.0}});
   const Side interior = random_side(gen, n, normals, 1.0);
   const Side exterior = random_side(gen, n, normals, -1.0);
-  const Correction correction{1.0};
+  const Correction correction{1.0, 1.0};
   const Output output = boundary_terms<false>(correction, interior, exterior);
   const std::array<size_t, 4> permutation{{2, 0, 3, 1}};
   const auto permute = [&permutation](auto tensor) {
@@ -470,10 +481,10 @@ void test_unequal_conformal_factors(const gsl::not_null<std::mt19937*> gen) {
   }
   get<gp::PotentialIndex::conformal_factor>(interior.u) = DataVector{0.5, 0.3};
   get<gp::PotentialIndex::conformal_factor>(exterior.u) = DataVector{1.5, 1.2};
-  const Correction correction{1.0};
+  const Correction correction{1.0, 1.0};
   const Output output = boundary_terms<false>(correction, interior, exterior);
   for (size_t s = 0; s < 2; ++s) {
-    const auto expected = expected_correction(interior, exterior, s, 1.0);
+    const auto expected = expected_correction(interior, exterior, s, 1.0, 1.0);
     DataVector geometric{gp::number_of_potentials};
     for (size_t a = 0; a < gp::number_of_potentials; ++a) {
       geometric[a] = interior.u.get(a)[s];
@@ -482,7 +493,7 @@ void test_unequal_conformal_factors(const gsl::not_null<std::mt19937*> gen) {
         std::sqrt(get<gp::PotentialIndex::conformal_factor>(interior.u)[s] *
                   get<gp::PotentialIndex::conformal_factor>(exterior.u)[s]);
     const auto control =
-        expected_correction(interior, exterior, s, 1.0, geometric);
+        expected_correction(interior, exterior, s, 1.0, 1.0, geometric);
     const auto actual = target_at(output.w, output.q, s);
     double scale = 1.0;
     double control_difference = 0.0;
@@ -514,7 +525,7 @@ void test_package_errors(const gsl::not_null<std::mt19937*> gen) {
   std::vector<gp::VelocityVector> w{};
   const RawSide raw = random_raw_side(gen, 3, normals, 1.0, make_not_null(&u),
                                       make_not_null(&w));
-  const Correction correction{1.0};
+  const Correction correction{1.0, 1.0};
   double largest_speed = 0.0;
   RawSide off_constraint = raw;
   for (auto& component : off_constraint.chart.conformal_metric) {
@@ -547,14 +558,27 @@ void test_options_and_errors(const gsl::not_null<std::mt19937*> gen) {
       TestHelpers::test_creation<std::unique_ptr<evolution::BoundaryCorrection>,
                                  Metavariables>(
           "UpwindGradientProjection:\n"
-          "  ExternalDissipationFactor: 2.0\n");
+          "  ExternalDissipationFactor: 2.0\n"
+          "  InternalScalarPenalty: 0.5\n");
   const auto* const typed = dynamic_cast<const Correction*>(created.get());
   REQUIRE(typed != nullptr);
   CHECK(typed->external_dissipation_factor() == 2.0);
+  CHECK(typed->internal_scalar_penalty() == 0.5);
   const auto serialized = serialize_and_deserialize(*typed);
   CHECK(serialized.external_dissipation_factor() == 2.0);
-  CHECK(dynamic_cast<const Correction&>(*typed->get_clone())
-            .external_dissipation_factor() == 2.0);
+  CHECK(serialized.internal_scalar_penalty() == 0.5);
+  const auto clone = typed->get_clone();
+  const auto& typed_clone = dynamic_cast<const Correction&>(*clone);
+  CHECK(typed_clone.external_dissipation_factor() == 2.0);
+  CHECK(typed_clone.internal_scalar_penalty() == 0.5);
+  CHECK_THROWS_WITH(
+      (TestHelpers::test_creation<
+          std::unique_ptr<evolution::BoundaryCorrection>, Metavariables>(
+          "UpwindGradientProjection:\n"
+          "  ExternalDissipationFactor: 1.0\n"
+          "  InternalScalarPenalty: -0.5\n")),
+      Catch::Matchers::ContainsSubstring(
+          "Value -0.5 is below the lower bound of 0"));
 
   std::vector<std::array<double, 3>> normals(1, {{1.0, 0.0, 0.0}});
   const Side interior = random_side(gen, 1, normals, 1.0);
@@ -574,7 +598,9 @@ SPECTRE_TEST_CASE(
       "Evolution/Systems/Ccz4/GradientProjection/");
   MAKE_GENERATOR(gen);
   test_against_reference(make_not_null(&gen));
-  test_upwind_sign();
+  for (const double sigma : {0.0, 1.0, 2.5}) {
+    test_upwind_sign(sigma);
+  }
   test_permutation(make_not_null(&gen));
   test_unequal_conformal_factors(make_not_null(&gen));
   test_package_errors(make_not_null(&gen));

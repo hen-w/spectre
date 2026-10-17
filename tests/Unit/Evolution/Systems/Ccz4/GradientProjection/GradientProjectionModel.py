@@ -17,13 +17,13 @@ symbol about a general constant state is the frozen log(phi) symbol of
 GradientProjectionReference conjugated by the scaling of the gradients of
 phi by phi, independently of the physical-phi formulas.
 
-The operator takes the full upwind first-order target with a unit scalar jump
-penalty and the curl ordering term, fits the potential rates by the
-mass-weighted gradient least squares with the element mean from the volume
-target and the unit jump of the potentials, corrects the velocity rates
-with the compatibility defect of the fitted gradients, and replaces the volume
-source -eta b of the b rate by -eta r_beta / f with the complete fitted shift
-rate r_beta.
+The operator takes the full upwind first-order target with the scalar jump
+penalty `scalar_penalty` on internal faces and the curl ordering term, fits
+the potential rates by the mass-weighted gradient least squares with the
+element mean from the volume target and the unit jump of the potentials,
+corrects the velocity rates with the compatibility defect of the fitted
+gradients, and replaces the volume source -eta b of the b rate by
+-eta r_beta / f with the complete fitted shift rate r_beta.
 """
 
 import GradientProjectionReference as reference
@@ -224,7 +224,16 @@ def _along(axis, operator, identities):
     return np.kron(ops[2], np.kron(ops[1], ops[0]))
 
 
-def generator(widths, kappa, eta, f, elements_x=1, points=3, background=None):
+def generator(
+    widths,
+    kappa,
+    eta,
+    f,
+    scalar_penalty,
+    elements_x=1,
+    points=3,
+    background=None,
+):
     """The operator for elements of the given widths, `elements_x` of them
     along x, about Minkowski space or about the constant state
     `background = (phi, alpha, beta)`."""
@@ -273,7 +282,7 @@ def generator(widths, kappa, eta, f, elements_x=1, points=3, background=None):
     for i in range(3):
         normal_matrix = _normal_matrix(c, b, d, e, _EYE[i])
         first_order += np.kron(normal_matrix, centrals[i]) - np.kron(
-            absolute(normal_matrix) + np.eye(43), jumps[i]
+            absolute(normal_matrix) + scalar_penalty * np.eye(43), jumps[i]
         )
     target = first_order @ reconstruction
     volume_potential_target = (
@@ -325,18 +334,32 @@ def generator(widths, kappa, eta, f, elements_x=1, points=3, background=None):
 
 
 def linearized_rates(
-    state, width_x, width_y, width_z, kappa, eta, f, elements_x
+    state, width_x, width_y, width_z, kappa, eta, f, elements_x, scalar_penalty
 ):
     return (
         generator(
-            (width_x, width_y, width_z), kappa, eta, f, int(round(elements_x))
+            (width_x, width_y, width_z),
+            kappa,
+            eta,
+            f,
+            scalar_penalty,
+            int(round(elements_x)),
         )
         @ state
     )
 
 
 def linearized_rates_about(
-    state, width_x, width_y, width_z, kappa, eta, f, elements_x, background
+    state,
+    width_x,
+    width_y,
+    width_z,
+    kappa,
+    eta,
+    f,
+    elements_x,
+    background,
+    scalar_penalty,
 ):
     """`linearized_rates` about the constant state
     background = (phi, alpha, beta_x, beta_y, beta_z)."""
@@ -347,6 +370,7 @@ def linearized_rates_about(
             kappa,
             eta,
             f,
+            scalar_penalty,
             int(round(elements_x)),
             background=(background[0], background[1], background[2:5]),
         )
@@ -428,7 +452,15 @@ def _mesh(geometry, points, elements):
 
 
 def linearized_rates_on_mesh(
-    state, geometry, points, elements, kappa, eta, f, external_factor
+    state,
+    geometry,
+    points,
+    elements,
+    kappa,
+    eta,
+    f,
+    external_factor,
+    scalar_penalty,
 ):
     """The operator applied to `state` on a conforming curved mesh about
     Minkowski space with analytic (unperturbed) exterior data on external
@@ -473,11 +505,11 @@ def linearized_rates_on_mesh(
                 - u[:, element, ids]
             )
         factor = 1.0 if internal else external_factor
-        scalar_penalty = 1.0 if internal else 0.0
+        penalty = scalar_penalty if internal else 0.0
         for k in range(len(ids)):
             a_n = _normal_matrix(c, b, d, e, face["normal"][k])
             correction = a_n @ jump[:, k] + factor * (
-                _absolute(a_n, f) @ jump[:, k] + scalar_penalty * jump[:, k]
+                _absolute(a_n, f) @ jump[:, k] + penalty * jump[:, k]
             )
             target[:, element, ids[k]] += 0.5 * face["lift"][k] * correction
             if internal:

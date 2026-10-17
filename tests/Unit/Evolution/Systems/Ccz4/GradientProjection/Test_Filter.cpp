@@ -15,7 +15,9 @@
 #include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Filter.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/LocalOperators.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/Tags.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/TestHelpers.hpp"
+#include "Framework/TestCreation.hpp"
 #include "Framework/TestHelpers.hpp"
 #include "Time/Slab.hpp"
 #include "Time/Time.hpp"
@@ -80,19 +82,21 @@ DataVector trace_with_metric(const tnsr::ii<DataVector, 3>& metric,
 
 void apply_filter(const gsl::not_null<PhysicalState*> state,
                   const helpers::Geometry& geometry,
-                  const gp::LocalOperators& operators,
+                  const gp::LocalOperators& operators, const double gain,
                   const TimeStepId& time_step_id,
                   const TimeStepId& next_time_step_id) {
   gp::FilterAndEnforceConstraints::apply(
       make_not_null(&state->conformal_metric), make_not_null(&state->a_tilde),
       make_not_null(&state->trace_extrinsic_curvature),
       make_not_null(&state->theta), make_not_null(&state->gamma_hat),
-      make_not_null(&state->b), geometry.mesh, operators, time_step_id,
+      make_not_null(&state->b), geometry.mesh, operators, gain, time_step_id,
       next_time_step_id);
 }
 
 void test_filter_and_projection(const gsl::not_null<std::mt19937*> gen,
-                                const bool unit_metric) {
+                                const bool unit_metric, const double gain) {
+  CAPTURE(unit_metric);
+  CAPTURE(gain);
   const auto geometry = helpers::make_geometry({{4, 4, 4}}, true);
   const gp::LocalOperators operators{geometry.mesh, geometry.inverse_jacobian,
                                      geometry.det_inverse_jacobian};
@@ -100,15 +104,15 @@ void test_filter_and_projection(const gsl::not_null<std::mt19937*> gen,
   const PhysicalState original = random_state(gen, n, unit_metric);
   PhysicalState state = original;
   const Slab slab{0.0, 1.0};
-  apply_filter(make_not_null(&state), geometry, operators,
+  apply_filter(make_not_null(&state), geometry, operators, gain,
                TimeStepId{true, 0, slab.start()},
                TimeStepId{true, 0, slab.end()});
 
-  const auto filtered = [&operators](DataVector field) {
-    operators.apply_filter(make_not_null(&field));
+  const auto filtered = [&operators, &gain](DataVector field) {
+    operators.apply_filter(make_not_null(&field), gain);
     return field;
   };
-  // K, Theta, GammaHat and b are filtered componentwise.
+  // K, Theta, GammaHat and b are filtered componentwise with the given gain.
   CHECK_ITERABLE_APPROX(get(state.trace_extrinsic_curvature),
                         filtered(get(original.trace_extrinsic_curvature)));
   CHECK_ITERABLE_APPROX(get(state.theta), filtered(get(original.theta)));
@@ -127,7 +131,8 @@ void test_filter_and_projection(const gsl::not_null<std::mt19937*> gen,
   }
   // Each ATilde component is filtered, then the trace is projected out with
   // the metric. On a varying metric the componentwise filter alone breaks the
-  // trace; at unit metric it preserves the trace-free subspace.
+  // trace, unless the gain is one; at unit metric it preserves the trace-free
+  // subspace.
   tnsr::ii<DataVector, 3> filtered_a_tilde{n};
   for (size_t i = 0; i < 3; ++i) {
     for (size_t j = i; j < 3; ++j) {
@@ -139,7 +144,7 @@ void test_filter_and_projection(const gsl::not_null<std::mt19937*> gen,
   // Rounding in the projection (determinant normalization and the inverse of
   // a metric with condition number up to ~e^1.6) is ~1e-14.
   const auto custom = Approx::custom().epsilon(1e-12).scale(1.0);
-  if (unit_metric) {
+  if (unit_metric or gain == 1.0) {
     CHECK(max(abs(filtered_trace)) < 1e-12);
   } else {
     CHECK(max(abs(filtered_trace)) > 1e-4);
@@ -160,12 +165,28 @@ void test_filter_and_projection(const gsl::not_null<std::mt19937*> gen,
   // Unused self-start substeps do not advance the state, so nothing is
   // filtered.
   PhysicalState unused = original;
-  apply_filter(make_not_null(&unused), geometry, operators,
+  apply_filter(make_not_null(&unused), geometry, operators, gain,
                TimeStepId{true, -1, slab.start()},
                TimeStepId{true, 0, slab.start()});
   CHECK(get(unused.theta) == get(original.theta));
   CHECK(unused.a_tilde == original.a_tilde);
   CHECK(unused.gamma_hat == original.gamma_hat);
+}
+
+// The gain option: values in [0, 1] are accepted and passed through
+// unchanged; values outside are rejected.
+void test_gain_option() {
+  using option_tag = gp::OptionTags::TopShellFilterGain;
+  CHECK(TestHelpers::test_option_tag<option_tag>("0.0") == 0.0);
+  CHECK(TestHelpers::test_option_tag<option_tag>("0.25") == 0.25);
+  CHECK(TestHelpers::test_option_tag<option_tag>("1.0") == 1.0);
+  CHECK(gp::Tags::TopShellFilterGain::create_from_options(0.25) == 0.25);
+  CHECK_THROWS_WITH(TestHelpers::test_option_tag<option_tag>("-0.1"),
+                    Catch::Matchers::ContainsSubstring(
+                        "Value -0.1 is below the lower bound of 0"));
+  CHECK_THROWS_WITH(TestHelpers::test_option_tag<option_tag>("1.5"),
+                    Catch::Matchers::ContainsSubstring(
+                        "Value 1.5 is above the upper bound of 1"));
 }
 
 void test_enforce_algebraic_constraints(
@@ -203,7 +224,10 @@ void test_enforce_algebraic_constraints(
 SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.GradientProjection.Filter",
                   "[Unit][Evolution]") {
   MAKE_GENERATOR(gen);
-  test_filter_and_projection(make_not_null(&gen), false);
-  test_filter_and_projection(make_not_null(&gen), true);
+  for (const double gain : {0.0, 0.1, 0.37, 1.0}) {
+    test_filter_and_projection(make_not_null(&gen), false, gain);
+    test_filter_and_projection(make_not_null(&gen), true, gain);
+  }
+  test_gain_option();
   test_enforce_algebraic_constraints(make_not_null(&gen));
 }

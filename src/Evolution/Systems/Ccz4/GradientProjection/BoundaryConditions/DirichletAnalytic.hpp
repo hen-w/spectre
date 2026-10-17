@@ -50,8 +50,9 @@ namespace Ccz4::GradientProjection::BoundaryConditions {
  * \f$q_{\phi,i}=\phi\,\mathrm{FieldP}_i\f$,
  * \f$q_{\alpha,i}=\alpha\,\mathrm{FieldA}_i\f$, \f$q_{\beta,i}{}^j=
  * \mathrm{FieldB}_i{}^j\f$. The boundary correction packages the exterior
- * chart fields from these and applies the same upwind and scalar penalty target
- * correction as on internal faces.
+ * chart fields from these and applies its external-face upwind target
+ * correction, which has no scalar jump penalty (see
+ * `Ccz4::GradientProjection::BoundaryCorrections::UpwindGradientProjection`).
  *
  * On elements using finite differences, `fd_ghost` sets the physical fields
  * of the exterior ghost cells to the analytic solution at the inertial
