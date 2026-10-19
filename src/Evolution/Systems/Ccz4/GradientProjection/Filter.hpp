@@ -4,17 +4,16 @@
 #pragma once
 
 #include <cstddef>
+#include <vector>
 
-#include "DataStructures/DataBox/Prefixes.hpp"
 #include "DataStructures/DataBox/Protocols/Mutator.hpp"
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
-#include "Domain/Tags.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/LocalOperators.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/PointwiseFields.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
-#include "PointwiseFunctions/GeneralRelativity/Tags.hpp"
-#include "Time/Tags/TimeStepId.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/ProtocolHelpers.hpp"
 #include "Utilities/TMPL.hpp"
@@ -22,7 +21,6 @@
 /// \cond
 template <size_t Dim>
 class Mesh;
-class TimeStepId;
 /// \endcond
 
 namespace Ccz4::GradientProjection {
@@ -31,7 +29,8 @@ namespace Ccz4::GradientProjection {
  * and \f$\tilde\gamma\f$-trace-free \f$\tilde A\f$) on the physical state.
  *
  * \details Used once at initialization, after any perturbation of the initial
- * data, so that the first right-hand side starts on the constraint surface.
+ * data, and after every time step, so that each right-hand side starts on the
+ * constraint surface.
  */
 struct EnforceAlgebraicConstraints : tt::ConformsTo<db::protocols::Mutator> {
   using return_tags = tmpl::list<::Ccz4::Tags::ConformalMetric<DataVector, 3>,
@@ -43,39 +42,40 @@ struct EnforceAlgebraicConstraints : tt::ConformsTo<db::protocols::Mutator> {
 };
 
 /*!
- * \brief The post-step filter and algebraic projection.
+ * \brief The top-shell filter of the chart velocities at fixed potentials and
+ * gradients.
  *
- * \details After the time stepper has advanced the physical state, each
- * stored component of the physical \f$\tilde A_{ij}\f$, \f$K\f$, \f$\Theta\f$,
- * \f$\hat\Gamma^i\f$ and \f$b^i\f$ is filtered with
- * `LocalOperators::apply_filter` at the gain `Tags::TopShellFilterGain`;
- * \f$\tilde\gamma\f$, \f$\phi\f$, \f$\alpha\f$ and \f$\beta\f$ are not
- * filtered. The algebraic constraints are then enforced,
- * which restores the \f$\tilde\gamma\f$-trace of \f$\tilde A\f$ that the
- * componentwise filter does not preserve on a varying metric. The time-stepper
- * history is not modified. Like `UpdateU`, this does nothing on the unused
- * substeps of the self-start procedure, where the state is not advanced.
+ * \details With the potentials \f$u\f$, their stored gradients \f$q\f$ and
+ * the charts of \f$H\f$ held fixed, the velocities
+ * \f$w=(a,K,\Theta,\hat\Gamma,b)\f$ are replaced by the \f$w^+\f$ with
+ *
+ * \f{align*}{
+ * R(u,w^+,q)&=F\,R(u,w,q),\\
+ * \hat\Gamma^+-b^+&=F\,(\hat\Gamma-b),
+ * \f}
+ *
+ * where \f$R\f$ is `potential_rhs` (the potential rates) and
+ * \f$F=\Pi+g(I-\Pi)\f$ is `LocalOperators::apply_filter` at the gain \f$g\f$,
+ * applied to each of these 13 fields over the element. Since \f$R\f$ is
+ * linear in \f$w\f$ with no constant term at fixed \f$u\f$,
+ * \f$w^+=P\left(F\,R(u,w,q)-R(u,0,q)\right)\f$ with \f$P\f$ the
+ * `apply_rhs_inverse`, plus the filtered \f$\hat\Gamma-b\f$ on
+ * \f$\hat\Gamma\f$. The local \f$a\f$ and the physical \f$\tilde A=\frac12
+ * \mathcal T_Ha\f$ (which stays \f$\tilde\gamma\f$-trace-free),
+ * \f$K\f$, \f$\Theta\f$, \f$\hat\Gamma\f$ and \f$b\f$ are overwritten in
+ * place; nothing else changes. In the linearization about unit Minkowski,
+ * \f$R=Lw+\sum_iE_iq_i\f$ with constant \f$L\f$ and \f$E_i\f$, this is
+ * \f$w^+=Fw+P\sum_iE_i(F-I)q_i\f$, the filter of the linear model. At gain 1
+ * nothing is done.
  */
-struct FilterAndEnforceConstraints : tt::ConformsTo<db::protocols::Mutator> {
-  using const_global_cache_tags = tmpl::list<Tags::TopShellFilterGain>;
-  using return_tags = tmpl::list<::Ccz4::Tags::ConformalMetric<DataVector, 3>,
-                                 ::Ccz4::Tags::ATilde<DataVector, 3>,
-                                 gr::Tags::TraceExtrinsicCurvature<DataVector>,
-                                 ::Ccz4::Tags::Theta<DataVector>,
-                                 ::Ccz4::Tags::GammaHat<DataVector, 3>,
-                                 ::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>;
-  using argument_tags = tmpl::list<domain::Tags::Mesh<3>, Tags::LocalOperators,
-                                   Tags::TopShellFilterGain, ::Tags::TimeStepId,
-                                   ::Tags::Next<::Tags::TimeStepId>>;
-
-  static void apply(
-      gsl::not_null<tnsr::ii<DataVector, 3>*> conformal_metric,
-      gsl::not_null<tnsr::ii<DataVector, 3>*> a_tilde,
-      gsl::not_null<Scalar<DataVector>*> trace_extrinsic_curvature,
-      gsl::not_null<Scalar<DataVector>*> theta,
-      gsl::not_null<tnsr::I<DataVector, 3>*> gamma_hat,
-      gsl::not_null<tnsr::I<DataVector, 3>*> b, const Mesh<3>& mesh,
-      const LocalOperators& local_operators, double top_shell_filter_gain,
-      const TimeStepId& time_step_id, const TimeStepId& next_time_step_id);
-};
+void filter_velocities(
+    gsl::not_null<Tags::TransformedATilde::type*> a,
+    gsl::not_null<tnsr::ii<DataVector, 3>*> a_tilde,
+    gsl::not_null<Scalar<DataVector>*> trace_extrinsic_curvature,
+    gsl::not_null<Scalar<DataVector>*> theta,
+    gsl::not_null<tnsr::I<DataVector, 3>*> gamma_hat,
+    gsl::not_null<tnsr::I<DataVector, 3>*> b, const PotentialFields& u,
+    const std::vector<LogMetricChart>& charts,
+    const Tags::PotentialGradients::type& q, const Mesh<3>& mesh,
+    const LocalOperators& local_operators, double gain, double f);
 }  // namespace Ccz4::GradientProjection

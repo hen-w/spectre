@@ -13,6 +13,8 @@
 #include "DataStructures/Variables.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/SoTimeDerivative.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/Filter.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/LocalOperators.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/PointwiseFields.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/PrepareChartFields.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
@@ -448,7 +450,8 @@ void ComputeVolumeTargets::apply(
                           Frame::Inertial>& inverse_jacobian,
     const Scalar<DataVector>& kappa_1, const Scalar<DataVector>& kappa_2,
     const double kappa_3, const Scalar<DataVector>& eta,
-    const Scalar<DataVector>& k_0) {
+    const Scalar<DataVector>& k_0, const LocalOperators& local_operators,
+    const double top_shell_filter_gain) {
   if (max(abs(get(k_0))) != 0.0) {
     ERROR(
         "The CCZ4 gradient-projection scheme requires K0 = 0: its potential "
@@ -457,15 +460,15 @@ void ComputeVolumeTargets::apply(
         << max(abs(get(k_0))));
   }
   using ConformalFactor = ::Ccz4::Tags::ConformalFactor<DataVector>;
+  using potential_gauge_tags =
+      tmpl::list<gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>>;
   using curvature_tags =
       tmpl::list<gr::Tags::TraceExtrinsicCurvature<DataVector>,
                  ::Ccz4::Tags::Theta<DataVector>,
                  ::Ccz4::Tags::GammaHat<DataVector, 3>>;
-  using gauge_tags =
-      tmpl::list<gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
-                 ::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>;
+  using b_tags = tmpl::list<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>;
   const size_t number_of_points = mesh.number_of_grid_points();
-  const auto& vars = *evolved_variables;
+  auto& vars = *evolved_variables;
   const auto& conformal_metric =
       get<::Ccz4::Tags::ConformalMetric<DataVector, 3>>(vars);
   const auto& conformal_factor = get<ConformalFactor>(vars);
@@ -476,42 +479,61 @@ void ComputeVolumeTargets::apply(
   local_chart_fields(chart_fields, charts, conformal_metric, conformal_factor,
                      a_tilde, lapse);
   const LocalChartFields& chart = *chart_fields;
-  const auto d_chart =
-      partial_derivatives<typename LocalChartFields::tags_list>(
-          chart, mesh, inverse_jacobian);
 
   // 2. The gradients of the potentials, differentiating the physical fields
   // in place.
+  const auto d_log_conformal_metric = partial_derivatives<
+      tmpl::list<Tags::LogConformalMetric>>(
+      chart.template reference_subset<tmpl::list<Tags::LogConformalMetric>>(),
+      mesh, inverse_jacobian);
   const auto d_conformal_factor =
       partial_derivatives<tmpl::list<ConformalFactor>>(
           vars.template reference_subset<tmpl::list<ConformalFactor>>(), mesh,
           inverse_jacobian);
-  const auto d_gauge = partial_derivatives<gauge_tags>(
-      vars.template reference_subset<gauge_tags>(), mesh, inverse_jacobian);
-  auto& gradients = get<Tags::PotentialGradients>(*evolved_variables);
+  const auto d_potential_gauge = partial_derivatives<potential_gauge_tags>(
+      vars.template reference_subset<potential_gauge_tags>(), mesh,
+      inverse_jacobian);
+  auto& gradients = get<Tags::PotentialGradients>(vars);
   assemble_potential_gradients(
       make_not_null(&gradients),
       get<::Tags::deriv<Tags::LogConformalMetric, tmpl::size_t<3>,
-                        Frame::Inertial>>(d_chart),
+                        Frame::Inertial>>(d_log_conformal_metric),
       get<::Tags::deriv<ConformalFactor, tmpl::size_t<3>, Frame::Inertial>>(
           d_conformal_factor),
       get<::Tags::deriv<gr::Tags::Lapse<DataVector>, tmpl::size_t<3>,
-                        Frame::Inertial>>(d_gauge),
+                        Frame::Inertial>>(d_potential_gauge),
       get<::Tags::deriv<gr::Tags::Shift<DataVector, 3>, tmpl::size_t<3>,
-                        Frame::Inertial>>(d_gauge));
+                        Frame::Inertial>>(d_potential_gauge));
 
-  // 3. The remaining derivatives.
+  // 3. The filter of the velocities at fixed potentials and gradients.
+  const PotentialFields u{get<Tags::LogConformalMetric>(chart),
+                          conformal_factor, lapse,
+                          get<gr::Tags::Shift<DataVector, 3>>(vars)};
+  filter_velocities(
+      make_not_null(&get<Tags::TransformedATilde>(*chart_fields)),
+      make_not_null(&get<::Ccz4::Tags::ATilde<DataVector, 3>>(vars)),
+      make_not_null(&get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(vars)),
+      make_not_null(&get<::Ccz4::Tags::Theta<DataVector>>(vars)),
+      make_not_null(&get<::Ccz4::Tags::GammaHat<DataVector, 3>>(vars)),
+      make_not_null(&get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(vars)),
+      u, *charts, gradients, mesh, local_operators, top_shell_filter_gain,
+      ::Ccz4::fd::System::f);
+
+  // 4. The remaining derivatives, of the filtered velocities and of the
+  // gradients.
+  const auto d_a = partial_derivatives<tmpl::list<Tags::TransformedATilde>>(
+      chart.template reference_subset<tmpl::list<Tags::TransformedATilde>>(),
+      mesh, inverse_jacobian);
   const auto d_curvature = partial_derivatives<curvature_tags>(
       vars.template reference_subset<curvature_tags>(), mesh, inverse_jacobian);
+  const auto d_b = partial_derivatives<b_tags>(
+      vars.template reference_subset<b_tags>(), mesh, inverse_jacobian);
   const auto d_gradients = partial_derivatives<
       tmpl::list<Tags::PotentialGradients>>(
       vars.template reference_subset<tmpl::list<Tags::PotentialGradients>>(),
       mesh, inverse_jacobian);
 
-  // 4. The volume targets.
-  const PotentialFields u{get<Tags::LogConformalMetric>(chart),
-                          conformal_factor, lapse,
-                          get<gr::Tags::Shift<DataVector, 3>>(vars)};
+  // 5. The volume targets.
   const VelocityFields w{
       get<Tags::TransformedATilde>(chart),
       get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(vars),
@@ -519,7 +541,7 @@ void ComputeVolumeTargets::apply(
       get<::Ccz4::Tags::GammaHat<DataVector, 3>>(vars),
       get<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(vars)};
   const VelocityDerivatives d_w{
-      get<DerivTransformedATilde>(d_chart),
+      get<DerivTransformedATilde>(d_a),
       get<::Tags::deriv<gr::Tags::TraceExtrinsicCurvature<DataVector>,
                         tmpl::size_t<3>, Frame::Inertial>>(d_curvature),
       get<::Tags::deriv<::Ccz4::Tags::Theta<DataVector>, tmpl::size_t<3>,
@@ -527,7 +549,7 @@ void ComputeVolumeTargets::apply(
       get<::Tags::deriv<::Ccz4::Tags::GammaHat<DataVector, 3>, tmpl::size_t<3>,
                         Frame::Inertial>>(d_curvature),
       get<::Tags::deriv<::Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>,
-                        tmpl::size_t<3>, Frame::Inertial>>(d_gauge)};
+                        tmpl::size_t<3>, Frame::Inertial>>(d_b)};
   targets->initialize(number_of_points);
   volume_targets(make_not_null(&get<Tags::VelocityTarget>(*targets)),
                  make_not_null(&get<Tags::GradientTarget>(*targets)),
@@ -536,7 +558,7 @@ void ComputeVolumeTargets::apply(
                  get<DerivPotentialGradients>(d_gradients), kappa_1, kappa_2,
                  kappa_3, eta, k_0, ::Ccz4::fd::System::f);
 
-  // 5. Only FinalizeTimeDerivative writes physical rates.
+  // 6. Only FinalizeTimeDerivative writes physical rates.
   dt_evolved_variables->initialize(number_of_points, 0.0);
 }
 
@@ -549,11 +571,13 @@ void ComputeVolumeTargets::apply(
                           Frame::Inertial>& inverse_jacobian,
     const Scalar<DataVector>& kappa_1, const Scalar<DataVector>& kappa_2,
     const double kappa_3, const Scalar<DataVector>& eta,
-    const Scalar<DataVector>& k_0) {
+    const Scalar<DataVector>& k_0, const LocalOperators& local_operators,
+    const double top_shell_filter_gain) {
   typename Tags::StepChartFields::type chart_fields{};
   std::vector<LogMetricChart> charts{};
   apply(evolved_variables, dt_evolved_variables, targets,
         make_not_null(&chart_fields), make_not_null(&charts), mesh,
-        inverse_jacobian, kappa_1, kappa_2, kappa_3, eta, k_0);
+        inverse_jacobian, kappa_1, kappa_2, kappa_3, eta, k_0, local_operators,
+        top_shell_filter_gain);
 }
 }  // namespace Ccz4::GradientProjection

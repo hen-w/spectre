@@ -731,7 +731,9 @@ void check_dg_element(const MockRuntimeSystem& runner, const ElementId<3>& id,
         get_tag<Ccz4::Tags::Kappa2>(runner, id),
         get_tag<Ccz4::Tags::Kappa3>(runner, id),
         get_tag<Ccz4::Tags::Eta<DataVector>>(runner, id),
-        get_tag<Ccz4::Tags::K0<DataVector>>(runner, id));
+        get_tag<Ccz4::Tags::K0<DataVector>>(runner, id),
+        get_tag<gp::Tags::LocalOperators>(runner, id),
+        get_tag<gp::Tags::TopShellFilterGain>(runner, id));
     CHECK(get<gp::Tags::PotentialGradients>(vars) ==
           get<gp::Tags::PotentialGradients>(recomputed));
   }

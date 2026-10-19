@@ -31,7 +31,7 @@ using step_actions = tmpl::flatten<tmpl::list<
     evolution::Actions::RunEventsAndDenseTriggers<tmpl::list<>>,
     ::Actions::MutateApply<UpdateU<System, false>>,
     ::Actions::MutateApply<CleanHistory<System>>,
-    ::Actions::MutateApply<FilterAndEnforceConstraints>>>;
+    ::Actions::MutateApply<EnforceAlgebraicConstraints>>>;
 }  // namespace detail
 
 /*!
@@ -39,7 +39,9 @@ using step_actions = tmpl::flatten<tmpl::list<
  *
  * \details
  * 1. `ComputeVolumeTargets` recomputes \f$q_i=D_iu\f$ from the physical state,
- *    evaluates the volume targets into `Tags::RhsTargets` and zeroes the time
+ *    filters the velocities (`filter_velocities`, the end-of-step filter of
+ *    the scheme applied just before the right-hand side it feeds), evaluates
+ *    the volume targets into `Tags::RhsTargets` and zeroes the time
  *    derivatives.
  * 2. `ComputeTimeDerivative` (which skips its generic volume terms) applies
  *    the external boundary conditions and sends the packaged chart fields:
@@ -53,8 +55,8 @@ using step_actions = tmpl::flatten<tmpl::list<
  *    history. Adams-Bashforth restarts from the recorded state, so the state
  *    must not change between here and `UpdateU`; dense observations restore it.
  * 6. `UpdateU` and `CleanHistory` advance the state.
- * 7. `FilterAndEnforceConstraints` filters the advanced physical state and
- *    enforces the algebraic constraints without modifying the history.
+ * 7. `EnforceAlgebraicConstraints` projects the advanced physical state onto
+ *    the algebraic-constraint surface without modifying the history.
  *
  * Only global time stepping is supported.
  */

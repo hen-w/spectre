@@ -15,6 +15,7 @@
 #include "DataStructures/VariablesTag.hpp"
 #include "Domain/Tags.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/LocalOperators.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/PointwiseFields.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
@@ -175,18 +176,25 @@ void volume_targets(
  * 2. the stored gradients are overwritten by
  *    \f$q_i=(D_iH,D_i\phi,D_i\alpha,D_i\beta)\f$ with the ordinary
  *    element-local derivative \f$D_i\f$;
- * 3. \f$D_ia\f$, \f$D_iK\f$, \f$D_i\Theta\f$, \f$D_i\hat\Gamma\f$, \f$D_ib\f$
- * and
- *    \f$D_iq_j\f$ are computed, the physical fields being differentiated in
- *    place through non-owning views;
- * 4. `Tags::RhsTargets` is set to the volume targets of `volume_targets` (the
+ * 3. the velocities \f$(a,K,\Theta,\hat\Gamma,b)\f$ of the state (the local
+ *    \f$a\f$ and the physical \f$\tilde A\f$, \f$K\f$, \f$\Theta\f$,
+ *    \f$\hat\Gamma\f$ and \f$b\f$) are filtered in place by
+ *    `filter_velocities` at the gain `Tags::TopShellFilterGain`, at the fixed
+ *    potentials, gradients and charts of 1 and 2 (nothing at gain 1);
+ * 4. \f$D_ia\f$, \f$D_iK\f$, \f$D_i\Theta\f$, \f$D_i\hat\Gamma\f$, \f$D_ib\f$
+ *    and \f$D_iq_j\f$ are computed, the physical fields being differentiated
+ *    in place through non-owning views;
+ * 5. `Tags::RhsTargets` is set to the volume targets of `volume_targets` (the
  *    potential slot to \f$R\f$) for the Gamma-driver parameter
  *    `Ccz4::fd::System::f`;
- * 5. all time derivatives of the evolved variables are zeroed: the physical
+ * 6. all time derivatives of the evolved variables are zeroed: the physical
  *    rates are computed only by `FinalizeTimeDerivative`, and the gradients are
  *    not evolved.
  *
- * The physical fields are not modified. It is an `ERROR` if \f$K_0\neq0\f$:
+ * The filter is the only modification of the physical fields: the state it
+ * leaves is the one the right-hand side is evaluated at and the time stepper
+ * records, so this is the end-of-step filter of the scheme applied before the
+ * next right-hand side. It is an `ERROR` if \f$K_0\neq0\f$:
  * the potential right-hand side \f$R_\alpha\f$ (and so the lapse rate recovered
  * by `FinalizeTimeDerivative`) omits \f$K_0\f$, so the scheme supports only
  * \f$K_0=0\f$.
@@ -210,7 +218,9 @@ struct ComputeVolumeTargets : tt::ConformsTo<db::protocols::Mutator> {
       domain::Tags::Mesh<3>,
       domain::Tags::InverseJacobian<3, Frame::ElementLogical, Frame::Inertial>,
       ::Ccz4::Tags::Kappa1, ::Ccz4::Tags::Kappa2, ::Ccz4::Tags::Kappa3,
-      ::Ccz4::Tags::Eta<DataVector>, ::Ccz4::Tags::K0<DataVector>>;
+      ::Ccz4::Tags::Eta<DataVector>, ::Ccz4::Tags::K0<DataVector>,
+      Tags::LocalOperators, Tags::TopShellFilterGain>;
+  using const_global_cache_tags = tmpl::list<Tags::TopShellFilterGain>;
 
   static void apply(
       gsl::not_null<typename variables_tag::type*> evolved_variables,
@@ -222,7 +232,8 @@ struct ComputeVolumeTargets : tt::ConformsTo<db::protocols::Mutator> {
                             Frame::Inertial>& inverse_jacobian,
       const Scalar<DataVector>& kappa_1, const Scalar<DataVector>& kappa_2,
       double kappa_3, const Scalar<DataVector>& eta,
-      const Scalar<DataVector>& k_0);
+      const Scalar<DataVector>& k_0, const LocalOperators& local_operators,
+      double top_shell_filter_gain);
 
   /// `apply` with the chart fields and charts in local buffers.
   static void apply(
@@ -234,6 +245,7 @@ struct ComputeVolumeTargets : tt::ConformsTo<db::protocols::Mutator> {
                             Frame::Inertial>& inverse_jacobian,
       const Scalar<DataVector>& kappa_1, const Scalar<DataVector>& kappa_2,
       double kappa_3, const Scalar<DataVector>& eta,
-      const Scalar<DataVector>& k_0);
+      const Scalar<DataVector>& k_0, const LocalOperators& local_operators,
+      double top_shell_filter_gain);
 };
 }  // namespace Ccz4::GradientProjection

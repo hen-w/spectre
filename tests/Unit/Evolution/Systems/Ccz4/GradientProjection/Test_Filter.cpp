@@ -3,25 +3,28 @@
 
 #include "Framework/TestingFramework.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <random>
+#include <utility>
+#include <vector>
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/EagerMath/Determinant.hpp"
 #include "DataStructures/Tensor/EagerMath/DeterminantAndInverse.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Filter.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/LocalOperators.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/PointwiseFields.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/PrepareChartFields.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Tags.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/TestHelpers.hpp"
 #include "Framework/TestCreation.hpp"
 #include "Framework/TestHelpers.hpp"
-#include "Time/Slab.hpp"
-#include "Time/Time.hpp"
-#include "Time/TimeStepId.hpp"
 #include "Utilities/Gsl.hpp"
 
 namespace {
@@ -80,97 +83,148 @@ DataVector trace_with_metric(const tnsr::ii<DataVector, 3>& metric,
   return result;
 }
 
-void apply_filter(const gsl::not_null<PhysicalState*> state,
-                  const helpers::Geometry& geometry,
-                  const gp::LocalOperators& operators, const double gain,
-                  const TimeStepId& time_step_id,
-                  const TimeStepId& next_time_step_id) {
-  gp::FilterAndEnforceConstraints::apply(
-      make_not_null(&state->conformal_metric), make_not_null(&state->a_tilde),
-      make_not_null(&state->trace_extrinsic_curvature),
-      make_not_null(&state->theta), make_not_null(&state->gamma_hat),
-      make_not_null(&state->b), geometry.mesh, operators, gain, time_step_id,
-      next_time_step_id);
-}
-
-void test_filter_and_projection(const gsl::not_null<std::mt19937*> gen,
-                                const bool unit_metric, const double gain) {
-  CAPTURE(unit_metric);
+// The velocity filter on a curved element (non-separable mass) and a random
+// on-constraint state with random stored gradients: it realizes the defining
+// relations R(u,w+,q) = F R(u,w,q) and GammaHat+ - b+ = F (GammaHat - b)
+// (checked with the output and the unchanged inputs only, never through the
+// inverse), keeps ATilde consistent with the local a and trace-free, is the
+// identity at gain 1, reduces to the componentwise filter on a constant unit
+// background with vanishing gradients, and differs from it otherwise.
+void test_filter_velocities(const gsl::not_null<std::mt19937*> gen,
+                            const double gain, const bool unit_background) {
   CAPTURE(gain);
-  const auto geometry = helpers::make_geometry({{4, 4, 4}}, true);
+  CAPTURE(unit_background);
+  const auto geometry = helpers::make_geometry({{4, 5, 4}}, true);
   const gp::LocalOperators operators{geometry.mesh, geometry.inverse_jacobian,
                                      geometry.det_inverse_jacobian};
   const size_t n = geometry.mesh.number_of_grid_points();
-  const PhysicalState original = random_state(gen, n, unit_metric);
-  PhysicalState state = original;
-  const Slab slab{0.0, 1.0};
-  apply_filter(make_not_null(&state), geometry, operators, gain,
-               TimeStepId{true, 0, slab.start()},
-               TimeStepId{true, 0, slab.end()});
-
+  const double f = Ccz4::fd::System::f;
+  helpers::ChartData chart{n};
+  gp::Tags::PotentialGradients::type q{n, 0.0};
+  gp::PotentialVector constant_u{};
+  constant_u[gp::PotentialIndex::conformal_factor] = 1.0;
+  constant_u[gp::PotentialIndex::lapse] = 1.0;
+  for (size_t s = 0; s < n; ++s) {
+    const auto state = helpers::random_state(gen, 0.4, 0.3, 0.5);
+    chart.set(s, unit_background ? constant_u : state.u, state.w);
+    if (not unit_background) {
+      for (size_t i = 0; i < 3; ++i) {
+        for (size_t c = 0; c < gp::number_of_potentials; ++c) {
+          q.get(i, c)[s] = gsl::at(gsl::at(state.q, i), c);
+        }
+      }
+    }
+  }
+  const std::vector<gp::LogMetricChart> charts =
+      gp::log_metric_charts(chart.potentials());
+  const helpers::ChartData original = chart;
+  const auto rates_and_z = [&](const helpers::ChartData& data) {
+    gp::Tags::PotentialRateTarget::type rates{n};
+    tnsr::I<DataVector, 3> z{n};
+    for (size_t s = 0; s < n; ++s) {
+      const gp::VelocityVector w_s = gp::velocities_at(data.velocities(), s);
+      gp::set_potentials_at(
+          make_not_null(&rates), s,
+          gp::potential_rhs(charts[s], gp::potentials_at(data.potentials(), s),
+                            w_s, gp::gradients_at(q, s), f));
+      for (size_t i = 0; i < 3; ++i) {
+        z.get(i)[s] = gsl::at(w_s, gp::VelocityIndex::gamma_hat + i) -
+                      gsl::at(w_s, gp::VelocityIndex::b + i);
+      }
+    }
+    return std::make_pair(rates, z);
+  };
+  const auto [original_rates, original_z] = rates_and_z(original);
+  gp::filter_velocities(make_not_null(&chart.a), make_not_null(&chart.a_tilde),
+                        make_not_null(&chart.trace_extrinsic_curvature),
+                        make_not_null(&chart.theta),
+                        make_not_null(&chart.gamma_hat),
+                        make_not_null(&chart.b), chart.potentials(), charts, q,
+                        geometry.mesh, operators, gain, f);
+  // The potentials are untouched (they are not even writable above).
+  CHECK(chart.log_conformal_metric == original.log_conformal_metric);
+  CHECK(chart.conformal_metric == original.conformal_metric);
   const auto filtered = [&operators, &gain](DataVector field) {
     operators.apply_filter(make_not_null(&field), gain);
     return field;
   };
-  // K, Theta, GammaHat and b are filtered componentwise with the given gain.
-  CHECK_ITERABLE_APPROX(get(state.trace_extrinsic_curvature),
-                        filtered(get(original.trace_extrinsic_curvature)));
-  CHECK_ITERABLE_APPROX(get(state.theta), filtered(get(original.theta)));
-  for (size_t i = 0; i < 3; ++i) {
-    CHECK_ITERABLE_APPROX(state.gamma_hat.get(i),
-                          filtered(original.gamma_hat.get(i)));
-    CHECK_ITERABLE_APPROX(state.b.get(i), filtered(original.b.get(i)));
+  const auto custom = Approx::custom().epsilon(1.0e-12).scale(1.0);
+  if (gain == 1.0) {
+    CHECK(chart.a == original.a);
+    CHECK(chart.a_tilde == original.a_tilde);
+    CHECK(chart.trace_extrinsic_curvature ==
+          original.trace_extrinsic_curvature);
+    CHECK(chart.theta == original.theta);
+    CHECK(chart.gamma_hat == original.gamma_hat);
+    CHECK(chart.b == original.b);
+    return;
   }
-  // The conformal metric is not filtered; with unit determinant the
-  // projection leaves it unchanged.
+  // The defining relations, from the output and the inputs.
+  const auto [new_rates, new_z] = rates_and_z(chart);
+  for (size_t c = 0; c < gp::number_of_potentials; ++c) {
+    CHECK_ITERABLE_CUSTOM_APPROX(new_rates.get(c),
+                                 filtered(original_rates.get(c)), custom);
+  }
   for (size_t i = 0; i < 3; ++i) {
-    for (size_t j = i; j < 3; ++j) {
-      CHECK_ITERABLE_APPROX(state.conformal_metric.get(i, j),
-                            original.conformal_metric.get(i, j));
+    CHECK_ITERABLE_CUSTOM_APPROX(new_z.get(i), filtered(original_z.get(i)),
+                                 custom);
+  }
+  // The physical ATilde is the chart's a at the unchanged H, and so remains
+  // trace-free: decoding it with the production chart conversion returns a.
+  for (size_t s = 0; s < n; ++s) {
+    gp::PhysicalPointState state{};
+    for (size_t i = 0; i < 3; ++i) {
+      for (size_t j = 0; j < 3; ++j) {
+        state.conformal_metric(i, j) = chart.conformal_metric.get(i, j)[s];
+        state.a_tilde(i, j) = chart.a_tilde.get(i, j)[s];
+      }
+    }
+    state.conformal_factor = get(chart.conformal_factor)[s];
+    state.lapse = get(chart.lapse)[s];
+    gp::PotentialVector u_s{};
+    gp::VelocityVector w_s{};
+    gp::LogMetricChart decoded_chart{};
+    const auto traces =
+        gp::chart_from_physical(make_not_null(&u_s), make_not_null(&w_s),
+                                make_not_null(&decoded_chart), state);
+    CHECK(std::abs(traces[1]) < 1.0e-12);
+    for (size_t c = 0; c < 5; ++c) {
+      CHECK(gsl::at(w_s, gp::VelocityIndex::a + c) ==
+            custom(chart.a.get(c)[s]));
     }
   }
-  // Each ATilde component is filtered, then the trace is projected out with
-  // the metric. On a varying metric the componentwise filter alone breaks the
-  // trace, unless the gain is one; at unit metric it preserves the trace-free
-  // subspace.
-  tnsr::ii<DataVector, 3> filtered_a_tilde{n};
-  for (size_t i = 0; i < 3; ++i) {
-    for (size_t j = i; j < 3; ++j) {
-      filtered_a_tilde.get(i, j) = filtered(original.a_tilde.get(i, j));
-    }
+  CHECK(max(abs(trace_with_metric(chart.conformal_metric, chart.a_tilde))) <
+        1.0e-12);
+  // On the constant unit background with q = 0 the rates are a constant
+  // linear map of w, so the filter is the componentwise filter of each
+  // velocity; on the varying background it is not.
+  double largest_difference = 0.0;
+  for (size_t c = 0; c < 5; ++c) {
+    largest_difference =
+        std::max(largest_difference,
+                 max(abs(chart.a.get(c) - filtered(original.a.get(c)))));
   }
-  const DataVector filtered_trace =
-      trace_with_metric(original.conformal_metric, filtered_a_tilde);
-  // Rounding in the projection (determinant normalization and the inverse of
-  // a metric with condition number up to ~e^1.6) is ~1e-14.
-  const auto custom = Approx::custom().epsilon(1e-12).scale(1.0);
-  if (unit_metric or gain == 1.0) {
-    CHECK(max(abs(filtered_trace)) < 1e-12);
+  largest_difference =
+      std::max(largest_difference,
+               max(abs(get(chart.trace_extrinsic_curvature) -
+                       filtered(get(original.trace_extrinsic_curvature)))));
+  largest_difference =
+      std::max(largest_difference,
+               max(abs(get(chart.theta) - filtered(get(original.theta)))));
+  for (size_t i = 0; i < 3; ++i) {
+    largest_difference = std::max(
+        largest_difference,
+        max(abs(chart.gamma_hat.get(i) - filtered(original.gamma_hat.get(i)))));
+    largest_difference =
+        std::max(largest_difference,
+                 max(abs(chart.b.get(i) - filtered(original.b.get(i)))));
+  }
+  CAPTURE(largest_difference);
+  if (unit_background) {
+    CHECK(largest_difference < 1.0e-12);
   } else {
-    CHECK(max(abs(filtered_trace)) > 1e-4);
+    CHECK(largest_difference > 1.0e-3);
   }
-  for (size_t i = 0; i < 3; ++i) {
-    for (size_t j = i; j < 3; ++j) {
-      CHECK_ITERABLE_CUSTOM_APPROX(
-          state.a_tilde.get(i, j),
-          DataVector{filtered_a_tilde.get(i, j) -
-                     filtered_trace * original.conformal_metric.get(i, j) /
-                         3.0},
-          custom);
-    }
-  }
-  CHECK(max(abs(trace_with_metric(state.conformal_metric, state.a_tilde))) <
-        1e-12);
-
-  // Unused self-start substeps do not advance the state, so nothing is
-  // filtered.
-  PhysicalState unused = original;
-  apply_filter(make_not_null(&unused), geometry, operators, gain,
-               TimeStepId{true, -1, slab.start()},
-               TimeStepId{true, 0, slab.start()});
-  CHECK(get(unused.theta) == get(original.theta));
-  CHECK(unused.a_tilde == original.a_tilde);
-  CHECK(unused.gamma_hat == original.gamma_hat);
 }
 
 // The gain option: values in [0, 1] are accepted and passed through
@@ -225,8 +279,8 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.GradientProjection.Filter",
                   "[Unit][Evolution]") {
   MAKE_GENERATOR(gen);
   for (const double gain : {0.0, 0.1, 0.37, 1.0}) {
-    test_filter_and_projection(make_not_null(&gen), false, gain);
-    test_filter_and_projection(make_not_null(&gen), true, gain);
+    test_filter_velocities(make_not_null(&gen), gain, false);
+    test_filter_velocities(make_not_null(&gen), gain, true);
   }
   test_gain_option();
   test_enforce_algebraic_constraints(make_not_null(&gen));

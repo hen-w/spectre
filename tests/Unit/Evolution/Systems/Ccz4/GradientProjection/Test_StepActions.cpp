@@ -569,8 +569,13 @@ domain::creators::Sphere sphere() {
           analytic()};
 }
 
+// The velocity filter of ComputeVolumeTargets is active (gain below one) only
+// in the step walkthrough; the linearization checks of the right-hand side
+// run at unit gain, where it is the identity (its arithmetic is tested in
+// Test_Filter).
 CacheTuple cache(const size_t order, const DomainCreator<3>& creator,
-                 const evolution::BoundaryCorrection& correction) {
+                 const evolution::BoundaryCorrection& correction,
+                 const double filter_gain = 1.0) {
   return {creator.create_domain(),
           std::make_unique<TimeSteppers::AdamsBashforth>(order),
           kappa_3,
@@ -579,7 +584,7 @@ CacheTuple cache(const size_t order, const DomainCreator<3>& creator,
           ::dg::Formulation::StrongInertial,
           creator.external_boundary_conditions(),
           std::make_unique<Minkowski>(),
-          top_shell_filter_gain};
+          filter_gain};
 }
 
 // Emplaces and initializes an element with the damping parameters kappa_1 and
@@ -639,8 +644,9 @@ void test_step_actions(const bool damped) {
   RecordState::calls.clear();
   const size_t order = 3;
   const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0, 1.0};
-  MockRuntimeSystem runner{cache(order, brick(0), correction),
-                           MutableCacheTuple{}};
+  MockRuntimeSystem runner{
+      cache(order, brick(0), correction, top_shell_filter_gain),
+      MutableCacheTuple{}};
   const ElementId<3> id = element_id(0, 0);
   const Slab slab{0.0, 0.03};
   const TimeDelta step = slab.duration();
@@ -739,25 +745,45 @@ void test_step_actions(const bool damped) {
         get_tag<Ccz4::Tags::Kappa1>(runner, id),
         get_tag<Ccz4::Tags::Kappa2>(runner, id), kappa_3,
         get_tag<Ccz4::Tags::Eta<DataVector>>(runner, id),
-        get_tag<Ccz4::Tags::K0<DataVector>>(runner, id));
-    CHECK(get_tag<variables_tag>(runner, id) == expected_vars);
+        get_tag<Ccz4::Tags::K0<DataVector>>(runner, id), operators,
+        top_shell_filter_gain);
+    const Vars after = get_tag<variables_tag>(runner, id);
+    CHECK(after == expected_vars);
     CHECK(get_tag<targets_tag>(runner, id) == expected_targets);
-    // The physical fields are referenced, not modified.
-    CHECK(part<physical_tags>(get_tag<variables_tag>(runner, id)) ==
-          part<physical_tags>(before));
+    // The potentials are referenced, not modified; the velocities are
+    // filtered in place with the gain from the global cache (its arithmetic
+    // is tested in Test_Filter).
+    tmpl::for_each<tmpl::list<Ccz4::Tags::ConformalMetric<DataVector, 3>,
+                              Ccz4::Tags::ConformalFactor<DataVector>,
+                              gr::Tags::Lapse<DataVector>,
+                              gr::Tags::Shift<DataVector, 3>>>(
+        [&after, &before]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
+          CHECK(get<Tag>(after) == get<Tag>(before));
+        });
+    tmpl::for_each<tmpl::list<Ccz4::Tags::ATilde<DataVector, 3>,
+                              gr::Tags::TraceExtrinsicCurvature<DataVector>,
+                              Ccz4::Tags::Theta<DataVector>,
+                              Ccz4::Tags::GammaHat<DataVector, 3>,
+                              Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>>(
+        [&after, &before]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
+          CHECK(get<Tag>(after) != get<Tag>(before));
+        });
     check_rates_zero(get_tag<dt_variables_tag>(runner, id));
-    // The chart fields and charts of the state, kept for
-    // FinalizeTimeDerivative.
+    // The chart fields and charts of the (filtered) state, kept for
+    // FinalizeTimeDerivative: the charts of the unchanged metric are
+    // identical, the local a is the filtered a decoded from the physical
+    // ATilde.
     gp::LocalChartFields expected_chart_fields{};
     std::vector<gp::LogMetricChart> expected_charts{};
     gp::local_chart_fields(
         make_not_null(&expected_chart_fields), make_not_null(&expected_charts),
-        get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(before),
-        get<Ccz4::Tags::ConformalFactor<DataVector>>(before),
-        get<Ccz4::Tags::ATilde<DataVector, 3>>(before),
-        get<gr::Tags::Lapse<DataVector>>(before));
-    CHECK(get_tag<gp::Tags::StepChartFields>(runner, id) ==
-          expected_chart_fields);
+        get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(after),
+        get<Ccz4::Tags::ConformalFactor<DataVector>>(after),
+        get<Ccz4::Tags::ATilde<DataVector, 3>>(after),
+        get<gr::Tags::Lapse<DataVector>>(after));
+    CHECK_VARIABLES_CUSTOM_APPROX(
+        get_tag<gp::Tags::StepChartFields>(runner, id), expected_chart_fields,
+        Approx::custom().epsilon(1.0e-12).scale(1.0));
     CHECK(get_tag<gp::Tags::StepCharts>(runner, id) == expected_charts);
   }
   const Targets volume_targets = get_tag<targets_tag>(runner, id);
@@ -828,9 +854,9 @@ void test_step_actions(const bool damped) {
           make_not_null(
               &get<::Tags::dt<Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>>(
                   result)),
-          get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(vars),
+          get_tag<gp::Tags::StepChartFields>(runner, id),
+          get_tag<gp::Tags::StepCharts>(runner, id),
           get<Ccz4::Tags::ConformalFactor<DataVector>>(vars),
-          get<Ccz4::Tags::ATilde<DataVector, 3>>(vars),
           get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(vars),
           get<Ccz4::Tags::Theta<DataVector>>(vars),
           get<Ccz4::Tags::GammaHat<DataVector, 3>>(vars),
@@ -930,50 +956,42 @@ void test_step_actions(const bool damped) {
     const history_tag::type cleaned_history = get_tag<history_tag>(runner, id);
     CHECK(cleaned_history.size() == order - 1);
 
-    // FilterAndEnforceConstraints acts on the advanced state only, with the
-    // gain from the global cache.
-    const PhysicalVars before_filter =
+    // EnforceAlgebraicConstraints projects the advanced state and nothing
+    // else (the velocity filter runs with the next right-hand side).
+    const PhysicalVars before_projection =
         part<physical_tags>(get_tag<variables_tag>(runner, id));
     next();
-    PhysicalVars expected = before_filter;
-    tmpl::for_each<tmpl::list<Ccz4::Tags::ATilde<DataVector, 3>,
-                              gr::Tags::TraceExtrinsicCurvature<DataVector>,
-                              Ccz4::Tags::Theta<DataVector>,
-                              Ccz4::Tags::GammaHat<DataVector, 3>,
-                              Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>>(
-        [&expected, &operators]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
-          for (auto& component : get<Tag>(expected)) {
-            operators.apply_filter(make_not_null(&component),
-                                   top_shell_filter_gain);
-          }
-        });
+    PhysicalVars expected = before_projection;
     Ccz4::fd::enforce_algebraic_constraints(
         make_not_null(
             &get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(expected)),
         make_not_null(&get<Ccz4::Tags::ATilde<DataVector, 3>>(expected)));
-    const PhysicalVars after_filter =
+    const PhysicalVars after_projection =
         part<physical_tags>(get_tag<variables_tag>(runner, id));
-    CHECK_VARIABLES_CUSTOM_APPROX(after_filter, expected, custom);
-    // The filter is active, and leaves the conformal factor, lapse and shift
-    // untouched.
-    CHECK(get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(after_filter) !=
-          get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(before_filter));
-    CHECK(get<Ccz4::Tags::ConformalFactor<DataVector>>(after_filter) ==
-          get<Ccz4::Tags::ConformalFactor<DataVector>>(before_filter));
-    CHECK(get<gr::Tags::Lapse<DataVector>>(after_filter) ==
-          get<gr::Tags::Lapse<DataVector>>(before_filter));
-    CHECK(get<gr::Tags::Shift<DataVector, 3>>(after_filter) ==
-          get<gr::Tags::Shift<DataVector, 3>>(before_filter));
+    CHECK_VARIABLES_CUSTOM_APPROX(after_projection, expected, custom);
+    // The projection is active, and leaves the other fields untouched.
+    CHECK(get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(after_projection) !=
+          get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(before_projection));
+    tmpl::for_each<tmpl::list<
+        Ccz4::Tags::ConformalFactor<DataVector>,
+        gr::Tags::TraceExtrinsicCurvature<DataVector>,
+        Ccz4::Tags::Theta<DataVector>, Ccz4::Tags::GammaHat<DataVector, 3>,
+        gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>,
+        Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>>(
+        [&after_projection,
+         &before_projection]<typename Tag>(tmpl::type_<Tag> /*meta*/) {
+          CHECK(get<Tag>(after_projection) == get<Tag>(before_projection));
+        });
     CHECK_ITERABLE_APPROX(
         get(determinant(
-            get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(after_filter))),
+            get<Ccz4::Tags::ConformalMetric<DataVector, 3>>(after_projection))),
         DataVector(n, 1.0));
-    // The history is not modified by the filter.
-    const auto& history_after_filter = get_tag<history_tag>(runner, id);
-    REQUIRE(history_after_filter.size() == cleaned_history.size());
+    // The history is not modified by the projection.
+    const auto& history_after_projection = get_tag<history_tag>(runner, id);
+    REQUIRE(history_after_projection.size() == cleaned_history.size());
     for (size_t i = 0; i < cleaned_history.size(); ++i) {
-      CHECK(history_after_filter[i].value == cleaned_history[i].value);
-      CHECK(history_after_filter[i].derivative ==
+      CHECK(history_after_projection[i].value == cleaned_history[i].value);
+      CHECK(history_after_projection[i].derivative ==
             cleaned_history[i].derivative);
     }
 

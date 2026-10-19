@@ -20,14 +20,15 @@
 
 /// Option tags of the CCZ4 gradient-projection scheme.
 namespace Ccz4::GradientProjection::OptionTags {
-/// \brief The gain of the post-step top-shell filter, see
+/// \brief The gain of the top-shell filter of the velocities, see
 /// `Ccz4::GradientProjection::Tags::TopShellFilterGain`.
 struct TopShellFilterGain {
   using type = double;
   static constexpr Options::String help = {
-      "The factor multiplying the highest tensor modal shell of ATilde, K, "
-      "Theta, GammaHat and b on DG elements after every time step: 1 leaves "
-      "them unfiltered, 0 removes the shell."};
+      "The factor multiplying the highest tensor modal shell of the potential "
+      "rates and of GammaHat - b on DG elements before every right-hand side "
+      "(at fixed potentials and gradients): 1 leaves the state unfiltered, 0 "
+      "removes the shell."};
   static type lower_bound() { return 0.0; }
   static type upper_bound() { return 1.0; }
   using group = ::dg::OptionTags::DiscontinuousGalerkinGroup;
@@ -141,10 +142,10 @@ struct LocalOperators : db::SimpleTag {
   using type = ::Ccz4::GradientProjection::LocalOperators;
 };
 
-/// \brief The gain \f$g\f$ of the post-step filter \f$F=\Pi+g(I-\Pi)\f$ on the
+/// \brief The gain \f$g\f$ of the filter \f$F=\Pi+g(I-\Pi)\f$ on the
 /// highest tensor modal shell, see
 /// `Ccz4::GradientProjection::LocalOperators::apply_filter` and
-/// `Ccz4::GradientProjection::FilterAndEnforceConstraints`.
+/// `Ccz4::GradientProjection::filter_velocities`.
 struct TopShellFilterGain : db::SimpleTag {
   using type = double;
   using option_tags = tmpl::list<OptionTags::TopShellFilterGain>;

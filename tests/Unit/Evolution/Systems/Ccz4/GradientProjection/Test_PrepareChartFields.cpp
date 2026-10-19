@@ -15,6 +15,8 @@
 #include "DataStructures/Variables.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/Filter.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/LocalOperators.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/PointwiseFields.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/PrepareChartFields.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Tags.hpp"
@@ -168,7 +170,8 @@ void test_local_chart_fields(const gsl::not_null<std::mt19937*> gen) {
 // The volume mutator on chart potentials that are quadratic polynomials in
 // the logical coordinates of an affine element (with random velocities):
 // the stored gradients are overwritten by the exact gradients, the physical
-// fields are not modified, the poisoned targets are replaced by the volume
+// fields are not modified at unit filter gain (below it, the velocities are
+// filtered), the poisoned targets are replaced by the volume
 // targets, all time derivatives are zeroed, and repeated evaluation is
 // deterministic.
 void test_compute_volume_targets(const gsl::not_null<std::mt19937*> gen) {
@@ -243,11 +246,13 @@ void test_compute_volume_targets(const gsl::not_null<std::mt19937*> gen) {
   const double kappa_3 = 0.5;
   const Scalar<DataVector> eta{n, 0.4};
   const Scalar<DataVector> k_0{n, 0.0};
+  const gp::LocalOperators operators{geometry.mesh, geometry.inverse_jacobian,
+                                     geometry.det_inverse_jacobian};
   const auto apply = [&]() {
     gp::ComputeVolumeTargets::apply(
         make_not_null(&vars), make_not_null(&dt_vars), make_not_null(&targets),
         geometry.mesh, geometry.inverse_jacobian, kappa_1, kappa_2, kappa_3,
-        eta, k_0);
+        eta, k_0, operators, 1.0);
   };
   apply();
 
@@ -320,6 +325,59 @@ void test_compute_volume_targets(const gsl::not_null<std::mt19937*> gen) {
   CHECK(targets == first_targets);
   CHECK(all_zero(dt_vars));
 
+  // With a gain below one, the velocities of the state are replaced by their
+  // filter_velocities at the charts and exact gradients of the state, and
+  // the targets are those of the filtered state.
+  {
+    const double gain = 0.3;
+    Vars filtered = initial;
+    {
+      gp::LocalChartFields fields{n};
+      std::vector<gp::LogMetricChart> state_charts{};
+      gp::local_chart_fields(make_not_null(&fields),
+                             make_not_null(&state_charts),
+                             chart.conformal_metric, chart.conformal_factor,
+                             chart.a_tilde, chart.lapse);
+      gp::filter_velocities(
+          make_not_null(&get<gp::Tags::TransformedATilde>(fields)),
+          make_not_null(&get<Ccz4::Tags::ATilde<DataVector, 3>>(filtered)),
+          make_not_null(
+              &get<gr::Tags::TraceExtrinsicCurvature<DataVector>>(filtered)),
+          make_not_null(&get<Ccz4::Tags::Theta<DataVector>>(filtered)),
+          make_not_null(&get<Ccz4::Tags::GammaHat<DataVector, 3>>(filtered)),
+          make_not_null(
+              &get<Ccz4::Tags::AuxiliaryShiftB<DataVector, 3>>(filtered)),
+          gp::PotentialFields{get<gp::Tags::LogConformalMetric>(fields),
+                              chart.conformal_factor, chart.lapse, chart.shift},
+          state_charts, expected_q, geometry.mesh, operators, gain,
+          Ccz4::fd::System::f);
+    }
+    CHECK(get<Ccz4::Tags::Theta<DataVector>>(filtered) !=
+          get<Ccz4::Tags::Theta<DataVector>>(initial));
+    vars = initial;
+    targets = Targets{n, 4.0e3};
+    gp::ComputeVolumeTargets::apply(
+        make_not_null(&vars), make_not_null(&dt_vars), make_not_null(&targets),
+        geometry.mesh, geometry.inverse_jacobian, kappa_1, kappa_2, kappa_3,
+        eta, k_0, operators, gain);
+    CHECK_ITERABLE_CUSTOM_APPROX(get<gp::Tags::PotentialGradients>(vars),
+                                 expected_q, custom);
+    CHECK_VARIABLES_CUSTOM_APPROX(part<physical_tags>(vars),
+                                  part<physical_tags>(filtered), custom);
+    // The targets of the filtered state at unit gain.
+    Vars refiltered = vars;
+    Targets expected_targets{n, 4.0e3};
+    gp::ComputeVolumeTargets::apply(
+        make_not_null(&refiltered), make_not_null(&dt_vars),
+        make_not_null(&expected_targets), geometry.mesh,
+        geometry.inverse_jacobian, kappa_1, kappa_2, kappa_3, eta, k_0,
+        operators, 1.0);
+    // The local a of the refiltered state is decoded from the physical
+    // ATilde: equal to rounding.
+    CHECK_VARIABLES_CUSTOM_APPROX(targets, expected_targets, custom);
+    CHECK(all_zero(dt_vars));
+    vars = first_vars;
+  }
   // The scheme supports only K0 = 0 (R_alpha omits it); anything else is an
   // error before any output is touched.
   Scalar<DataVector> nonzero_k_0{n, 0.0};
@@ -330,7 +388,7 @@ void test_compute_volume_targets(const gsl::not_null<std::mt19937*> gen) {
       gp::ComputeVolumeTargets::apply(
           make_not_null(&vars), make_not_null(&dt_vars),
           make_not_null(&targets), geometry.mesh, geometry.inverse_jacobian,
-          kappa_1, kappa_2, kappa_3, eta, nonzero_k_0),
+          kappa_1, kappa_2, kappa_3, eta, nonzero_k_0, operators, 1.0),
       Catch::Matchers::ContainsSubstring(
           "The CCZ4 gradient-projection scheme requires K0 = 0"));
   CHECK(vars == first_vars);
