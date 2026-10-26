@@ -15,6 +15,14 @@
 #include "DataStructures/Tensor/EagerMath/Determinant.hpp"
 #include "DataStructures/Tensor/EagerMath/DeterminantAndInverse.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
+#include "Domain/CoordinateMaps/CoordinateMap.hpp"
+#include "Domain/CoordinateMaps/CoordinateMap.tpp"
+#include "Domain/CoordinateMaps/Distribution.hpp"
+#include "Domain/CoordinateMaps/Identity.hpp"
+#include "Domain/CoordinateMaps/Interval.hpp"
+#include "Domain/CoordinateMaps/ProductMaps.hpp"
+#include "Domain/CoordinateMaps/ProductMaps.tpp"
+#include "Domain/CoordinateMaps/SphericalToCartesianPfaffian.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Filter.hpp"
@@ -25,6 +33,11 @@
 #include "Evolution/Systems/Ccz4/GradientProjection/TestHelpers.hpp"
 #include "Framework/TestCreation.hpp"
 #include "Framework/TestHelpers.hpp"
+#include "NumericalAlgorithms/Spectral/Basis.hpp"
+#include "NumericalAlgorithms/Spectral/LogicalCoordinates.hpp"
+#include "NumericalAlgorithms/Spectral/Mesh.hpp"
+#include "NumericalAlgorithms/Spectral/Quadrature.hpp"
+#include "Utilities/ConstantExpressions.hpp"
 #include "Utilities/Gsl.hpp"
 
 namespace {
@@ -83,6 +96,59 @@ DataVector trace_with_metric(const tnsr::ii<DataVector, 3>& metric,
   return result;
 }
 
+// The potential rates R(u,w,q) and GammaHat - b of the chart data.
+std::pair<gp::Tags::PotentialRateTarget::type, tnsr::I<DataVector, 3>>
+rates_and_z(const helpers::ChartData& data,
+            const std::vector<gp::LogMetricChart>& charts,
+            const gp::Tags::PotentialGradients::type& q, const double f) {
+  const size_t n = charts.size();
+  gp::Tags::PotentialRateTarget::type rates{n};
+  tnsr::I<DataVector, 3> z{n};
+  for (size_t s = 0; s < n; ++s) {
+    const gp::VelocityVector w_s = gp::velocities_at(data.velocities(), s);
+    gp::set_potentials_at(
+        make_not_null(&rates), s,
+        gp::potential_rhs(charts[s], gp::potentials_at(data.potentials(), s),
+                          w_s, gp::gradients_at(q, s), f));
+    for (size_t i = 0; i < 3; ++i) {
+      z.get(i)[s] = gsl::at(w_s, gp::VelocityIndex::gamma_hat + i) -
+                    gsl::at(w_s, gp::VelocityIndex::b + i);
+    }
+  }
+  return {rates, z};
+}
+
+// The physical ATilde is the chart's a at the unchanged H, and so remains
+// trace-free: decoding it with the production chart conversion returns a.
+void check_recovered_a_tilde(const helpers::ChartData& chart) {
+  const auto custom = Approx::custom().epsilon(1.0e-12).scale(1.0);
+  const size_t n = get(chart.lapse).size();
+  for (size_t s = 0; s < n; ++s) {
+    gp::PhysicalPointState state{};
+    for (size_t i = 0; i < 3; ++i) {
+      for (size_t j = 0; j < 3; ++j) {
+        state.conformal_metric(i, j) = chart.conformal_metric.get(i, j)[s];
+        state.a_tilde(i, j) = chart.a_tilde.get(i, j)[s];
+      }
+    }
+    state.conformal_factor = get(chart.conformal_factor)[s];
+    state.lapse = get(chart.lapse)[s];
+    gp::PotentialVector u_s{};
+    gp::VelocityVector w_s{};
+    gp::LogMetricChart decoded_chart{};
+    const auto traces =
+        gp::chart_from_physical(make_not_null(&u_s), make_not_null(&w_s),
+                                make_not_null(&decoded_chart), state);
+    CHECK(std::abs(traces[1]) < 1.0e-12);
+    for (size_t c = 0; c < 5; ++c) {
+      CHECK(gsl::at(w_s, gp::VelocityIndex::a + c) ==
+            custom(chart.a.get(c)[s]));
+    }
+  }
+  CHECK(max(abs(trace_with_metric(chart.conformal_metric, chart.a_tilde))) <
+        1.0e-12);
+}
+
 // The velocity filter on a curved element (non-separable mass) and a random
 // on-constraint state with random stored gradients: it realizes the defining
 // relations R(u,w+,q) = F R(u,w,q) and GammaHat+ - b+ = F (GammaHat - b)
@@ -118,23 +184,7 @@ void test_filter_velocities(const gsl::not_null<std::mt19937*> gen,
   const std::vector<gp::LogMetricChart> charts =
       gp::log_metric_charts(chart.potentials());
   const helpers::ChartData original = chart;
-  const auto rates_and_z = [&](const helpers::ChartData& data) {
-    gp::Tags::PotentialRateTarget::type rates{n};
-    tnsr::I<DataVector, 3> z{n};
-    for (size_t s = 0; s < n; ++s) {
-      const gp::VelocityVector w_s = gp::velocities_at(data.velocities(), s);
-      gp::set_potentials_at(
-          make_not_null(&rates), s,
-          gp::potential_rhs(charts[s], gp::potentials_at(data.potentials(), s),
-                            w_s, gp::gradients_at(q, s), f));
-      for (size_t i = 0; i < 3; ++i) {
-        z.get(i)[s] = gsl::at(w_s, gp::VelocityIndex::gamma_hat + i) -
-                      gsl::at(w_s, gp::VelocityIndex::b + i);
-      }
-    }
-    return std::make_pair(rates, z);
-  };
-  const auto [original_rates, original_z] = rates_and_z(original);
+  const auto [original_rates, original_z] = rates_and_z(original, charts, q, f);
   gp::filter_velocities(make_not_null(&chart.a), make_not_null(&chart.a_tilde),
                         make_not_null(&chart.trace_extrinsic_curvature),
                         make_not_null(&chart.theta),
@@ -160,7 +210,7 @@ void test_filter_velocities(const gsl::not_null<std::mt19937*> gen,
     return;
   }
   // The defining relations, from the output and the inputs.
-  const auto [new_rates, new_z] = rates_and_z(chart);
+  const auto [new_rates, new_z] = rates_and_z(chart, charts, q, f);
   for (size_t c = 0; c < gp::number_of_potentials; ++c) {
     CHECK_ITERABLE_CUSTOM_APPROX(new_rates.get(c),
                                  filtered(original_rates.get(c)), custom);
@@ -169,32 +219,7 @@ void test_filter_velocities(const gsl::not_null<std::mt19937*> gen,
     CHECK_ITERABLE_CUSTOM_APPROX(new_z.get(i), filtered(original_z.get(i)),
                                  custom);
   }
-  // The physical ATilde is the chart's a at the unchanged H, and so remains
-  // trace-free: decoding it with the production chart conversion returns a.
-  for (size_t s = 0; s < n; ++s) {
-    gp::PhysicalPointState state{};
-    for (size_t i = 0; i < 3; ++i) {
-      for (size_t j = 0; j < 3; ++j) {
-        state.conformal_metric(i, j) = chart.conformal_metric.get(i, j)[s];
-        state.a_tilde(i, j) = chart.a_tilde.get(i, j)[s];
-      }
-    }
-    state.conformal_factor = get(chart.conformal_factor)[s];
-    state.lapse = get(chart.lapse)[s];
-    gp::PotentialVector u_s{};
-    gp::VelocityVector w_s{};
-    gp::LogMetricChart decoded_chart{};
-    const auto traces =
-        gp::chart_from_physical(make_not_null(&u_s), make_not_null(&w_s),
-                                make_not_null(&decoded_chart), state);
-    CHECK(std::abs(traces[1]) < 1.0e-12);
-    for (size_t c = 0; c < 5; ++c) {
-      CHECK(gsl::at(w_s, gp::VelocityIndex::a + c) ==
-            custom(chart.a.get(c)[s]));
-    }
-  }
-  CHECK(max(abs(trace_with_metric(chart.conformal_metric, chart.a_tilde))) <
-        1.0e-12);
+  check_recovered_a_tilde(chart);
   // On the constant unit background with q = 0 the rates are a constant
   // linear map of w, so the filter is the componentwise filter of each
   // velocity; on the varying background it is not.
@@ -227,9 +252,132 @@ void test_filter_velocities(const gsl::not_null<std::mt19937*> gen,
   }
 }
 
+// An element of a spherical shell 1.2 <= r <= 3.1 with a logarithmic radial
+// map, built as by the NonconformingSphericalShells domain creator.
+helpers::Geometry make_shell_geometry(const size_t radial_size,
+                                      const size_t l_max) {
+  using Interval = domain::CoordinateMaps::Interval;
+  using Identity2D = domain::CoordinateMaps::Identity<2>;
+  helpers::Geometry result{};
+  result.mesh =
+      Mesh<3>{{{radial_size, l_max + 1, 2 * l_max + 1}},
+              {{Spectral::Basis::Legendre, Spectral::Basis::SphericalHarmonic,
+                Spectral::Basis::SphericalHarmonic}},
+              {{Spectral::Quadrature::GaussLobatto, Spectral::Quadrature::Gauss,
+                Spectral::Quadrature::Equiangular}}};
+  result.logical = logical_coordinates(result.mesh);
+  const auto map =
+      domain::make_coordinate_map<Frame::ElementLogical, Frame::Inertial>(
+          domain::CoordinateMaps::ProductOf2Maps<Interval, Identity2D>{
+              Interval{-1.0, 1.0, 1.2, 3.1,
+                       domain::CoordinateMaps::Distribution::Logarithmic, 0.0},
+              Identity2D{}},
+          domain::CoordinateMaps::SphericalToCartesianPfaffian{});
+  result.inverse_jacobian = map.inv_jacobian(result.logical);
+  result.det_inverse_jacobian = determinant(result.inverse_jacobian);
+  result.exact_volume = 4.0 * M_PI / 3.0 * (cube(3.1) - cube(1.2));
+  return result;
+}
+
+// The velocity filter on a spherical-harmonic shell at a spatially varying
+// on-constraint state with nonzero shift, a nontrivial metric and random
+// stored gradients: it leaves the potentials unchanged, realizes
+// R(u,w+,q) = F R(u,w,q) and GammaHat+ - b+ = F (GammaHat - b) with the
+// grouped shell filter F, contracts the summed mass norm of (R, GammaHat -
+// b), keeps ATilde consistent and trace-free, and changes the state also at
+// unit gain (the angular cutoff).
+void test_shell_filter_velocities(const gsl::not_null<std::mt19937*> gen,
+                                  const double gain) {
+  CAPTURE(gain);
+  const auto geometry = make_shell_geometry(4, 4);
+  const gp::LocalOperators operators{geometry.mesh, geometry.inverse_jacobian,
+                                     geometry.det_inverse_jacobian, 2};
+  const size_t n = geometry.mesh.number_of_grid_points();
+  const double f = Ccz4::fd::System::f;
+  helpers::ChartData chart{n};
+  gp::Tags::PotentialGradients::type q{n};
+  for (size_t s = 0; s < n; ++s) {
+    const auto state = helpers::random_state(gen, 0.4, 0.3, 0.5);
+    chart.set(s, state.u, state.w);
+    for (size_t i = 0; i < 3; ++i) {
+      for (size_t c = 0; c < gp::number_of_potentials; ++c) {
+        q.get(i, c)[s] = gsl::at(gsl::at(state.q, i), c);
+      }
+    }
+  }
+  const std::vector<gp::LogMetricChart> charts =
+      gp::log_metric_charts(chart.potentials());
+  const helpers::ChartData original = chart;
+  auto [expected_rates, expected_z] = rates_and_z(original, charts, q, f);
+  const auto original_rates = expected_rates;
+  const auto original_z = expected_z;
+  operators.apply_shell_filter(
+      {{&expected_rates.get(0), &expected_rates.get(1), &expected_rates.get(2),
+        &expected_rates.get(3), &expected_rates.get(4), &expected_rates.get(5),
+        &expected_rates.get(6), &expected_rates.get(7), &expected_rates.get(8),
+        &expected_rates.get(9), &expected_z.get(0), &expected_z.get(1),
+        &expected_z.get(2)}},
+      gain);
+  gp::filter_velocities(make_not_null(&chart.a), make_not_null(&chart.a_tilde),
+                        make_not_null(&chart.trace_extrinsic_curvature),
+                        make_not_null(&chart.theta),
+                        make_not_null(&chart.gamma_hat),
+                        make_not_null(&chart.b), chart.potentials(), charts, q,
+                        geometry.mesh, operators, gain, f);
+  CHECK(chart.log_conformal_metric == original.log_conformal_metric);
+  CHECK(chart.conformal_metric == original.conformal_metric);
+  CHECK(chart.conformal_factor == original.conformal_factor);
+  CHECK(chart.lapse == original.lapse);
+  CHECK(chart.shift == original.shift);
+  const auto [new_rates, new_z] = rates_and_z(chart, charts, q, f);
+  double scale = 0.0;
+  for (size_t c = 0; c < gp::number_of_potentials; ++c) {
+    scale = std::max(scale, max(abs(original_rates.get(c))));
+  }
+  for (size_t i = 0; i < 3; ++i) {
+    scale = std::max(scale, max(abs(original_z.get(i))));
+  }
+  const auto custom = Approx::custom().epsilon(1.0e-12).scale(scale);
+  for (size_t c = 0; c < gp::number_of_potentials; ++c) {
+    CHECK_ITERABLE_CUSTOM_APPROX(new_rates.get(c), expected_rates.get(c),
+                                 custom);
+  }
+  for (size_t i = 0; i < 3; ++i) {
+    CHECK_ITERABLE_CUSTOM_APPROX(new_z.get(i), expected_z.get(i), custom);
+  }
+  // The mass norm summed over the 13 fields does not grow.
+  const DataVector& mass = operators.mass();
+  double original_norm = 0.0;
+  double new_norm = 0.0;
+  for (size_t c = 0; c < gp::number_of_potentials; ++c) {
+    original_norm += sum(mass * square(original_rates.get(c)));
+    new_norm += sum(mass * square(new_rates.get(c)));
+  }
+  for (size_t i = 0; i < 3; ++i) {
+    original_norm += sum(mass * square(original_z.get(i)));
+    new_norm += sum(mass * square(new_z.get(i)));
+  }
+  CAPTURE(original_norm);
+  CAPTURE(new_norm);
+  CHECK(new_norm < original_norm);
+  check_recovered_a_tilde(chart);
+  double largest_change = 0.0;
+  for (size_t c = 0; c < 5; ++c) {
+    largest_change =
+        std::max(largest_change, max(abs(chart.a.get(c) - original.a.get(c))));
+  }
+  CAPTURE(largest_change);
+  CHECK(largest_change > 1.0e-3);
+}
+
 // The gain option: values in [0, 1] are accepted and passed through
-// unchanged; values outside are rejected.
+// unchanged; values outside are rejected. The number of removed angular bands
+// is passed through unchanged.
 void test_gain_option() {
+  using modes_tag = gp::OptionTags::ShellAngularModesToKill;
+  CHECK(TestHelpers::test_option_tag<modes_tag>("4") == 4);
+  CHECK(TestHelpers::test_option_tag<modes_tag>("0") == 0);
+  CHECK(gp::Tags::ShellAngularModesToKill::create_from_options(4) == 4);
   using option_tag = gp::OptionTags::TopShellFilterGain;
   CHECK(TestHelpers::test_option_tag<option_tag>("0.0") == 0.0);
   CHECK(TestHelpers::test_option_tag<option_tag>("0.25") == 0.25);
@@ -281,6 +429,9 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.GradientProjection.Filter",
   for (const double gain : {0.0, 0.1, 0.37, 1.0}) {
     test_filter_velocities(make_not_null(&gen), gain, false);
     test_filter_velocities(make_not_null(&gen), gain, true);
+  }
+  for (const double gain : {0.0, 0.1, 1.0}) {
+    test_shell_filter_velocities(make_not_null(&gen), gain);
   }
   test_gain_option();
   test_enforce_algebraic_constraints(make_not_null(&gen));

@@ -33,7 +33,9 @@ void filter_velocities(
     const std::vector<LogMetricChart>& charts,
     const Tags::PotentialGradients::type& q, const Mesh<3>& mesh,
     const LocalOperators& local_operators, const double gain, const double f) {
-  if (gain == 1.0) {
+  // On a shell the filter is never the identity: at unit gain it still
+  // removes the angular content outside the retained space.
+  if (gain == 1.0 and not local_operators.is_spherical_shell()) {
     return;
   }
   local_operators.check_mesh(mesh);
@@ -63,15 +65,23 @@ void filter_velocities(
                     gsl::at(w_s, VelocityIndex::b + i);
     }
   }
-  std::vector<gsl::not_null<DataVector*>> fields{};
-  fields.reserve(number_of_potentials + 3);
-  for (auto& component : rates) {
-    fields.emplace_back(&component);
+  if (local_operators.is_spherical_shell()) {
+    local_operators.apply_shell_filter(
+        {{&rates.get(0), &rates.get(1), &rates.get(2), &rates.get(3),
+          &rates.get(4), &rates.get(5), &rates.get(6), &rates.get(7),
+          &rates.get(8), &rates.get(9), &z.get(0), &z.get(1), &z.get(2)}},
+        gain);
+  } else {
+    std::vector<gsl::not_null<DataVector*>> fields{};
+    fields.reserve(number_of_potentials + 3);
+    for (auto& component : rates) {
+      fields.emplace_back(&component);
+    }
+    for (auto& component : z) {
+      fields.emplace_back(&component);
+    }
+    local_operators.apply_filter(fields, gain);
   }
-  for (auto& component : z) {
-    fields.emplace_back(&component);
-  }
-  local_operators.apply_filter(fields, gain);
   // 2. The recovery of w+ and the physical ATilde at fixed H.
   for (size_t s = 0; s < number_of_points; ++s) {
     PotentialVector filtered_rate_minus_gradient_rate{};

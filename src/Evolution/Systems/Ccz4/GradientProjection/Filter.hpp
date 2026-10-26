@@ -54,9 +54,12 @@ struct EnforceAlgebraicConstraints : tt::ConformsTo<db::protocols::Mutator> {
  * \hat\Gamma^+-b^+&=F\,(\hat\Gamma-b),
  * \f}
  *
- * where \f$R\f$ is `potential_rhs` (the potential rates) and
- * \f$F=\Pi+g(I-\Pi)\f$ is `LocalOperators::apply_filter` at the gain \f$g\f$,
- * applied to each of these 13 fields over the element. Since \f$R\f$ is
+ * where \f$R\f$ is `potential_rhs` (the potential rates) and \f$F\f$ the
+ * velocity filter at the gain \f$g\f$: on tensor-product elements
+ * \f$F=\Pi+g(I-\Pi)\f$ (`LocalOperators::apply_filter`) applied to each of
+ * these 13 fields over the element, on spherical-harmonic shells the grouped
+ * tensor filter `LocalOperators::apply_shell_filter` (the
+ * `GeneralShellFilter`) of the 13 fields. Since \f$R\f$ is
  * linear in \f$w\f$ with no constant term at fixed \f$u\f$,
  * \f$w^+=P\left(F\,R(u,w,q)-R(u,0,q)\right)\f$ with \f$P\f$ the
  * `apply_rhs_inverse`, plus the filtered \f$\hat\Gamma-b\f$ on
@@ -66,7 +69,8 @@ struct EnforceAlgebraicConstraints : tt::ConformsTo<db::protocols::Mutator> {
  * place; nothing else changes. In the linearization about unit Minkowski,
  * \f$R=Lw+\sum_iE_iq_i\f$ with constant \f$L\f$ and \f$E_i\f$, this is
  * \f$w^+=Fw+P\sum_iE_i(F-I)q_i\f$, the filter of the linear model. At gain 1
- * nothing is done.
+ * nothing is done on tensor-product elements; on shells the filter still
+ * removes the angular content outside the retained angular space.
  */
 void filter_velocities(
     gsl::not_null<Tags::TransformedATilde::type*> a,
