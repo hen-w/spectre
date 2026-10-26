@@ -3,17 +3,25 @@
 
 #include "Framework/TestingFramework.hpp"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "DataStructures/DataVector.hpp"
+#include "DataStructures/Matrix.hpp"
+#include "DataStructures/SimpleSparseMatrix.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
+#include "DataStructures/Variables.hpp"
 #include "Domain/Structure/Direction.hpp"
 #include "Evolution/BoundaryCorrection.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
@@ -28,7 +36,15 @@
 #include "Framework/TestCreation.hpp"
 #include "Framework/TestHelpers.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
+#include "NumericalAlgorithms/Spectral/Basis.hpp"
+#include "NumericalAlgorithms/Spectral/Mesh.hpp"
+#include "NumericalAlgorithms/Spectral/Quadrature.hpp"
+#include "NumericalAlgorithms/SphericalHarmonics/Spherepack.hpp"
+#include "NumericalAlgorithms/SphericalHarmonics/SpherepackCache.hpp"
+#include "NumericalAlgorithms/SphericalHarmonics/SpherepackIterator.hpp"
+#include "NumericalAlgorithms/SphericalHarmonics/TensorYlmFilter.hpp"
 #include "Options/Protocols/FactoryCreation.hpp"
+#include "Parallel/Printf/Printf.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/Literals.hpp"
 #include "Utilities/ProtocolHelpers.hpp"
@@ -245,7 +261,8 @@ void test_against_reference(const gsl::not_null<std::mt19937*> gen) {
       CAPTURE(sigma);
       // Equal penalties on all three characteristic groups reproduce the
       // previous componentwise scalar penalty.
-      const Correction correction{external_correction, sigma, sigma, sigma};
+      const Correction correction{external_correction, sigma, sigma, sigma,
+                                  std::nullopt};
       double largest_speed = 0.0;
       const Side interior =
           package(correction, interior_raw, make_not_null(&largest_speed));
@@ -304,15 +321,41 @@ void test_against_reference(const gsl::not_null<std::mt19937*> gen) {
         for (const double x : internal_expected) {
           scale = std::max(scale, std::abs(x));
         }
+        // The analytic transform and the dense reference differ by roundoff
+        // amplified by the conditioning of the characteristic decomposition
+        // at the averaged state, for which the speed spread is a proxy.
+        gp::PotentialVector u_average{};
+        for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+          gsl::at(u_average, a) =
+              0.5 * (interior.u.get(a)[s] + exterior.u.get(a)[s]);
+        }
+        const gp::LogMetricChart average_chart{
+            gp::stf_decode(&u_average[gp::PotentialIndex::log_metric])};
+        const gp::NormalCharacteristics average_characteristics{
+            average_chart, u_average, normals[s], ::Ccz4::fd::System::f};
+        double largest_point_speed = 0.0;
+        double smallest_point_speed = std::numeric_limits<double>::infinity();
+        for (size_t k = 0; k < gp::number_of_normal_components; ++k) {
+          const double speed =
+              std::abs(gsl::at(average_characteristics.speeds(), k));
+          largest_point_speed = std::max(largest_point_speed, speed);
+          if (not gp::NormalCharacteristics::is_kernel_field(k)) {
+            smallest_point_speed = std::min(smallest_point_speed, speed);
+          }
+        }
+        const double epsilon =
+            1.0e-12 *
+            std::max(10.0, 10.0 * largest_point_speed / smallest_point_speed);
+        CAPTURE(epsilon);
         for (size_t row = 0; row < n43; ++row) {
           CHECK(gsl::at(internal_actual, row) ==
                 approx(gsl::at(internal_expected, row))
                     .scale(scale)
-                    .epsilon(1e-11));
+                    .epsilon(epsilon));
           CHECK(gsl::at(external_actual, row) ==
                 approx(gsl::at(external_expected, row))
                     .scale(scale)
-                    .epsilon(1e-11));
+                    .epsilon(epsilon));
         }
         for (size_t a = 0; a < gp::number_of_potentials; ++a) {
           CHECK(internal.u.get(a)[s] ==
@@ -395,7 +438,8 @@ void test_upwind_sign(const double sigma) {
   const gp::LogMetricChart chart{gp::Matrix3{}};
   const gp::NormalCharacteristics characteristics{chart, u, normal,
                                                   ::Ccz4::fd::System::f};
-  const Correction correction{ExternalCorrection::Upwind, sigma, sigma, sigma};
+  const Correction correction{ExternalCorrection::Upwind, sigma, sigma, sigma,
+                              std::nullopt};
   for (size_t k = 0; k < gp::number_of_normal_components; ++k) {
     if (gp::NormalCharacteristics::is_kernel_field(k)) {
       continue;
@@ -456,7 +500,8 @@ void test_permutation(const gsl::not_null<std::mt19937*> gen) {
   const Side interior = random_side(gen, n, normals, 1.0);
   const Side exterior = random_side(gen, n, normals, -1.0);
   // The accepted candidate penalties, exercising the grouped-penalty path.
-  const Correction correction{ExternalCorrection::Upwind, 1.0, 1.0, 0.0};
+  const Correction correction{ExternalCorrection::Upwind, 1.0, 1.0, 0.0,
+                              std::nullopt};
   const Output output = boundary_terms<false>(correction, interior, exterior);
   const std::array<size_t, 4> permutation{{2, 0, 3, 1}};
   const auto permute = [&permutation](auto tensor) {
@@ -504,7 +549,8 @@ void test_unequal_conformal_factors(const gsl::not_null<std::mt19937*> gen) {
   }
   get<gp::PotentialIndex::conformal_factor>(interior.u) = DataVector{0.5, 0.3};
   get<gp::PotentialIndex::conformal_factor>(exterior.u) = DataVector{1.5, 1.2};
-  const Correction correction{ExternalCorrection::Upwind, 1.0, 1.0, 1.0};
+  const Correction correction{ExternalCorrection::Upwind, 1.0, 1.0, 1.0,
+                              std::nullopt};
   const Output output = boundary_terms<false>(correction, interior, exterior);
   for (size_t s = 0; s < 2; ++s) {
     const auto expected = expected_correction(interior, exterior, s, 1.0, 1.0);
@@ -548,7 +594,8 @@ void test_package_errors(const gsl::not_null<std::mt19937*> gen) {
   std::vector<gp::VelocityVector> w{};
   const RawSide raw = random_raw_side(gen, 3, normals, 1.0, make_not_null(&u),
                                       make_not_null(&w));
-  const Correction correction{ExternalCorrection::Upwind, 1.0, 1.0, 1.0};
+  const Correction correction{ExternalCorrection::Upwind, 1.0, 1.0, 1.0,
+                              std::nullopt};
   double largest_speed = 0.0;
   RawSide off_constraint = raw;
   for (auto& component : off_constraint.chart.conformal_metric) {
@@ -588,8 +635,10 @@ void test_group_penalties(const gsl::not_null<std::mt19937*> gen) {
   }
   const Side interior = random_side(gen, n, normals, 1.0);
   Side exterior = random_side(gen, n, normals, -1.0);
-  const Correction candidate{ExternalCorrection::Upwind, 1.0, 1.0, 0.0};
-  const Correction uniform{ExternalCorrection::Upwind, 1.0, 1.0, 1.0};
+  const Correction candidate{ExternalCorrection::Upwind, 1.0, 1.0, 0.0,
+                             std::nullopt};
+  const Correction uniform{ExternalCorrection::Upwind, 1.0, 1.0, 1.0,
+                           std::nullopt};
   CHECK(candidate.propagating_scalar_penalty() == 1.0);
   CHECK(candidate.stationary_gradient_scalar_penalty() == 1.0);
   CHECK(candidate.gamma_hat_minus_b_scalar_penalty() == 0.0);
@@ -676,6 +725,473 @@ void test_group_penalties(const gsl::not_null<std::mt19937*> gen) {
   }
 }
 
+using Targets = gp::Tags::RhsTargets::type;
+
+Mesh<2> shell_face_mesh(const size_t l_max) {
+  return {{{l_max + 1, 2 * l_max + 1}},
+          {{Spectral::Basis::SphericalHarmonic,
+            Spectral::Basis::SphericalHarmonic}},
+          {{Spectral::Quadrature::Gauss, Spectral::Quadrature::Equiangular}}};
+}
+
+// The tensor kinds of the filtered blocks: scalar, vector, symmetric rank two
+// in the trace-free coordinates, general rank two and rank three symmetric in
+// the last pair in its trace-free coordinates.
+enum class Kind : size_t { Scalar, Vector, Symmetric, General, RankThree };
+
+// The filtered blocks of the targets: the kind and the components in the
+// packed order of the reference (the chart index fastest).
+std::vector<std::pair<Kind, std::vector<DataVector*>>> filtered_blocks(
+    const gsl::not_null<Targets*> targets) {
+  auto& w = get<gp::Tags::VelocityTarget>(*targets);
+  auto& q = get<gp::Tags::GradientTarget>(*targets);
+  std::vector<std::pair<Kind, std::vector<DataVector*>>> blocks{};
+  const auto velocities = [&w](const size_t first, const size_t size) {
+    std::vector<DataVector*> result{};
+    for (size_t a = first; a < first + size; ++a) {
+      result.push_back(&w.get(a));
+    }
+    return result;
+  };
+  const auto gradients = [&q](const size_t first, const size_t size) {
+    std::vector<DataVector*> result{};
+    for (size_t i = 0; i < 3; ++i) {
+      for (size_t a = first; a < first + size; ++a) {
+        result.push_back(&q.get(i, a));
+      }
+    }
+    return result;
+  };
+  blocks.emplace_back(Kind::Symmetric, velocities(gp::VelocityIndex::a, 5));
+  blocks.emplace_back(
+      Kind::Scalar,
+      velocities(gp::VelocityIndex::trace_extrinsic_curvature, 1));
+  blocks.emplace_back(Kind::Scalar, velocities(gp::VelocityIndex::theta, 1));
+  blocks.emplace_back(Kind::Vector,
+                      velocities(gp::VelocityIndex::gamma_hat, 3));
+  blocks.emplace_back(Kind::Vector, velocities(gp::VelocityIndex::b, 3));
+  blocks.emplace_back(Kind::RankThree,
+                      gradients(gp::PotentialIndex::log_metric, 5));
+  blocks.emplace_back(Kind::Vector,
+                      gradients(gp::PotentialIndex::conformal_factor, 1));
+  blocks.emplace_back(Kind::Vector, gradients(gp::PotentialIndex::lapse, 1));
+  blocks.emplace_back(Kind::General, gradients(gp::PotentialIndex::shift, 3));
+  return blocks;
+}
+
+DataVector packed(const std::vector<DataVector*>& components) {
+  const size_t n = components.front()->size();
+  DataVector result(components.size() * n);
+  for (size_t c = 0; c < components.size(); ++c) {
+    for (size_t j = 0; j < n; ++j) {
+      result[j + n * c] = (*components[c])[j];
+    }
+  }
+  return result;
+}
+
+// The dense native nodal filter I + Delta of `Structure` on its storage
+// components (row and column j + n_Omega c), built from fill_filter and the
+// Spherepack transforms of every unit nodal vector.
+template <typename Structure>
+Matrix storage_filter(const size_t l_max, const size_t modes_to_kill) {
+  const auto& ylm = ylm::get_spherepack_cache(l_max);
+  const size_t angular_size = ylm.physical_size();
+  const size_t spectral_size = ylm.spectral_size();
+  const size_t components = Structure::size();
+  SimpleSparseMatrix delta{};
+  ylm::TensorYlm::fill_filter<Structure>(
+      make_not_null(&delta), l_max, modes_to_kill, std::nullopt,
+      ylm::TensorYlm::CoefficientNormalization::Spherepack);
+  const size_t size = components * angular_size;
+  Matrix result(size, size);
+  std::vector<double> spectral(components * spectral_size, 0.0);
+  for (size_t column = 0; column < size; ++column) {
+    const size_t source = column / angular_size;
+    DataVector values{angular_size, 0.0};
+    values[column % angular_size] = 1.0;
+    const DataVector coefficients = ylm.phys_to_spec(values);
+    std::fill(spectral.begin(), spectral.end(), 0.0);
+    for (size_t k = 0; k < spectral_size; ++k) {
+      spectral[k + spectral_size * source] = coefficients[k];
+    }
+    std::vector<double> filtered = spectral;
+    delta.increment_multiply_on_right(make_not_null(&filtered), 0, 1, spectral,
+                                      0, 1);
+    for (size_t c = 0; c < components; ++c) {
+      DataVector filtered_coefficients{spectral_size};
+      for (size_t k = 0; k < spectral_size; ++k) {
+        filtered_coefficients[k] = filtered[k + spectral_size * c];
+      }
+      const DataVector filtered_values =
+          ylm.spec_to_phys(filtered_coefficients);
+      for (size_t j = 0; j < angular_size; ++j) {
+        result(j + angular_size * c, column) = filtered_values[j];
+      }
+    }
+  }
+  return result;
+}
+
+// The decoding from the packed components to the tensor storage and the
+// encoding back, from stf_decode and stf_encode on unit tensors.
+template <typename Structure>
+std::pair<Matrix, Matrix> packing(const Kind kind) {
+  constexpr auto indices = Structure::storage_to_tensor_index();
+  const size_t storage = Structure::size();
+  const size_t packed_size =
+      kind == Kind::Symmetric ? 5 : (kind == Kind::RankThree ? 15 : storage);
+  Matrix decode(storage, packed_size, 0.0);
+  Matrix encode(packed_size, storage, 0.0);
+  for (size_t c = 0; c < storage; ++c) {
+    if (kind == Kind::Scalar or kind == Kind::Vector) {
+      decode(c, c) = 1.0;
+      encode(c, c) = 1.0;
+    } else if (kind == Kind::General) {
+      decode(c, 3 * indices[c][0] + indices[c][1]) = 1.0;
+      encode(3 * indices[c][0] + indices[c][1], c) = 1.0;
+    } else {
+      // The symmetric pair is the last two indices.
+      const size_t first = kind == Kind::RankThree ? indices[c][0] : 0;
+      const size_t j = indices[c][kind == Kind::RankThree ? 1 : 0];
+      const size_t k = indices[c][kind == Kind::RankThree ? 2 : 1];
+      gp::Matrix3 unit_tensor(0.0);
+      unit_tensor(j, k) = 1.0;
+      unit_tensor(k, j) = 1.0;
+      const auto encoded = gp::stf_encode(unit_tensor);
+      for (size_t a = 0; a < 5; ++a) {
+        std::array<double, 5> unit{};
+        gsl::at(unit, a) = 1.0;
+        decode(c, 5 * first + a) = gp::stf_decode(unit.data())(j, k);
+        encode(5 * first + a, c) = gsl::at(encoded, a);
+      }
+    }
+  }
+  return {decode, encode};
+}
+
+// E S D in the nodal components, (E S D)_{j + n a, j' + n b}.
+Matrix packed_filter(const Matrix& storage, const Matrix& decode,
+                     const Matrix& encode, const size_t angular_size) {
+  const size_t size = decode.columns() * angular_size;
+  Matrix decoded(storage.rows(), size, 0.0);
+  for (size_t b = 0; b < decode.columns(); ++b) {
+    for (size_t s = 0; s < decode.rows(); ++s) {
+      if (decode(s, b) != 0.0) {
+        blaze::submatrix(decoded, 0, b * angular_size, storage.rows(),
+                         angular_size) +=
+            decode(s, b) * blaze::submatrix(storage, 0, s * angular_size,
+                                            storage.rows(), angular_size);
+      }
+    }
+  }
+  Matrix result(size, size, 0.0);
+  for (size_t a = 0; a < encode.rows(); ++a) {
+    for (size_t s = 0; s < encode.columns(); ++s) {
+      if (encode(a, s) != 0.0) {
+        blaze::submatrix(result, a * angular_size, 0, angular_size, size) +=
+            encode(a, s) *
+            blaze::submatrix(decoded, s * angular_size, 0, angular_size, size);
+      }
+    }
+  }
+  return result;
+}
+
+// The reference operators of the five kinds: the packed nodal filter, and the
+// storage filter with its packing for the trace-free checks.
+struct ReferenceFilters {
+  std::array<Matrix, 5> packed{};
+  std::array<Matrix, 5> storage{};
+  std::array<std::pair<Matrix, Matrix>, 5> packings{};
+};
+
+ReferenceFilters reference_filters(const size_t l_max,
+                                   const size_t modes_to_kill) {
+  const size_t n = ylm::get_spherepack_cache(l_max).physical_size();
+  ReferenceFilters result{};
+  const auto set = [&]<typename Structure>(const Kind kind) {
+    const auto k = static_cast<size_t>(kind);
+    gsl::at(result.storage, k) =
+        storage_filter<Structure>(l_max, modes_to_kill);
+    gsl::at(result.packings, k) = packing<Structure>(kind);
+    gsl::at(result.packed, k) = packed_filter(
+        gsl::at(result.storage, k), gsl::at(result.packings, k).first,
+        gsl::at(result.packings, k).second, n);
+  };
+  set.operator()<Scalar<DataVector>::structure>(Kind::Scalar);
+  set.operator()<tnsr::i<DataVector, 3>::structure>(Kind::Vector);
+  set.operator()<tnsr::ii<DataVector, 3>::structure>(Kind::Symmetric);
+  set.operator()<tnsr::ij<DataVector, 3>::structure>(Kind::General);
+  set.operator()<tnsr::ijj<DataVector, 3>::structure>(Kind::RankThree);
+  return result;
+}
+
+Targets random_targets(const gsl::not_null<std::mt19937*> gen, const size_t n) {
+  std::normal_distribution<double> normal(0.0, 1.0);
+  Targets result{n};
+  for (size_t i = 0; i < result.size(); ++i) {
+    result.data()[i] = normal(*gen);
+  }
+  return result;
+}
+
+// Targets whose components are all band limited (degree at most L).
+Targets band_limited_targets(const gsl::not_null<std::mt19937*> gen,
+                             const size_t l_max) {
+  const auto& ylm = ylm::get_spherepack_cache(l_max);
+  std::normal_distribution<double> normal(0.0, 1.0);
+  Targets result{ylm.physical_size()};
+  for (size_t c = 0; c < Targets::number_of_independent_components; ++c) {
+    DataVector coefficients{ylm.spectral_size(), 0.0};
+    for (ylm::SpherepackIterator iterator(l_max, l_max); iterator; ++iterator) {
+      coefficients[iterator()] = normal(*gen);
+    }
+    const DataVector values = ylm.spec_to_phys(coefficients);
+    std::copy(values.begin(), values.end(),
+              std::next(result.data(),
+                        static_cast<std::ptrdiff_t>(c * values.size())));
+  }
+  return result;
+}
+
+DataVector matrix_times(const Matrix& matrix, const DataVector& vector) {
+  DataVector result{matrix.rows(), 0.0};
+  for (size_t column = 0; column < matrix.columns(); ++column) {
+    for (size_t row = 0; row < matrix.rows(); ++row) {
+      result[row] += matrix(row, column) * vector[column];
+    }
+  }
+  return result;
+}
+
+double weighted_inner_product(const DataVector& lhs, const DataVector& rhs,
+                              const std::vector<double>& weights) {
+  double result = 0.0;
+  for (size_t i = 0; i < lhs.size(); ++i) {
+    result += weights[i % weights.size()] * lhs[i] * rhs[i];
+  }
+  return result;
+}
+
+Targets filtered(const Correction& correction, Targets targets,
+                 const Mesh<2>& face_mesh, const bool nonconforming = true) {
+  correction.dg_filter_boundary_correction(make_not_null(&targets), face_mesh,
+                                           nonconforming);
+  return targets;
+}
+
+// The hook on random spherical-harmonic faces against independently built
+// dense native filters of the five tensor kinds, with the trace-free,
+// idempotency and self-adjointness checks of each block.
+void test_shell_boundary_filter(const gsl::not_null<std::mt19937*> gen) {
+  for (const auto& [l_max, modes_to_kill] :
+       std::array<std::pair<size_t, size_t>, 5>{
+           {{2, 0}, {2, 2}, {4, 0}, {4, 4}, {5, 3}}}) {
+    CAPTURE(l_max);
+    CAPTURE(modes_to_kill);
+    const Mesh<2> face_mesh = shell_face_mesh(l_max);
+    const auto& ylm = ylm::get_spherepack_cache(l_max);
+    const std::vector<double>& weights = ylm.integration_weights();
+    const size_t n = face_mesh.number_of_grid_points();
+    REQUIRE(n == ylm.physical_size());
+    const Correction correction{ExternalCorrection::Upwind, 1.0, 1.0, 0.0,
+                                modes_to_kill};
+    const ReferenceFilters reference = reference_filters(l_max, modes_to_kill);
+    Targets input = random_targets(gen, n);
+    const Targets output = filtered(correction, input, face_mesh);
+    Targets second_input = random_targets(gen, n);
+    const Targets second_output = filtered(correction, second_input, face_mesh);
+    Targets twice = filtered(correction, output, face_mesh);
+    Targets output_copy = output;
+    Targets second_output_copy = second_output;
+
+    // The provisional potential-rate correction is never filtered.
+    CHECK(get<gp::Tags::PotentialRateTarget>(output) ==
+          get<gp::Tags::PotentialRateTarget>(input));
+
+    const auto input_blocks = filtered_blocks(make_not_null(&input));
+    const auto output_blocks = filtered_blocks(make_not_null(&output_copy));
+    const auto second_input_blocks =
+        filtered_blocks(make_not_null(&second_input));
+    const auto second_output_blocks =
+        filtered_blocks(make_not_null(&second_output_copy));
+    const auto twice_blocks = filtered_blocks(make_not_null(&twice));
+    size_t filtered_components = 0;
+    for (size_t b = 0; b < input_blocks.size(); ++b) {
+      const Kind kind = input_blocks[b].first;
+      CAPTURE(b);
+      const auto k = static_cast<size_t>(kind);
+      filtered_components += input_blocks[b].second.size();
+      const DataVector x = packed(input_blocks[b].second);
+      const DataVector y = packed(output_blocks[b].second);
+      const Matrix& packed_matrix = gsl::at(reference.packed, k);
+      const DataVector expected = matrix_times(packed_matrix, x);
+      // Relative to the input: the filtered data can be much smaller.
+      const auto custom = Approx::custom().epsilon(1.0e-12).scale(
+          std::max(max(abs(x)), max(abs(expected))));
+      CHECK_ITERABLE_CUSTOM_APPROX(y, expected, custom);
+      // Idempotent.
+      CHECK_ITERABLE_CUSTOM_APPROX(packed(twice_blocks[b].second), y, custom);
+      // Self-adjoint in the angular weights: an orthogonal projector.
+      const DataVector x2 = packed(second_input_blocks[b].second);
+      const DataVector y2 = packed(second_output_blocks[b].second);
+      CHECK(weighted_inner_product(y, x2, weights) ==
+            Approx::custom().epsilon(1.0e-12).scale(
+                std::sqrt(weighted_inner_product(x, x, weights) *
+                          weighted_inner_product(x2, x2, weights)))(
+                weighted_inner_product(x, y2, weights)));
+      // The filter changes the random data.
+      CHECK(max(abs(y - x)) > 1.0e-3);
+      if (kind == Kind::Symmetric or kind == Kind::RankThree) {
+        // The native filter of the decoded symmetric trace-free tensors
+        // stays trace free and agrees with the packed-slot path.
+        const auto& [decode, encode] = gsl::at(reference.packings, k);
+        const Matrix& storage = gsl::at(reference.storage, k);
+        DataVector decoded(decode.rows() * n, 0.0);
+        for (size_t s = 0; s < decode.rows(); ++s) {
+          for (size_t a = 0; a < decode.columns(); ++a) {
+            for (size_t j = 0; j < n; ++j) {
+              decoded[j + n * s] += decode(s, a) * x[j + n * a];
+            }
+          }
+        }
+        const DataVector native = matrix_times(storage, decoded);
+        DataVector redecoded(decode.rows() * n, 0.0);
+        for (size_t s = 0; s < decode.rows(); ++s) {
+          for (size_t a = 0; a < decode.columns(); ++a) {
+            for (size_t j = 0; j < n; ++j) {
+              redecoded[j + n * s] += decode(s, a) * y[j + n * a];
+            }
+          }
+        }
+        CHECK_ITERABLE_CUSTOM_APPROX(redecoded, native, custom);
+        const size_t pairs = kind == Kind::Symmetric ? 1 : 3;
+        for (size_t i = 0; i < pairs; ++i) {
+          DataVector trace{n, 0.0};
+          for (size_t d = 0; d < 3; ++d) {
+            const size_t s =
+                kind == Kind::Symmetric
+                    ? tnsr::ii<DataVector, 3>::structure::get_storage_index(d,
+                                                                            d)
+                    : tnsr::ijj<DataVector, 3>::structure::get_storage_index(
+                          i, d, d);
+            for (size_t j = 0; j < n; ++j) {
+              trace[j] += native[j + n * s];
+            }
+          }
+          CHECK(max(abs(trace)) < 1.0e-12 * max(abs(decoded)));
+        }
+      }
+    }
+    CHECK(filtered_components == 43);
+
+    // The native zero-band filter is not a bypass: on band-limited data the
+    // scalars are unchanged while the tensor content of total degree above L
+    // is removed from every other block.
+    if (modes_to_kill == 0) {
+      Targets limited = band_limited_targets(gen, l_max);
+      Targets limited_output = filtered(correction, limited, face_mesh);
+      const auto limited_blocks = filtered_blocks(make_not_null(&limited));
+      const auto limited_output_blocks =
+          filtered_blocks(make_not_null(&limited_output));
+      for (size_t b = 0; b < limited_blocks.size(); ++b) {
+        CAPTURE(b);
+        const DataVector x = packed(limited_blocks[b].second);
+        const DataVector y = packed(limited_output_blocks[b].second);
+        if (limited_blocks[b].first == Kind::Scalar) {
+          CHECK_ITERABLE_CUSTOM_APPROX(
+              y, x, Approx::custom().epsilon(1.0e-12).scale(max(abs(x))));
+        } else {
+          CHECK(max(abs(y - x)) > 1.0e-2 * max(abs(x)));
+        }
+      }
+    }
+  }
+}
+
+// The hook does nothing, bitwise, without a cutoff, on a conforming
+// connection or on a face that is not spherical-harmonic, and rejects a
+// cutoff above L and inconsistent face data.
+void test_shell_boundary_filter_activation(
+    const gsl::not_null<std::mt19937*> gen) {
+  const size_t l_max = 4;
+  const Mesh<2> face_mesh = shell_face_mesh(l_max);
+  const size_t n = face_mesh.number_of_grid_points();
+  const Targets input = random_targets(gen, n);
+  const Correction disabled{ExternalCorrection::Upwind, 1.0, 1.0, 0.0,
+                            std::nullopt};
+  const Correction enabled{ExternalCorrection::Upwind, 1.0, 1.0, 0.0,
+                           size_t{4}};
+  const Correction zero_bands{ExternalCorrection::Upwind, 1.0, 1.0, 0.0,
+                              size_t{0}};
+  CHECK(filtered(disabled, input, face_mesh) == input);
+  CHECK(filtered(enabled, input, face_mesh, false) == input);
+  CHECK(filtered(zero_bands, input, face_mesh, false) == input);
+  CHECK(filtered(enabled, input, face_mesh) != input);
+  CHECK(filtered(zero_bands, input, face_mesh) != input);
+  const Mesh<2> legendre_face{3, Spectral::Basis::Legendre,
+                              Spectral::Quadrature::GaussLobatto};
+  const Targets legendre_input = random_targets(gen, 9);
+  CHECK(filtered(enabled, legendre_input, legendre_face) == legendre_input);
+  // The cutoff is checked only where the filter acts.
+  const Correction too_many{ExternalCorrection::Upwind, 1.0, 1.0, 0.0,
+                            size_t{5}};
+  CHECK(filtered(too_many, input, face_mesh, false) == input);
+  CHECK(filtered(too_many, legendre_input, legendre_face) == legendre_input);
+  CHECK_THROWS_WITH(
+      filtered(too_many, input, face_mesh),
+      Catch::Matchers::ContainsSubstring(
+          "ShellBoundaryModesToKill = 5 of the shell boundary-correction "
+          "filter exceeds L = 4 of the face mesh"));
+  CHECK_THROWS_WITH(filtered(enabled, random_targets(gen, n + 1), face_mesh),
+                    Catch::Matchers::ContainsSubstring(
+                        "and " + std::to_string(n + 1) + " correction points"));
+  const Mesh<2> wrong_extents{
+      {{l_max + 1, 2 * l_max}},
+      {{Spectral::Basis::SphericalHarmonic,
+        Spectral::Basis::SphericalHarmonic}},
+      {{Spectral::Quadrature::Gauss, Spectral::Quadrature::Equiangular}}};
+  CHECK_THROWS_WITH(
+      filtered(enabled, random_targets(gen, (l_max + 1) * 2 * l_max),
+               wrong_extents),
+      Catch::Matchers::ContainsSubstring(
+          "requires a spherical-harmonic face mesh (L + 1, 2 L + 1)"));
+}
+
+// The time of one application of the hook to all 43 components of a face
+// with L = 10 and four removed bands.
+void test_shell_boundary_filter_timing(const gsl::not_null<std::mt19937*> gen) {
+  const size_t l_max = 10;
+  const Mesh<2> face_mesh = shell_face_mesh(l_max);
+  const Correction correction{ExternalCorrection::Upwind, 1.0, 1.0, 0.0,
+                              size_t{4}};
+  Targets targets = random_targets(gen, face_mesh.number_of_grid_points());
+  // Build the cached filters.
+  correction.dg_filter_boundary_correction(make_not_null(&targets), face_mesh,
+                                           true);
+#ifdef SPECTRE_DEBUG
+  const size_t repetitions = 10;
+#else
+  const size_t repetitions = 1000;
+#endif
+  const auto start = std::chrono::steady_clock::now();
+  for (size_t r = 0; r < repetitions; ++r) {
+    correction.dg_filter_boundary_correction(make_not_null(&targets), face_mesh,
+                                             true);
+  }
+  const auto stop = std::chrono::steady_clock::now();
+  const double ns_per_application =
+      static_cast<double>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(stop - start)
+              .count()) /
+      static_cast<double>(repetitions);
+  Parallel::printf(
+      "UpwindGradientProjection shell boundary filter (L = 10, 4 removed "
+      "bands, all 43 components): %.0f ns per application (checksum %.6e)\n",
+      ns_per_application, targets.data()[0]);
+}
+
 void test_options_and_errors(const gsl::not_null<std::mt19937*> gen) {
   register_factory_classes_with_charm<Metavariables>();
   const auto created =
@@ -685,19 +1201,22 @@ void test_options_and_errors(const gsl::not_null<std::mt19937*> gen) {
           "  ExternalCorrection: DoubledDissipation\n"
           "  PropagatingScalarPenalty: 0.5\n"
           "  StationaryGradientScalarPenalty: 0.25\n"
-          "  GammaHatMinusBScalarPenalty: 0.75\n");
+          "  GammaHatMinusBScalarPenalty: 0.75\n"
+          "  ShellBoundaryModesToKill: 4\n");
   const auto* const typed = dynamic_cast<const Correction*>(created.get());
   REQUIRE(typed != nullptr);
   CHECK(typed->external_correction() == ExternalCorrection::DoubledDissipation);
   CHECK(typed->propagating_scalar_penalty() == 0.5);
   CHECK(typed->stationary_gradient_scalar_penalty() == 0.25);
   CHECK(typed->gamma_hat_minus_b_scalar_penalty() == 0.75);
+  CHECK(typed->shell_boundary_modes_to_kill() == std::optional<size_t>{4});
   const auto serialized = serialize_and_deserialize(*typed);
   CHECK(serialized.external_correction() ==
         ExternalCorrection::DoubledDissipation);
   CHECK(serialized.propagating_scalar_penalty() == 0.5);
   CHECK(serialized.stationary_gradient_scalar_penalty() == 0.25);
   CHECK(serialized.gamma_hat_minus_b_scalar_penalty() == 0.75);
+  CHECK(serialized.shell_boundary_modes_to_kill() == std::optional<size_t>{4});
   const auto clone = typed->get_clone();
   const auto& typed_clone = dynamic_cast<const Correction&>(*clone);
   CHECK(typed_clone.external_correction() ==
@@ -705,6 +1224,57 @@ void test_options_and_errors(const gsl::not_null<std::mt19937*> gen) {
   CHECK(typed_clone.propagating_scalar_penalty() == 0.5);
   CHECK(typed_clone.stationary_gradient_scalar_penalty() == 0.25);
   CHECK(typed_clone.gamma_hat_minus_b_scalar_penalty() == 0.75);
+  CHECK(typed_clone.shell_boundary_modes_to_kill() == std::optional<size_t>{4});
+  // The serialized and cloned cutoffs filter like the original.
+  {
+    const Mesh<2> face_mesh = shell_face_mesh(4);
+    const Targets input =
+        random_targets(gen, face_mesh.number_of_grid_points());
+    const Targets expected = filtered(*typed, input, face_mesh);
+    CHECK(expected != input);
+    CHECK(filtered(serialized, input, face_mesh) == expected);
+    CHECK(filtered(typed_clone, input, face_mesh) == expected);
+  }
+  // None and zero removed bands parse and are distinct; None survives
+  // serialization.
+  for (const auto& [value, expected] :
+       std::array<std::pair<std::string, std::optional<size_t>>, 2>{
+           {{"None", std::nullopt}, {"0", size_t{0}}}}) {
+    CAPTURE(value);
+    const auto parsed = TestHelpers::test_creation<
+        std::unique_ptr<evolution::BoundaryCorrection>, Metavariables>(
+        "UpwindGradientProjection:\n"
+        "  ExternalCorrection: Upwind\n"
+        "  PropagatingScalarPenalty: 1.0\n"
+        "  StationaryGradientScalarPenalty: 1.0\n"
+        "  GammaHatMinusBScalarPenalty: 0.0\n"
+        "  ShellBoundaryModesToKill: " +
+        value + "\n");
+    const auto& parsed_typed = dynamic_cast<const Correction&>(*parsed);
+    CHECK(parsed_typed.shell_boundary_modes_to_kill() == expected);
+    CHECK(serialize_and_deserialize(parsed_typed)
+              .shell_boundary_modes_to_kill() == expected);
+  }
+  // The option is required: an input without it fails to parse.
+  CHECK_THROWS_WITH(
+      (TestHelpers::test_creation<
+          std::unique_ptr<evolution::BoundaryCorrection>, Metavariables>(
+          "UpwindGradientProjection:\n"
+          "  ExternalCorrection: Upwind\n"
+          "  PropagatingScalarPenalty: 1.0\n"
+          "  StationaryGradientScalarPenalty: 1.0\n"
+          "  GammaHatMinusBScalarPenalty: 0.0\n")),
+      Catch::Matchers::ContainsSubstring("ShellBoundaryModesToKill"));
+  CHECK_THROWS_WITH(
+      (TestHelpers::test_creation<
+          std::unique_ptr<evolution::BoundaryCorrection>, Metavariables>(
+          "UpwindGradientProjection:\n"
+          "  ExternalCorrection: Upwind\n"
+          "  PropagatingScalarPenalty: 1.0\n"
+          "  StationaryGradientScalarPenalty: 1.0\n"
+          "  GammaHatMinusBScalarPenalty: 0.0\n"
+          "  ShellBoundaryModesToKill: -1\n")),
+      Catch::Matchers::ContainsSubstring("ShellBoundaryModesToKill"));
 
   // The remaining enum values parse; every option is required and every
   // penalty has a zero lower bound.
@@ -715,7 +1285,8 @@ void test_options_and_errors(const gsl::not_null<std::mt19937*> gen) {
         "  ExternalCorrection: Central\n"
         "  PropagatingScalarPenalty: 0.5\n"
         "  StationaryGradientScalarPenalty: 0.5\n"
-        "  GammaHatMinusBScalarPenalty: 0.0\n");
+        "  GammaHatMinusBScalarPenalty: 0.0\n"
+        "  ShellBoundaryModesToKill: None\n");
     const auto& central_typed = dynamic_cast<const Correction&>(*central);
     CHECK(central_typed.external_correction() == ExternalCorrection::Central);
     CHECK(central_typed.stationary_gradient_scalar_penalty() == 0.5);
@@ -727,7 +1298,8 @@ void test_options_and_errors(const gsl::not_null<std::mt19937*> gen) {
                 "  ExternalCorrection: Upwind\n"
                 "  PropagatingScalarPenalty: 1.0\n"
                 "  StationaryGradientScalarPenalty: 1.0\n"
-                "  GammaHatMinusBScalarPenalty: 0.0\n"))
+                "  GammaHatMinusBScalarPenalty: 0.0\n"
+                "  ShellBoundaryModesToKill: None\n"))
             .external_correction() == ExternalCorrection::Upwind);
 
   CHECK_THROWS_WITH(
@@ -737,7 +1309,8 @@ void test_options_and_errors(const gsl::not_null<std::mt19937*> gen) {
           "  ExternalCorrection: Upwind\n"
           "  PropagatingScalarPenalty: -0.5\n"
           "  StationaryGradientScalarPenalty: 1.0\n"
-          "  GammaHatMinusBScalarPenalty: 0.0\n")),
+          "  GammaHatMinusBScalarPenalty: 0.0\n"
+          "  ShellBoundaryModesToKill: None\n")),
       Catch::Matchers::ContainsSubstring(
           "Value -0.5 is below the lower bound of 0"));
   CHECK_THROWS_WITH(
@@ -747,7 +1320,8 @@ void test_options_and_errors(const gsl::not_null<std::mt19937*> gen) {
           "  ExternalCorrection: Upwind\n"
           "  PropagatingScalarPenalty: 1.0\n"
           "  StationaryGradientScalarPenalty: -0.75\n"
-          "  GammaHatMinusBScalarPenalty: 0.0\n")),
+          "  GammaHatMinusBScalarPenalty: 0.0\n"
+          "  ShellBoundaryModesToKill: None\n")),
       Catch::Matchers::ContainsSubstring(
           "Value -0.75 is below the lower bound of 0"));
   CHECK_THROWS_WITH(
@@ -757,7 +1331,8 @@ void test_options_and_errors(const gsl::not_null<std::mt19937*> gen) {
           "  ExternalCorrection: Upwind\n"
           "  PropagatingScalarPenalty: 1.0\n"
           "  StationaryGradientScalarPenalty: 1.0\n"
-          "  GammaHatMinusBScalarPenalty: -0.25\n")),
+          "  GammaHatMinusBScalarPenalty: -0.25\n"
+          "  ShellBoundaryModesToKill: None\n")),
       Catch::Matchers::ContainsSubstring(
           "Value -0.25 is below the lower bound of 0"));
   CHECK_THROWS_WITH(
@@ -767,11 +1342,12 @@ void test_options_and_errors(const gsl::not_null<std::mt19937*> gen) {
           "  ExternalCorrection: OneSided\n"
           "  PropagatingScalarPenalty: 1.0\n"
           "  StationaryGradientScalarPenalty: 1.0\n"
-          "  GammaHatMinusBScalarPenalty: 0.0\n")),
+          "  GammaHatMinusBScalarPenalty: 0.0\n"
+          "  ShellBoundaryModesToKill: None\n")),
       Catch::Matchers::ContainsSubstring(
           "Failed to convert \"OneSided\" to ExternalCorrection"));
   CHECK_THROWS_WITH(
-      (Correction{ExternalCorrection::Upwind, 1.0, -0.5, 0.0}),
+      (Correction{ExternalCorrection::Upwind, 1.0, -0.5, 0.0, std::nullopt}),
       Catch::Matchers::ContainsSubstring(
           "The scalar jump penalties must be finite and nonnegative"));
 
@@ -800,5 +1376,8 @@ SPECTRE_TEST_CASE(
   test_group_penalties(make_not_null(&gen));
   test_unequal_conformal_factors(make_not_null(&gen));
   test_package_errors(make_not_null(&gen));
+  test_shell_boundary_filter(make_not_null(&gen));
+  test_shell_boundary_filter_activation(make_not_null(&gen));
+  test_shell_boundary_filter_timing(make_not_null(&gen));
   test_options_and_errors(make_not_null(&gen));
 }

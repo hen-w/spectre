@@ -1439,6 +1439,18 @@ struct ApplyBoundaryCorrections {
                       "the boundary corrections are lifted into a separate "
                       "target buffer; use the None filter.");
                 }
+                // An optional system-specific filter of the assembled
+                // correction before it is lifted.
+                if constexpr (requires {
+                                typed_boundary_correction
+                                    ->dg_filter_boundary_correction(
+                                        make_not_null(&dt_boundary_correction),
+                                        face_mesh, true);
+                              }) {
+                  typed_boundary_correction->dg_filter_boundary_correction(
+                      make_not_null(&dt_boundary_correction), face_mesh,
+                      not element.neighbors().at(direction).are_conforming());
+                }
                 (void)face_inv_jac_grid_to_inertial;
                 (void)face_jac_grid_to_inertial;
                 (void)filter_ptr;

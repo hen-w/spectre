@@ -16,6 +16,7 @@
 #include "Evolution/Systems/Ccz4/GradientProjection/Tags.hpp"
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
+#include "Options/Auto.hpp"
 #include "Options/String.hpp"
 #include "Utilities/Serialization/CharmPupable.hpp"
 #include "Utilities/TMPL.hpp"
@@ -23,6 +24,8 @@
 /// \cond
 template <size_t Dim>
 class Direction;
+template <size_t Dim>
+class Mesh;
 namespace gsl {
 template <typename T>
 class not_null;
@@ -107,6 +110,32 @@ std::ostream& operator<<(std::ostream& os,
  * Only the strong formulation is supported. The physical fields receive no
  * correction: their rates are computed from the corrected targets by
  * `FinalizeTimeDerivative`.
+ *
+ * On the spherical-harmonic side of an internal face whose neighbor
+ * connection is not conforming in the block topology (a wedge-shell
+ * interface), `dg_filter_boundary_correction` filters the assembled
+ * correction before it is lifted, when `ShellBoundaryModesToKill` has a
+ * value \f$k\f$. It applies the native hard tensor spherical-harmonic filter
+ * \f$I+\Delta\f$, with \f$\Delta\f$ from `ylm::TensorYlm::fill_filter` with
+ * Spherepack normalization, \f$k\f$ removed bands and no exponential roll-off,
+ * to the Spherepack coefficients of the Cartesian components of each tensor
+ * of the velocity and gradient corrections, with no mass or radial weight:
+ *
+ * - \f$a_t\f$: symmetric rank two (`tnsr::ii` storage), through `stf_decode`
+ *   and `stf_encode`, which preserve the trace-free subspace;
+ * - \f$K_t\f$, \f$\Theta_t\f$: scalars;
+ * - \f$\hat\Gamma_t\f$, \f$b_t\f$, \f$(D_i\phi)_t\f$, \f$(D_i\alpha)_t\f$:
+ *   vectors;
+ * - \f$(D_iH)_t\f$: rank three, symmetric in the last two indices
+ *   (`tnsr::ijj` storage), the trace-free pair through `stf_decode` and
+ *   `stf_encode`;
+ * - \f$(D_i\beta^j)_t\f$: general rank two (`tnsr::ij` storage), not
+ *   symmetrized.
+ *
+ * The derivative index of the gradients is a spatial tensor index, the
+ * chart index is not. The potential-rate correction is never filtered. With
+ * zero removed bands the filter still removes the tensor content of total
+ * degree above \f$L\f$; without a value the hook does nothing.
  */
 class UpwindGradientProjection final : public evolution::BoundaryCorrection {
  public:
@@ -144,10 +173,21 @@ class UpwindGradientProjection final : public evolution::BoundaryCorrection {
         "recovers the previous componentwise scalar penalty."};
     static type lower_bound() { return 0.0; }
   };
+  struct ShellBoundaryModesToKill {
+    using type = Options::Auto<size_t, Options::AutoLabel::None>;
+    static constexpr Options::String help = {
+        "The number of top angular bands removed by the native tensor "
+        "spherical-harmonic filter applied to the velocity and gradient "
+        "corrections on the spherical-harmonic side of a wedge-shell "
+        "interface before they are lifted. 0 is not a bypass: it still "
+        "removes the tensor content of total degree above L. 'None' disables "
+        "this filter. It must not exceed L of a filtered face."};
+  };
 
   using options =
       tmpl::list<ExternalCorrectionOption, PropagatingScalarPenalty,
-                 StationaryGradientScalarPenalty, GammaHatMinusBScalarPenalty>;
+                 StationaryGradientScalarPenalty, GammaHatMinusBScalarPenalty,
+                 ShellBoundaryModesToKill>;
   static constexpr Options::String help = {
       "Full first-order characteristic upwind correction of the CCZ4 "
       "gradient-projection targets with group scalar jump penalties on "
@@ -157,7 +197,8 @@ class UpwindGradientProjection final : public evolution::BoundaryCorrection {
   UpwindGradientProjection(ExternalCorrection external_correction,
                            double propagating_scalar_penalty,
                            double stationary_gradient_scalar_penalty,
-                           double gamma_hat_minus_b_scalar_penalty);
+                           double gamma_hat_minus_b_scalar_penalty,
+                           std::optional<size_t> shell_boundary_modes_to_kill);
   UpwindGradientProjection(const UpwindGradientProjection&) = default;
   UpwindGradientProjection& operator=(const UpwindGradientProjection&) =
       default;
@@ -185,6 +226,9 @@ class UpwindGradientProjection final : public evolution::BoundaryCorrection {
   }
   double gamma_hat_minus_b_scalar_penalty() const {
     return gamma_hat_minus_b_scalar_penalty_;
+  }
+  const std::optional<size_t>& shell_boundary_modes_to_kill() const {
+    return shell_boundary_modes_to_kill_;
   }
 
   using dg_package_field_tags =
@@ -233,6 +277,21 @@ class UpwindGradientProjection final : public evolution::BoundaryCorrection {
       const tnsr::i<DataVector, 3>& /*normal_covector_ext*/,
       dg::Formulation dg_formulation) const;
 
+  /*!
+   * \brief Filter the assembled correction of an internal face before it is
+   * lifted, see the class documentation.
+   *
+   * \details Does nothing unless `ShellBoundaryModesToKill` has a value,
+   * `has_nonconforming_block_connection` is true and both bases of
+   * `face_mesh` are spherical harmonics. It is an `ERROR` if it would act
+   * with more removed bands than \f$L\f$ of the face, or on a face mesh that
+   * is not \f$(L+1,2L+1)\f$ with Gauss and equiangular quadratures or that
+   * does not match the number of points of `corrections`.
+   */
+  void dg_filter_boundary_correction(
+      gsl::not_null<Tags::RhsTargets::type*> corrections,
+      const Mesh<2>& face_mesh, bool has_nonconforming_block_connection) const;
+
  private:
   ExternalCorrection external_correction_ = ExternalCorrection::Upwind;
   double propagating_scalar_penalty_ =
@@ -241,6 +300,7 @@ class UpwindGradientProjection final : public evolution::BoundaryCorrection {
       std::numeric_limits<double>::signaling_NaN();
   double gamma_hat_minus_b_scalar_penalty_ =
       std::numeric_limits<double>::signaling_NaN();
+  std::optional<size_t> shell_boundary_modes_to_kill_{};
 };
 }  // namespace Ccz4::GradientProjection::BoundaryCorrections
 

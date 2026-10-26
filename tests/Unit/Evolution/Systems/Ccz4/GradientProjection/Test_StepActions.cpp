@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -19,6 +20,7 @@
 #include "DataStructures/DataBox/PrefixHelpers.hpp"
 #include "DataStructures/DataBox/Prefixes.hpp"
 #include "DataStructures/DataVector.hpp"
+#include "DataStructures/Index.hpp"
 #include "DataStructures/SliceVariables.hpp"
 #include "DataStructures/TaggedTuple.hpp"
 #include "DataStructures/Tensor/EagerMath/Determinant.hpp"
@@ -27,6 +29,7 @@
 #include "Domain/BoundaryConditions/Periodic.hpp"
 #include "Domain/CoordinateMaps/Distribution.hpp"
 #include "Domain/Creators/DomainCreator.hpp"
+#include "Domain/Creators/NonconformingSphericalShells.hpp"
 #include "Domain/Creators/Rectilinear.hpp"
 #include "Domain/Creators/RegisterDerivedWithCharm.hpp"
 #include "Domain/Creators/Sphere.hpp"
@@ -37,6 +40,8 @@
 #include "Domain/Creators/Tags/InitialRefinementLevels.hpp"
 #include "Domain/DomainHelpers.hpp"
 #include "Domain/FunctionsOfTime/FunctionOfTime.hpp"
+#include "Domain/Structure/Direction.hpp"
+#include "Domain/Structure/DirectionalId.hpp"
 #include "Domain/Structure/ElementId.hpp"
 #include "Domain/Structure/SegmentId.hpp"
 #include "Domain/Tags.hpp"
@@ -48,6 +53,9 @@
 #include "Evolution/DiscontinuousGalerkin/InboxTags.hpp"
 #include "Evolution/DiscontinuousGalerkin/Initialization/Mortars.hpp"
 #include "Evolution/DiscontinuousGalerkin/Initialization/QuadratureTag.hpp"
+#include "Evolution/DiscontinuousGalerkin/MortarData.hpp"
+#include "Evolution/DiscontinuousGalerkin/MortarTags.hpp"
+#include "Evolution/DiscontinuousGalerkin/NormalVectorTags.hpp"
 #include "Evolution/Initialization/DgDomain.hpp"
 #include "Evolution/Systems/Ccz4/BoundaryConditions/BoundaryCondition.hpp"
 #include "Evolution/Systems/Ccz4/Ccz4WrappedGr.hpp"
@@ -71,10 +79,14 @@
 #include "Framework/SetupLocalPythonEnvironment.hpp"
 #include "Framework/TestHelpers.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
+#include "NumericalAlgorithms/DiscontinuousGalerkin/LiftFlux.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Tags/Formulation.hpp"
 #include "NumericalAlgorithms/LinearOperators/Filters/None.hpp"
 #include "NumericalAlgorithms/LinearOperators/Filters/Tag.hpp"
 #include "NumericalAlgorithms/LinearOperators/PartialDerivatives.tpp"
+#include "NumericalAlgorithms/Spectral/Basis.hpp"
+#include "NumericalAlgorithms/Spectral/Mesh.hpp"
+#include "NumericalAlgorithms/Spectral/Quadrature.hpp"
 #include "Options/Protocols/FactoryCreation.hpp"
 #include "Parallel/Phase.hpp"
 #include "Parallel/PhaseDependentActionList.hpp"
@@ -219,6 +231,88 @@ struct RecordState : public Event {
 std::vector<std::pair<double, Vars>> RecordState::calls{};
 PUP::able::PUP_ID RecordState::my_PUP_ID = 0;  // NOLINT
 
+// The GP boundary correction with a recording shim of the pre-lift filter
+// hook: every call records its face mesh, connection flag and number of
+// points, then forwards to the production hook.
+class RecordingCorrection final : public evolution::BoundaryCorrection {
+ public:
+  struct Call {
+    Mesh<2> face_mesh;
+    bool has_nonconforming_block_connection;
+    size_t number_of_points;
+  };
+
+  RecordingCorrection() = default;
+  explicit RecordingCorrection(
+      gp::BoundaryCorrections::UpwindGradientProjection correction)
+      : correction_(std::move(correction)) {}
+  explicit RecordingCorrection(CkMigrateMessage* const msg)
+      : BoundaryCorrection(msg) {}
+  using PUP::able::register_constructor;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+  WRAPPED_PUPable_decl_template(RecordingCorrection);  // NOLINT
+#pragma GCC diagnostic pop
+
+  // NOLINTNEXTLINE(google-runtime-references)
+  void pup(PUP::er& p) override {
+    BoundaryCorrection::pup(p);
+    p | correction_;
+  }
+
+  std::unique_ptr<BoundaryCorrection> get_clone() const override {
+    return std::make_unique<RecordingCorrection>(*this);
+  }
+
+  using Upwind = gp::BoundaryCorrections::UpwindGradientProjection;
+  using dg_package_field_tags = Upwind::dg_package_field_tags;
+  using dg_package_data_temporary_tags = Upwind::dg_package_data_temporary_tags;
+  using dg_package_data_volume_tags = Upwind::dg_package_data_volume_tags;
+  using dg_boundary_terms_volume_tags = Upwind::dg_boundary_terms_volume_tags;
+  using dg_auxiliary_package_field_tags =
+      Upwind::dg_auxiliary_package_field_tags;
+  using dg_auxiliary_package_data_temporary_tags =
+      Upwind::dg_auxiliary_package_data_temporary_tags;
+  using dg_auxiliary_package_data_volume_tags =
+      Upwind::dg_auxiliary_package_data_volume_tags;
+  using dg_auxiliary_boundary_terms_volume_tags =
+      Upwind::dg_auxiliary_boundary_terms_volume_tags;
+
+  template <typename... Args>
+    requires requires(const Upwind& correction, const Args&... args) {
+      correction.dg_package_data(args...);
+    }
+  double dg_package_data(const Args&... args) const {
+    return correction_.dg_package_data(args...);
+  }
+
+  template <bool ForExternalBoundary, typename... Args>
+    requires requires(const Upwind& correction, const Args&... args) {
+      correction.template dg_boundary_terms<ForExternalBoundary>(args...);
+    }
+  void dg_boundary_terms(const Args&... args) const {
+    correction_.dg_boundary_terms<ForExternalBoundary>(args...);
+  }
+
+  void dg_filter_boundary_correction(
+      const gsl::not_null<gp::Tags::RhsTargets::type*> corrections,
+      const Mesh<2>& face_mesh,
+      const bool has_nonconforming_block_connection) const {
+    calls.push_back({face_mesh, has_nonconforming_block_connection,
+                     corrections->number_of_grid_points()});
+    correction_.dg_filter_boundary_correction(
+        corrections, face_mesh, has_nonconforming_block_connection);
+  }
+
+  static std::vector<Call> calls;
+
+ private:
+  Upwind correction_{};
+};
+
+std::vector<RecordingCorrection::Call> RecordingCorrection::calls{};
+PUP::able::PUP_ID RecordingCorrection::my_PUP_ID = 0;  // NOLINT
+
 template <typename Metavariables>
 struct Component {
   using metavariables = Metavariables;
@@ -267,9 +361,9 @@ struct Metavariables {
   struct factory_creation
       : tt::ConformsTo<Options::protocols::FactoryCreation> {
     using factory_classes = tmpl::map<
-        tmpl::pair<
-            evolution::BoundaryCorrection,
-            tmpl::list<gp::BoundaryCorrections::UpwindGradientProjection>>,
+        tmpl::pair<evolution::BoundaryCorrection,
+                   tmpl::list<gp::BoundaryCorrections::UpwindGradientProjection,
+                              RecordingCorrection>>,
         tmpl::pair<
             Ccz4::BoundaryConditions::BoundaryCondition,
             tmpl::list<gp::BoundaryConditions::DirichletAnalytic,
@@ -596,8 +690,8 @@ void emplace_element(
     const DomainCreator<3>& creator, const ElementId<3>& id,
     const TimeStepId& time_step_id, const TimeStepId& next_time_step_id,
     const TimeDelta& step, const double kappa_1, const DataVector& eta,
-    EventsAndDenseTriggers::ConstructionType events_and_dense_triggers) {
-  const size_t n = number_of_points;
+    EventsAndDenseTriggers::ConstructionType events_and_dense_triggers,
+    const size_t n = number_of_points) {
   ActionTesting::emplace_array_component_and_initialize<component>(
       runner, ActionTesting::NodeId{0}, ActionTesting::LocalCoreId{0}, id,
       {creator.initial_extents(), creator.initial_refinement_levels(),
@@ -646,7 +740,8 @@ void test_step_actions(const bool damped) {
   RecordState::calls.clear();
   const size_t order = 3;
   const gp::BoundaryCorrections::UpwindGradientProjection correction{
-      gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0};
+      gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0,
+      std::nullopt};
   MockRuntimeSystem runner{
       cache(order, brick(0), correction, top_shell_filter_gain),
       MutableCacheTuple{}};
@@ -1198,7 +1293,7 @@ void test_linearized_operator(const gsl::not_null<std::mt19937*> gen) {
     CAPTURE(sigma);
     const gp::BoundaryCorrections::UpwindGradientProjection correction{
         gp::BoundaryCorrections::ExternalCorrection::Upwind, sigma, sigma,
-        sigma};
+        sigma, std::nullopt};
     const auto creator = brick(refinement_x);
     MockRuntimeSystem runner{cache(3, creator, correction),
                              MutableCacheTuple{}};
@@ -1256,7 +1351,7 @@ void test_linearized_operator_about_background(
     CAPTURE(sigma);
     const gp::BoundaryCorrections::UpwindGradientProjection correction{
         gp::BoundaryCorrections::ExternalCorrection::Upwind, sigma, sigma,
-        sigma};
+        sigma, std::nullopt};
     const auto creator = brick(refinement_x);
     MockRuntimeSystem runner{cache(3, creator, correction),
                              MutableCacheTuple{}};
@@ -1311,7 +1406,8 @@ void test_sphere_minkowski(const double eta) {
   CAPTURE(eta);
   const auto creator = sphere();
   const gp::BoundaryCorrections::UpwindGradientProjection correction{
-      gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0};
+      gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0,
+      std::nullopt};
   MockRuntimeSystem runner{cache(3, creator, correction), MutableCacheTuple{}};
   const auto ids = sphere_elements(make_not_null(&runner), creator, 0.3, eta);
   const size_t total = 6 * number_of_points;
@@ -1335,7 +1431,8 @@ void test_sphere_minkowski(const double eta) {
 void test_external_lift_isolation(const gsl::not_null<std::mt19937*> gen) {
   const auto creator = sphere();
   const gp::BoundaryCorrections::UpwindGradientProjection correction{
-      gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0};
+      gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0,
+      std::nullopt};
   MockRuntimeSystem runner{cache(3, creator, correction), MutableCacheTuple{}};
   const auto ids = sphere_elements(make_not_null(&runner), creator, 0.3, 0.4);
   const size_t n = number_of_points;
@@ -1427,7 +1524,7 @@ void test_sphere_linearized(const gsl::not_null<std::mt19937*> gen) {
         external_factor == 1.0
             ? gp::BoundaryCorrections::ExternalCorrection::Upwind
             : gp::BoundaryCorrections::ExternalCorrection::DoubledDissipation,
-        sigma, sigma, sigma};
+        sigma, sigma, sigma, std::nullopt};
     MockRuntimeSystem runner{cache(3, creator, correction),
                              MutableCacheTuple{}};
     const auto ids =
@@ -1479,6 +1576,307 @@ void test_sphere_linearized(const gsl::not_null<std::mt19937*> gen) {
     CHECK(other_error < 1.0e-8 * scale);
   }
 }
+// A random chart state about Minkowski space with perturbations of size
+// `size`, as physical fields.
+Vars random_state(const gsl::not_null<std::mt19937*> gen, const size_t n,
+                  const double size) {
+  std::normal_distribution<double> normal(0.0, size);
+  PotentialChart u{n};
+  VelocityChart w{n};
+  for (auto& component : u) {
+    for (auto& value : component) {
+      value = normal(*gen);
+    }
+  }
+  for (auto& component : w) {
+    for (auto& value : component) {
+      value = normal(*gen);
+    }
+  }
+  u.get(gp::PotentialIndex::conformal_factor) += 1.0;
+  u.get(gp::PotentialIndex::lapse) += 1.0;
+  return physical_from_chart(u, w);
+}
+
+// The pre-lift hook of the boundary correction is called exactly once per
+// mortar in ApplyBoundaryCorrections, with the face mesh and the conforming
+// flag of the block connection: on the conforming faces of two periodic brick
+// elements it is told so, and the corrections lifted into the targets are
+// bitwise those without the hook, even with an active shell cutoff.
+void test_hook_invocation_conforming(const gsl::not_null<std::mt19937*> gen) {
+  constexpr size_t refinement_x = 1;
+  const std::vector<ElementId<3>> ids{element_id(refinement_x, 0),
+                                      element_id(refinement_x, 1)};
+  const auto creator = brick(refinement_x);
+  const gp::BoundaryCorrections::UpwindGradientProjection plain{
+      gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 0.0,
+      std::nullopt};
+  const RecordingCorrection recording{
+      gp::BoundaryCorrections::UpwindGradientProjection{
+          gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 0.0,
+          size_t{2}}};
+  std::vector<Vars> states{};
+  for (size_t e = 0; e < ids.size(); ++e) {
+    states.push_back(random_state(gen, number_of_points, 1.0e-2));
+  }
+  const auto corrected_targets = [&creator, &ids, &states](
+                                     const evolution::BoundaryCorrection&
+                                         correction,
+                                     const bool recorded) {
+    MockRuntimeSystem runner{cache(3, creator, correction),
+                             MutableCacheTuple{}};
+    const Slab slab{0.0, 0.03};
+    for (const auto& id : ids) {
+      emplace_element(make_not_null(&runner), creator, id, TimeStepId{},
+                      TimeStepId{true, 0, slab.start()}, slab.duration(), 0.3,
+                      DataVector{number_of_points, 0.1}, {});
+    }
+    ActionTesting::set_phase(make_not_null(&runner), Parallel::Phase::Evolve);
+    advance_time(make_not_null(&runner), ids);
+    for (size_t e = 0; e < ids.size(); ++e) {
+      auto& box =
+          ActionTesting::get_databox<component>(make_not_null(&runner), ids[e]);
+      db::mutate<variables_tag>(
+          [&states, e](const gsl::not_null<Vars*> vars) { *vars = states[e]; },
+          make_not_null(&box));
+      runner.force_next_action_to_be<
+          component, ::Actions::MutateApply<gp::ComputeVolumeTargets>>(ids[e]);
+    }
+    // ComputeVolumeTargets and ComputeTimeDerivative on all elements.
+    for (size_t i = 0; i < 2; ++i) {
+      for (const auto& id : ids) {
+        REQUIRE(ActionTesting::next_action_if_ready<component>(
+            make_not_null(&runner), id));
+      }
+    }
+    std::vector<Targets> result{};
+    for (const auto& id : ids) {
+      RecordingCorrection::calls.clear();
+      REQUIRE(ActionTesting::next_action_if_ready<component>(
+          make_not_null(&runner), id));
+      if (recorded) {
+        // Six periodic conforming faces, one mortar each.
+        REQUIRE(RecordingCorrection::calls.size() == 6);
+        for (const auto& call : RecordingCorrection::calls) {
+          CHECK_FALSE(call.has_nonconforming_block_connection);
+          CHECK(call.face_mesh == Mesh<2>{3, Spectral::Basis::Legendre,
+                                          Spectral::Quadrature::GaussLobatto});
+          CHECK(call.number_of_points == 9);
+        }
+      } else {
+        CHECK(RecordingCorrection::calls.empty());
+      }
+      result.push_back(get_tag<targets_tag>(runner, id));
+    }
+    return result;
+  };
+  const auto expected = corrected_targets(plain, false);
+  const auto actual = corrected_targets(recording, true);
+  REQUIRE(actual.size() == expected.size());
+  for (size_t e = 0; e < actual.size(); ++e) {
+    CHECK(actual[e] == expected[e]);
+  }
+}
+
+// On the spherical-harmonic shell of a wedge-shell domain, the single host
+// mortar of the six nonconforming wedge neighbors calls the hook exactly once
+// with the nonconforming flag and the shell face mesh, before the lift: the
+// lifted targets with ShellBoundaryModesToKill = 4 differ from those with
+// None exactly by the lift of the filtered minus the unfiltered correction
+// on the inner face, the potential-rate input is bitwise unchanged, and no
+// other point changes. The mortar data are set directly (the wedges are not
+// emplaced), and the action's mutator is applied to the shell's DataBox.
+void test_hook_invocation_wedge_shell(const gsl::not_null<std::mt19937*> gen) {
+  const auto analytic = []() {
+    return std::make_unique<gp::BoundaryConditions::DirichletAnalytic>(
+        std::make_unique<Minkowski>());
+  };
+  const size_t l_max = 4;
+  const size_t radial_points = 3;
+  const domain::creators::NonconformingSphericalShells creator{
+      1.0,
+      1.5,
+      2.0,
+      std::vector<double>{},
+      std::vector<double>{},
+      std::array<std::vector<domain::CoordinateMaps::Distribution>, 2>{
+          {{domain::CoordinateMaps::Distribution::Linear},
+           {domain::CoordinateMaps::Distribution::Linear}}},
+      size_t{0},
+      size_t{0},
+      radial_points,
+      l_max,
+      size_t{3},
+      domain::creators::NonconformingSphericalShells::Excision{analytic()},
+      false,
+      analytic()};
+  const ElementId<3> shell_id{6};
+  const Mesh<2> shell_face{
+      {{l_max + 1, 2 * l_max + 1}},
+      {{Spectral::Basis::SphericalHarmonic,
+        Spectral::Basis::SphericalHarmonic}},
+      {{Spectral::Quadrature::Gauss, Spectral::Quadrature::Equiangular}}};
+  const size_t face_points = shell_face.number_of_grid_points();
+  const size_t n = radial_points * face_points;
+  const Index<3> extents{radial_points, l_max + 1, 2 * l_max + 1};
+  const DirectionalId<3> mortar_id{Direction<3>::lower_xi(), shell_id};
+  const Vars state = random_state(gen, n, 1.0e-2);
+  const Vars neighbor_face_state = random_state(gen, face_points, 1.0e-2);
+  const Targets initial_targets = [&gen, n]() {
+    std::normal_distribution<double> normal(0.0, 1.0);
+    Targets result{n};
+    for (size_t i = 0; i < result.size(); ++i) {
+      result.data()[i] = normal(*gen);
+    }
+    return result;
+  }();
+  Scalar<DataVector> normal_magnitude{face_points};
+  {
+    std::uniform_real_distribution<double> positive(0.5, 1.5);
+    for (auto& value : get(normal_magnitude)) {
+      value = positive(*gen);
+    }
+  }
+  const auto owning_copy = [](const PackagedVars& packaged) {
+    DataVector result(packaged.size());
+    std::copy(packaged.data(),
+              std::next(packaged.data(),
+                        static_cast<std::ptrdiff_t>(packaged.size())),
+              result.begin());
+    return result;
+  };
+
+  struct Result {
+    Targets targets;
+    PackagedVars local;
+    PackagedVars neighbor;
+    tnsr::i<DataVector, 3> normal;
+  };
+  const auto apply_corrections = [&](const std::optional<size_t>
+                                         modes_to_kill) {
+    const gp::BoundaryCorrections::UpwindGradientProjection upwind{
+        gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 0.0,
+        modes_to_kill};
+    const RecordingCorrection correction{upwind};
+    MockRuntimeSystem runner{cache(3, creator, correction),
+                             MutableCacheTuple{}};
+    const Slab slab{0.0, 0.03};
+    emplace_element(make_not_null(&runner), creator, shell_id, TimeStepId{},
+                    TimeStepId{true, 0, slab.start()}, slab.duration(), 0.3,
+                    DataVector{n, 0.1}, {}, n);
+    REQUIRE(get_tag<domain::Tags::Mesh<3>>(runner, shell_id).slice_away(0) ==
+            shell_face);
+    const auto& element = get_tag<domain::Tags::Element<3>>(runner, shell_id);
+    CHECK_FALSE(
+        element.neighbors().at(Direction<3>::lower_xi()).are_conforming());
+    CHECK(element.neighbors().at(Direction<3>::lower_xi()).size() == 6);
+    REQUIRE(get_tag<evolution::dg::Tags::MortarMesh<3>>(runner, shell_id)
+                .at(mortar_id) == shell_face);
+    const auto& x = get_tag<domain::Tags::Coordinates<3, Frame::Inertial>>(
+        runner, shell_id);
+    // The inner face is the first radial point of every angular point.
+    Result result{initial_targets, PackagedVars{}, PackagedVars{},
+                  tnsr::i<DataVector, 3>{face_points}};
+    for (size_t j = 0; j < face_points; ++j) {
+      const double radius = std::sqrt(square(get<0>(x)[radial_points * j]) +
+                                      square(get<1>(x)[radial_points * j]) +
+                                      square(get<2>(x)[radial_points * j]));
+      for (size_t i = 0; i < 3; ++i) {
+        result.normal.get(i)[j] = -x.get(i)[radial_points * j] / radius;
+      }
+    }
+    tnsr::i<DataVector, 3> neighbor_normal{face_points};
+    for (size_t i = 0; i < 3; ++i) {
+      neighbor_normal.get(i) = -result.normal.get(i);
+    }
+    result.local = package_face(data_on_slice(state, extents, 0, 0),
+                                result.normal, upwind);
+    result.neighbor =
+        package_face(neighbor_face_state, neighbor_normal, upwind);
+    auto& box =
+        ActionTesting::get_databox<component>(make_not_null(&runner), shell_id);
+    db::mutate<variables_tag, targets_tag, evolution::dg::Tags::MortarData<3>,
+               evolution::dg::Tags::NormalCovectorAndMagnitude<3>>(
+        [&](const gsl::not_null<Vars*> vars,
+            const gsl::not_null<Targets*> targets, const auto mortar_data,
+            const auto normal_and_magnitude) {
+          *vars = state;
+          *targets = initial_targets;
+          auto& data = mortar_data->at(mortar_id);
+          data.local().mortar_data = owning_copy(result.local);
+          data.local().mortar_mesh = shell_face;
+          data.local().face_mesh = shell_face;
+          data.neighbor().mortar_data = owning_copy(result.neighbor);
+          data.neighbor().mortar_mesh = shell_face;
+          data.neighbor().face_mesh = shell_face;
+          Variables<tmpl::list<evolution::dg::Tags::MagnitudeOfNormal,
+                               evolution::dg::Tags::NormalCovector<3>>>
+              normal_vars{face_points};
+          get<evolution::dg::Tags::MagnitudeOfNormal>(normal_vars) =
+              normal_magnitude;
+          get<evolution::dg::Tags::NormalCovector<3>>(normal_vars) =
+              result.normal;
+          (*normal_and_magnitude)[Direction<3>::lower_xi()] =
+              std::move(normal_vars);
+        },
+        make_not_null(&box));
+    RecordingCorrection::calls.clear();
+    db::mutate_apply<evolution::dg::ApplyBoundaryCorrections<
+        false, Metavariables, 3, false>>(make_not_null(&box));
+    REQUIRE(RecordingCorrection::calls.size() == 1);
+    CHECK(RecordingCorrection::calls[0].has_nonconforming_block_connection);
+    CHECK(RecordingCorrection::calls[0].face_mesh == shell_face);
+    CHECK(RecordingCorrection::calls[0].number_of_points == face_points);
+    result.targets = get_tag<targets_tag>(runner, shell_id);
+    return result;
+  };
+
+  const Result unfiltered = apply_corrections(std::nullopt);
+  const Result filtered = apply_corrections(size_t{4});
+  // The same packaged data on both runs.
+  CHECK(unfiltered.local == filtered.local);
+  CHECK(unfiltered.neighbor == filtered.neighbor);
+  CHECK(get<gp::Tags::PotentialRateTarget>(filtered.targets) ==
+        get<gp::Tags::PotentialRateTarget>(unfiltered.targets));
+
+  // The expected change: the lift of the filtered minus the unfiltered
+  // correction of the face.
+  const gp::BoundaryCorrections::UpwindGradientProjection upwind{
+      gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 0.0,
+      size_t{4}};
+  Targets correction{face_points};
+  upwind.dg_boundary_terms<false>(
+      make_not_null(&get<gp::Tags::VelocityTarget>(correction)),
+      make_not_null(&get<gp::Tags::GradientTarget>(correction)),
+      make_not_null(&get<gp::Tags::PotentialRateTarget>(correction)),
+      get<gp::Tags::PackagedVelocities>(filtered.local),
+      get<gp::Tags::PackagedGradients>(filtered.local),
+      get<gp::Tags::PackagedPotentials>(filtered.local),
+      get<Ccz4::Tags::NormalCovector<DataVector, 3>>(filtered.local),
+      get<gp::Tags::PackagedVelocities>(filtered.neighbor),
+      get<gp::Tags::PackagedGradients>(filtered.neighbor),
+      get<gp::Tags::PackagedPotentials>(filtered.neighbor),
+      get<Ccz4::Tags::NormalCovector<DataVector, 3>>(filtered.neighbor),
+      dg::Formulation::StrongInertial);
+  Targets filtered_correction = correction;
+  upwind.dg_filter_boundary_correction(make_not_null(&filtered_correction),
+                                       shell_face, true);
+  Targets change = filtered_correction;
+  change -= correction;
+  ::dg::lift_flux(make_not_null(&change), radial_points, normal_magnitude);
+  CHECK(max(abs(get<gp::Tags::VelocityTarget>(change).get(0))) > 1.0e-6);
+  Targets actual_change = filtered.targets;
+  actual_change -= unfiltered.targets;
+  const Targets face_change = data_on_slice(actual_change, extents, 0, 0);
+  CHECK_VARIABLES_CUSTOM_APPROX(face_change, change,
+                                Approx::custom().epsilon(1.0e-12).scale(1.0));
+  for (size_t r = 1; r < radial_points; ++r) {
+    CHECK(data_on_slice(filtered.targets, extents, 0, r) ==
+          data_on_slice(initial_targets, extents, 0, r));
+    CHECK(data_on_slice(unfiltered.targets, extents, 0, r) ==
+          data_on_slice(initial_targets, extents, 0, r));
+  }
+}
 }  // namespace
 
 // [[TimeOut, 60]]
@@ -1499,4 +1897,6 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.GradientProjection.StepActions",
   test_sphere_minkowski(1.0);
   test_sphere_linearized(make_not_null(&gen));
   test_external_lift_isolation(make_not_null(&gen));
+  test_hook_invocation_conforming(make_not_null(&gen));
+  test_hook_invocation_wedge_shell(make_not_null(&gen));
 }

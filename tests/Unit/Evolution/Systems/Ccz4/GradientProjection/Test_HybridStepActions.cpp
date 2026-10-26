@@ -423,7 +423,8 @@ make_cache(const DomainCreator<3>& creator,
   get<Ccz4::Tags::Kappa3>(cache) = 0.5;
   get<evolution::Tags::BoundaryCorrection>(cache) =
       std::make_unique<gp::BoundaryCorrections::UpwindGradientProjection>(
-          gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0);
+          gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0,
+          std::nullopt);
   get<gp::Tags::TopShellFilterGain>(cache) = 0.1;
   get<gp::Tags::ShellAngularModesToKill>(cache) = 4;
   get<::dg::Tags::Formulation>(cache) = ::dg::Formulation::StrongInertial;
@@ -784,7 +785,8 @@ void check_dg_element(const MockRuntimeSystem& runner, const ElementId<3>& id,
   const auto fd_package = gp::package_finite_difference_face(
       std::move(face_values), reversed_normal,
       gp::BoundaryCorrections::UpwindGradientProjection{
-          gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0},
+          gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0,
+          std::nullopt},
       direction);
   const auto expected = evolution::dg::subcell::fd::reconstruct(
       fd_package, dg_mesh.slice_away(dim),
