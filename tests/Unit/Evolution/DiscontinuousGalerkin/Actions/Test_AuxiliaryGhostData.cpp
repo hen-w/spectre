@@ -440,8 +440,13 @@ void emplace_element(const gsl::not_null<Runner*> runner,
   typename evolution::dg::subcell::Tags::NeighborTciDecisions<Dim>::type
       neighbor_decisions{};
   for (const auto& [direction, neighbors_in_direction] : neighbors) {
+    // Several nonconforming neighbors share one mortar labeled by the host,
+    // as in ComputeTimeDerivative.
+    const bool host_labeled = neighbors_in_direction.size() > 1 and
+                              not neighbors_in_direction.are_conforming();
     for (const auto& neighbor : neighbors_in_direction) {
-      const DirectionalId<Dim> mortar_id{direction, neighbor};
+      const DirectionalId<Dim> mortar_id{direction,
+                                         host_labeled ? id : neighbor};
       mortar_info[mortar_id] = evolution::dg::MortarInfo<Dim>{
           {.interface_data_policy =
                neighbors_in_direction.orientation(neighbor).is_aligned()
@@ -679,6 +684,84 @@ void test_send_and_drain() {
                                                   lonely_id));
 }
 
+// The shell side of a wedge-shell interface: a direction with several
+// nonconforming neighbors (sharing one host-labeled mortar) sends one
+// auxiliary message to every neighbor and expects one message per neighbor,
+// each under its own sender key, draining them together.
+void test_drain_multiple_neighbors() {
+  using metavars = Metavariables<send_and_drain_actions>;
+  using comp = Component<metavars>;
+  ActionTesting::MockRuntimeSystem<metavars> runner{{}};
+
+  const Mesh<Dim> dg_mesh{{{4, 5, 6}},
+                          Spectral::Basis::Legendre,
+                          Spectral::Quadrature::GaussLobatto};
+  const ElementId<Dim> self_id{3};
+  const ElementId<Dim> first_id{4};
+  const ElementId<Dim> second_id{5};
+  const ElementId<Dim> south_id{1};
+  DirectionMap<Dim, Neighbors<Dim>> neighbors{};
+  neighbors[Direction<Dim>::upper_xi()] = Neighbors<Dim>{
+      {first_id, second_id},
+      {{first_id.block_id(), OrientationMap<Dim>::create_aligned()},
+       {second_id.block_id(), OrientationMap<Dim>::create_aligned()}},
+      false};
+  neighbors[Direction<Dim>::lower_eta()] =
+      Neighbors<Dim>{{south_id}, OrientationMap<Dim>::create_aligned()};
+  emplace_element<comp>(make_not_null(&runner), self_id, neighbors, dg_mesh,
+                        evolution::dg::subcell::ActiveGrid::Dg, false, 2.5, 7.0,
+                        3);
+  for (const auto& id : {first_id, second_id, south_id}) {
+    emplace_element<comp>(make_not_null(&runner), id, {}, dg_mesh,
+                          evolution::dg::subcell::ActiveGrid::Dg, false, 0.0,
+                          0.0, 0);
+  }
+  ActionTesting::set_phase(make_not_null(&runner), Parallel::Phase::Testing);
+
+  // Send: one message per neighbor under the sender's key, also for the two
+  // neighbors sharing the host-labeled mortar.
+  ActionTesting::next_action<comp>(make_not_null(&runner), self_id);
+  for (const auto& [id, expected_key] :
+       {std::pair{first_id,
+                  DirectionalId<Dim>{Direction<Dim>::lower_xi(), self_id}},
+        std::pair{second_id,
+                  DirectionalId<Dim>{Direction<Dim>::lower_xi(), self_id}},
+        std::pair{south_id,
+                  DirectionalId<Dim>{Direction<Dim>::upper_eta(), self_id}}}) {
+    CAPTURE(id);
+    const auto& messages =
+        ActionTesting::get_inbox_tag<comp, AuxInbox>(runner, id).messages;
+    REQUIRE(messages.size() == 1);
+    REQUIRE(messages.contains(time_step_id(0)));
+    REQUIRE(messages.at(time_step_id(0)).size() == 1);
+    CHECK(messages.at(time_step_id(0)).front().first == expected_key);
+  }
+
+  // Drain: all three messages are required, the two neighbors of the shared
+  // direction counting separately.
+  auto& aux_inbox = ActionTesting::get_inbox_tag<comp, AuxInbox>(
+      make_not_null(&runner), self_id);
+  AuxInbox::insert_into_inbox(
+      make_not_null(&aux_inbox), time_step_id(0),
+      std::pair{DirectionalId<Dim>{Direction<Dim>::upper_xi(), first_id},
+                evolution::dg::BoundaryData<Dim>{}});
+  CHECK_FALSE(ActionTesting::next_action_if_ready<comp>(make_not_null(&runner),
+                                                        self_id));
+  AuxInbox::insert_into_inbox(
+      make_not_null(&aux_inbox), time_step_id(0),
+      std::pair{DirectionalId<Dim>{Direction<Dim>::lower_eta(), south_id},
+                evolution::dg::BoundaryData<Dim>{}});
+  CHECK_FALSE(ActionTesting::next_action_if_ready<comp>(make_not_null(&runner),
+                                                        self_id));
+  AuxInbox::insert_into_inbox(
+      make_not_null(&aux_inbox), time_step_id(0),
+      std::pair{DirectionalId<Dim>{Direction<Dim>::upper_xi(), second_id},
+                evolution::dg::BoundaryData<Dim>{}});
+  CHECK(ActionTesting::next_action_if_ready<comp>(make_not_null(&runner),
+                                                  self_id));
+  CHECK(aux_inbox.messages.empty());
+}
+
 // A chain of elements DG - DG - FD - FD - DG along xi, for two time steps,
 // with the elements scheduled in different orders. DG elements send to both
 // inboxes without waiting (the first one physical-inbox data first); FD
@@ -793,6 +876,7 @@ void test_chain(const size_t schedule) {
 SPECTRE_TEST_CASE("Unit.Evolution.DG.Actions.AuxiliaryGhostData",
                   "[Unit][Evolution][Actions]") {
   test_send_and_drain();
+  test_drain_multiple_neighbors();
   for (size_t schedule = 0; schedule < 3; ++schedule) {
     test_chain(schedule);
   }

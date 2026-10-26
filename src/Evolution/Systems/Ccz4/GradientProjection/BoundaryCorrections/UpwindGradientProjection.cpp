@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <iterator>
@@ -69,6 +70,23 @@ struct BoundaryFilters {
 
 const BoundaryFilters& boundary_filters(const size_t l_max,
                                         const size_t modes_to_kill) {
+  // The slot for each L up to the Spherepack bound (the L range of
+  // ylm::get_spherepack_cache) publishes the entry most recently requested at
+  // that L, so the steady state of a run (one `modes_to_kill` per boundary
+  // correction, a fixed L per face) is a single atomic load with no lock.
+  // The locked map below owns every entry (the pointers stay valid) and
+  // serves slot misses.
+  static constexpr size_t maximum_slot_l_max = 150;
+  static std::array<std::atomic<const BoundaryFilters*>, maximum_slot_l_max + 1>
+      slots{};
+  if (l_max <= maximum_slot_l_max) {
+    const BoundaryFilters* const entry =
+        gsl::at(slots, l_max).load(std::memory_order_acquire);
+    if (entry != nullptr and
+        entry->spaces->angular_modes_to_kill == modes_to_kill) {
+      return *entry;
+    }
+  }
   static std::mutex mutex{};
   static std::map<std::pair<size_t, size_t>,
                   std::unique_ptr<const BoundaryFilters>>
@@ -77,6 +95,9 @@ const BoundaryFilters& boundary_filters(const size_t l_max,
   auto& entry = cache[std::pair{l_max, modes_to_kill}];
   if (entry == nullptr) {
     entry = std::make_unique<const BoundaryFilters>(l_max, modes_to_kill);
+  }
+  if (l_max <= maximum_slot_l_max) {
+    gsl::at(slots, l_max).store(entry.get(), std::memory_order_release);
   }
   return *entry;
 }

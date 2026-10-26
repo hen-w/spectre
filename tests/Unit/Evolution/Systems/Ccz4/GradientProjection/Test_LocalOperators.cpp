@@ -816,11 +816,10 @@ void test_shell_mesh_validation(const ShellGeometry& shell) {
   for (size_t i = 0; i < 3; ++i) {
     inverse_jacobian.get(0, i) = 0.0;
   }
-  CHECK_THROWS_WITH(
-      (gp::LocalOperators{geometry.mesh, inverse_jacobian,
-                          geometry.det_inverse_jacobian, 2}),
-      Catch::Matchers::ContainsSubstring("is not sufficiently positive "
-                                         "definite"));
+  CHECK_THROWS_WITH((gp::LocalOperators{geometry.mesh, inverse_jacobian,
+                                        geometry.det_inverse_jacobian, 2}),
+                    Catch::Matchers::ContainsSubstring(
+                        "too ill-conditioned for an accurate"));
 }
 
 // The structured trial basis and derivatives agree with the Spherepack
@@ -1529,6 +1528,24 @@ void test_shell_velocity_filter(const ShellGeometry& shell,
 
   const FilterFields x = random_filter_fields(gen, n);
   const FilterFields y = random_filter_fields(gen, n);
+  // A deserialized filter must re-resolve its angular-space pointer, which
+  // `operator==` does not compare: its action must match the original's
+  // exactly, as must that of a deserialized shell `LocalOperators`.
+  {
+    CHECK(filtered(serialize_and_deserialize(general), x, 0.1) ==
+          filtered(general, x, 0.1));
+    CHECK(filtered(serialize_and_deserialize(separable), x, 0.1) ==
+          filtered(separable, x, 0.1));
+    const gp::LocalOperators deserialized_operators =
+        serialize_and_deserialize(operators);
+    FilterFields through_deserialized = x;
+    deserialized_operators.apply_shell_filter(
+        pointers(make_not_null(&through_deserialized)), 0.1);
+    FilterFields through_original = x;
+    operators.apply_shell_filter(pointers(make_not_null(&through_original)),
+                                 0.1);
+    CHECK(through_deserialized == through_original);
+  }
   const double scale = max_abs(x);
   const auto inner_approx =
       Approx::custom().epsilon(1e-12).scale(inner(mass, x, x));
@@ -1695,9 +1712,17 @@ SPECTRE_TEST_CASE(
   for (const size_t l_max : {2_st, 3_st, 4_st, 5_st, 6_st}) {
     test_shell_angular_operators(l_max, make_not_null(&gen));
   }
+  // The parity rule of the angular derivative kernel at values between the
+  // tested grids and the candidate resolution; the construction itself
+  // ERRORs on a count or gap violation.
+  for (const size_t l_max : {7_st, 8_st, 10_st}) {
+    CHECK(gp::shell_angular_operators(l_max).kernel.columns() ==
+          1 + (l_max % 2 == 0 ? l_max + 1 : l_max));
+  }
   using domain::CoordinateMaps::Distribution;
   for (const auto& [radial_size, l_max, distribution, deformed] :
        std::vector<std::tuple<size_t, size_t, Distribution, bool>>{
+           {2, 3, Distribution::Linear, false},
            {3, 2, Distribution::Linear, false},
            {3, 3, Distribution::Logarithmic, false},
            {4, 4, Distribution::Logarithmic, false},
@@ -1747,6 +1772,7 @@ SPECTRE_TEST_CASE(
   for (const auto& [radial_size, l_max, distribution, deformed, modes_to_kill] :
        std::vector<std::tuple<size_t, size_t, Distribution, bool, size_t>>{
            {3, 2, Distribution::Linear, false, 2},
+           {3, 7, Distribution::Linear, false, 4},
            {4, 4, Distribution::Logarithmic, false, 2},
            {3, 3, Distribution::Logarithmic, false, 0},
            {2, 4, Distribution::Linear, false, 1},

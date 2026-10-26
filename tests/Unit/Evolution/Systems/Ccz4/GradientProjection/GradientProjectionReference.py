@@ -382,6 +382,20 @@ def absolute_normal_matrix_eig(u, normal, f):
     ).ravel()
 
 
+def absolute_normal_matrix_schur_certified(u, normal, f):
+    # The ordered-Schur |A| with a self-certification: |A|^2 must equal A^2.
+    # The eigendecomposition route can fail catastrophically on rare random
+    # states with a nearly defective basis; the Schur route measured
+    # residuals <= 5e-15 across Minkowski, trumpet and random ensembles,
+    # including draws where the eig route lost all digits.
+    a = curved_normal_impl(np.array(u), np.array(normal), f)
+    s = schur3_absolute(a)
+    a2 = a @ a
+    residual = np.linalg.norm(s @ s - a2) / max(np.linalg.norm(a2), 1e-300)
+    assert residual < 1.0e-11, residual
+    return s.ravel()
+
+
 def absolute_normal_matrix_schur(u, normal, f):
     return schur3_absolute(
         curved_normal_impl(np.array(u), np.array(normal), f)

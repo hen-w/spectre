@@ -84,10 +84,10 @@ std::ostream& operator<<(std::ostream& os,
  *  Y_t\mathrel{+}=\frac12\mathcal L_f\{A_n+|A_n|
  *  +\sigma_pP_p+\sigma_tP_t+\sigma_gP_g\}[Y],
  * \f]
- * where \f$P_p\f$, \f$P_t\f$ and \f$P_g\f$ are the spectral projectors of
- * \f$A_n\f$ onto its twenty propagating modes, its twenty stationary modes
- * carrying tangential-gradient mismatch and its three stationary
- * \f$\hat\Gamma-b\f$ modes (see
+ * where \f$P_p\f$ is the spectral projector of \f$A_n\f$ onto its twenty
+ * propagating modes and \f$P_t\f$, \f$P_g\f$ split its kernel projector
+ * into the twenty stationary modes carrying tangential-gradient mismatch
+ * and the three stationary \f$\hat\Gamma-b\f$ modes (see
  * `Ccz4::GradientProjection::NormalCharacteristics::
  * apply_upwind_and_penalties`),
  * \f$\sigma_p,\sigma_t,\sigma_g\ge0\f$ are the scalar jump penalties

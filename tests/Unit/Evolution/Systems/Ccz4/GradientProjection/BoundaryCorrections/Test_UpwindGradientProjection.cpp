@@ -216,8 +216,8 @@ std::array<double, n43> expected_correction(
   const DataVector a = pypp::call<DataVector>(
       module, "normal_matrix", u_average, normal, ::Ccz4::fd::System::f);
   const DataVector abs_a =
-      pypp::call<DataVector>(module, "absolute_normal_matrix_eig", u_average,
-                             normal, ::Ccz4::fd::System::f);
+      pypp::call<DataVector>(module, "absolute_normal_matrix_schur_certified",
+                             u_average, normal, ::Ccz4::fd::System::f);
   const auto y_int = target_at(interior.w, interior.q, s);
   const auto y_ext = target_at(exterior.w, exterior.q, s);
   std::array<double, n43> result{};
@@ -321,31 +321,14 @@ void test_against_reference(const gsl::not_null<std::mt19937*> gen) {
         for (const double x : internal_expected) {
           scale = std::max(scale, std::abs(x));
         }
-        // The analytic transform and the dense reference differ by roundoff
-        // amplified by the conditioning of the characteristic decomposition
-        // at the averaged state, for which the speed spread is a proxy.
-        gp::PotentialVector u_average{};
-        for (size_t a = 0; a < gp::number_of_potentials; ++a) {
-          gsl::at(u_average, a) =
-              0.5 * (interior.u.get(a)[s] + exterior.u.get(a)[s]);
-        }
-        const gp::LogMetricChart average_chart{
-            gp::stf_decode(&u_average[gp::PotentialIndex::log_metric])};
-        const gp::NormalCharacteristics average_characteristics{
-            average_chart, u_average, normals[s], ::Ccz4::fd::System::f};
-        double largest_point_speed = 0.0;
-        double smallest_point_speed = std::numeric_limits<double>::infinity();
-        for (size_t k = 0; k < gp::number_of_normal_components; ++k) {
-          const double speed =
-              std::abs(gsl::at(average_characteristics.speeds(), k));
-          largest_point_speed = std::max(largest_point_speed, speed);
-          if (not gp::NormalCharacteristics::is_kernel_field(k)) {
-            smallest_point_speed = std::min(smallest_point_speed, speed);
-          }
-        }
-        const double epsilon =
-            1.0e-12 *
-            std::max(10.0, 10.0 * largest_point_speed / smallest_point_speed);
+        // The reference computes |A_n| by the certified ordered-Schur
+        // route (self-check |A|^2 = A^2 to 1e-11 inside the Python module),
+        // which measured residuals <= 5e-15 on every sampled state --
+        // Minkowski, trumpet and random ensembles -- including rare draws
+        // where an eigendecomposition reference loses digits or fails
+        // outright. Both routes being accurate, the strict flat tolerance
+        // applies at every sample.
+        const double epsilon = 1.0e-11;
         CAPTURE(epsilon);
         for (size_t row = 0; row < n43; ++row) {
           CHECK(gsl::at(internal_actual, row) ==

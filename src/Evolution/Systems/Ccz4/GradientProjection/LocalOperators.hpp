@@ -147,6 +147,9 @@ class GeneralShellFilter {
   // For each rank, the lower Cholesky factors of A_0, ..., A_{N_r-1} and of
   // H, side by side.
   std::array<Matrix, 3> factors_{};
+  // Not serialized: re-resolved from `shell_filter_angular_spaces` at
+  // construction and when unpacking, so no application takes the cache lock.
+  const ShellFilterAngularSpaces* spaces_ = nullptr;
 };
 
 bool operator!=(const GeneralShellFilter& lhs, const GeneralShellFilter& rhs);
@@ -187,6 +190,9 @@ class SeparableShellFilter {
   size_t angular_modes_to_kill_ = 0;
   DataVector radial_weights_{};
   DataVector top_radial_mode_{};
+  // Not serialized: re-resolved from `shell_filter_angular_spaces` at
+  // construction and when unpacking, so no application takes the cache lock.
+  const ShellFilterAngularSpaces* spaces_ = nullptr;
 };
 
 bool operator!=(const SeparableShellFilter& lhs,
@@ -220,8 +226,11 @@ bool operator!=(const SeparableShellFilter& lhs,
  *   \f$K_D=\sum_iD_i^TMD_i\f$, \f$b_D=\sum_iD_i^TMq_i^*\f$ and \f$Z_0\f$ a
  *   basis of the mass-zero-mean subspace. The Cholesky factor of
  *   \f$Z_0^TK_DZ_0\f$ is built once; it is an `ERROR` if this matrix has a
- *   relative eigenvalue below \f$10^{-12}\f$, indicating an additional
- *   nullspace or excessive numerical conditioning of the reduced system.
+ *   relative eigenvalue below \f$10^{-8}\f$ (the same bound as the shell
+ *   fit): the eigenvalues are squared singular values of the fit operator,
+ *   so this guarantees normal-equation solve errors below \f$\sim10^{-8}\f$
+ *   and rejects an additional nullspace or an excessively ill-conditioned
+ *   element.
  * - `apply_filter` applies \f$F=\Pi+g(I-\Pi)\f$ with the given gain \f$g\f$,
  *   where \f$\Pi\f$ is the \f$M\f$-orthogonal projector onto the
  *   tensor-product polynomials of degree at most \f$p_i-1\f$ in every logical
@@ -269,7 +278,10 @@ bool operator!=(const SeparableShellFilter& lhs,
  * logical derivatives built from `ShellAngularOperators` differ from those
  * of `partial_derivatives` by more than roundoff.
  *
- * Normal-equation inverses are never formed.
+ * On tensor-product elements normal-equation inverses are never formed; the
+ * shell fit solves its normal equations by Cholesky in mass-orthonormal
+ * coordinates, justified by the measured conditioning and guarded by the
+ * relative-eigenvalue check.
  *
  * On spherical-harmonic shells the velocity filter acts on grouped tensors:
  * `apply_shell_filter` applies the `SeparableShellFilter` when the mass is
@@ -385,8 +397,9 @@ class LocalOperators {
    * at most \f$10^{-13}\f$ and the `GeneralShellFilter` otherwise.
    *
    * \details The two are evaluations of the same operator whose results
-   * differ by at most the residual (relative), so the dispatch cannot change
-   * the filter beyond roundoff; a mass that genuinely deviates from
+   * differ by the residual (relative) up to a conditioning factor of order
+   * one, so the dispatch cannot change the filter beyond roundoff; a mass
+   * that genuinely deviates from
    * \f$\rho_iw_\Omega(j)\f$ takes the general evaluation. It is an `ERROR`
    * on a tensor-product element.
    */

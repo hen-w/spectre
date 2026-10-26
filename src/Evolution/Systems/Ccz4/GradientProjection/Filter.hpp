@@ -58,8 +58,9 @@ struct EnforceAlgebraicConstraints : tt::ConformsTo<db::protocols::Mutator> {
  * velocity filter at the gain \f$g\f$: on tensor-product elements
  * \f$F=\Pi+g(I-\Pi)\f$ (`LocalOperators::apply_filter`) applied to each of
  * these 13 fields over the element, on spherical-harmonic shells the grouped
- * tensor filter `LocalOperators::apply_shell_filter` (the
- * `GeneralShellFilter`) of the 13 fields. Since \f$R\f$ is
+ * tensor filter `LocalOperators::apply_shell_filter` (the separable or the
+ * general evaluation, dispatched on the mass separability) of the 13
+ * fields. Since \f$R\f$ is
  * linear in \f$w\f$ with no constant term at fixed \f$u\f$,
  * \f$w^+=P\left(F\,R(u,w,q)-R(u,0,q)\right)\f$ with \f$P\f$ the
  * `apply_rhs_inverse`, plus the filtered \f$\hat\Gamma-b\f$ on

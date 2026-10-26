@@ -164,7 +164,8 @@ struct LocalOperators : db::SimpleTag {
 /// highest tensor modal shell, see
 /// `Ccz4::GradientProjection::LocalOperators::apply_filter` and
 /// `Ccz4::GradientProjection::filter_velocities`; on spherical-harmonic
-/// shells the radial gain of `Ccz4::GradientProjection::GeneralShellFilter`.
+/// shells the radial gain of the shell velocity filter, see
+/// `Ccz4::GradientProjection::LocalOperators::apply_shell_filter`.
 struct TopShellFilterGain : db::SimpleTag {
   using type = double;
   using option_tags = tmpl::list<OptionTags::TopShellFilterGain>;

@@ -64,8 +64,12 @@ constexpr double shell_kernel_tolerance = 1.0e-11;
 // discarded angular singular value.
 constexpr double shell_kernel_minimum_gap = 100.0;
 // The smallest admissible eigenvalue of the reduced gradient-fit stiffness
-// relative to its largest.
-constexpr double fit_minimum_relative_eigenvalue = 1.0e-12;
+// relative to its largest, for both element families. The eigenvalues are
+// squared singular values of the fit operator, and the normal-equation solve
+// loses about machine epsilon over this ratio in relative accuracy, so this
+// bound guarantees fit errors below ~1e-8; the measured ratio on supported
+// shell meshes is ~3e-4, four orders of magnitude away.
+constexpr double fit_minimum_relative_eigenvalue = 1.0e-8;
 // The largest admissible difference between the logical derivatives built
 // from the angular operators and those of `partial_derivatives`, relative
 // to the largest derivative.
@@ -872,8 +876,9 @@ GeneralShellFilter::GeneralShellFilter(const Mesh<3>& mesh,
     : mesh_(mesh), angular_modes_to_kill_(angular_modes_to_kill), mass_(mass) {
   check_shell_filter_input(mesh, mass, angular_modes_to_kill);
   const size_t radial_size = mesh.extents(0);
-  const ShellFilterAngularSpaces& spaces =
-      shell_filter_angular_spaces(mesh.extents(1) - 1, angular_modes_to_kill);
+  spaces_ =
+      &shell_filter_angular_spaces(mesh.extents(1) - 1, angular_modes_to_kill);
+  const ShellFilterAngularSpaces& spaces = *spaces_;
   const Matrix& nodal_to_modal =
       Spectral::nodal_to_modal_matrix(mesh.slice_through(0));
   top_radial_mode_ = DataVector{radial_size};
@@ -948,10 +953,7 @@ void GeneralShellFilter::apply_rank(const std::vector<DataVector*>& fields,
   const size_t number_of_points = mesh_.number_of_grid_points();
   const size_t radial_size = mesh_.extents(0);
   const size_t angular_size = number_of_points / radial_size;
-  const Matrix& basis = gsl::at(
-      shell_filter_angular_spaces(mesh_.extents(1) - 1, angular_modes_to_kill_)
-          .retained_bases,
-      rank);
+  const Matrix& basis = gsl::at(spaces_->retained_bases, rank);
   const Matrix& factors = gsl::at(factors_, rank);
   const size_t dimension = basis.columns();
   const size_t components = basis.rows() / angular_size;
@@ -1043,6 +1045,10 @@ void GeneralShellFilter::pup(PUP::er& p) {
   p | mass_;
   p | top_radial_mode_;
   p | factors_;
+  if (p.isUnpacking() and mass_.size() != 0) {
+    spaces_ = &shell_filter_angular_spaces(mesh_.extents(1) - 1,
+                                           angular_modes_to_kill_);
+  }
 }
 
 bool operator==(const GeneralShellFilter& lhs, const GeneralShellFilter& rhs) {
@@ -1065,7 +1071,7 @@ SeparableShellFilter::SeparableShellFilter(const Mesh<3>& mesh,
   const size_t radial_size = mesh.extents(0);
   const size_t l_max = mesh.extents(1) - 1;
   // Builds and checks the angular spaces.
-  shell_filter_angular_spaces(l_max, angular_modes_to_kill);
+  spaces_ = &shell_filter_angular_spaces(l_max, angular_modes_to_kill);
   const std::vector<double>& angular_weights =
       ylm::get_spherepack_cache(l_max).integration_weights();
   const size_t angular_size = angular_weights.size();
@@ -1106,8 +1112,7 @@ void SeparableShellFilter::apply_rank(const std::vector<DataVector*>& fields,
   const size_t angular_size = number_of_points / radial_size;
   const size_t l_max = mesh_.extents(1) - 1;
   const ylm::Spherepack& ylm = ylm::get_spherepack_cache(l_max);
-  const ShellFilterAngularSpaces& spaces =
-      shell_filter_angular_spaces(l_max, angular_modes_to_kill_);
+  const ShellFilterAngularSpaces& spaces = *spaces_;
   const SimpleSparseMatrix& native_filter =
       gsl::at(spaces.native_filters, rank);
   const size_t components = rank == 2 ? 5 : (rank == 1 ? 3 : 1);
@@ -1188,6 +1193,10 @@ void SeparableShellFilter::pup(PUP::er& p) {
   p | angular_modes_to_kill_;
   p | radial_weights_;
   p | top_radial_mode_;
+  if (p.isUnpacking() and radial_weights_.size() != 0) {
+    spaces_ = &shell_filter_angular_spaces(mesh_.extents(1) - 1,
+                                           angular_modes_to_kill_);
+  }
 }
 
 bool operator==(const SeparableShellFilter& lhs,
@@ -1430,11 +1439,13 @@ void LocalOperators::build_tensor_product(const Mesh<3>& mesh) {
     blaze::DynamicVector<double> eigenvalues(reduced_size);
     blaze::syev(eigenvectors, eigenvalues, 'N', 'L');
     const double largest = eigenvalues[reduced_size - 1];
-    if (not(eigenvalues[0] > 1.0e-12 * largest)) {
+    if (not(eigenvalues[0] > fit_minimum_relative_eigenvalue * largest)) {
       ERROR(
-          "The gradient-fit stiffness restricted to mean-zero fields is not "
-          "sufficiently positive definite: smallest/largest eigenvalue = "
-          << eigenvalues[0] << "/" << largest
+          "The gradient-fit stiffness restricted to mean-zero fields is too "
+          "ill-conditioned for an accurate normal-equation solve: "
+          "smallest/largest eigenvalue = "
+          << eigenvalues[0] << "/" << largest << " is below the bound "
+          << fit_minimum_relative_eigenvalue
           << ". Check for an additional gradient nullspace or an excessively "
              "ill-conditioned element.");
     }
@@ -1641,10 +1652,11 @@ void LocalOperators::build_spherical_shell(
           fit_minimum_relative_eigenvalue * largest_eigenvalue)) {
     ERROR(
         "The gradient-fit stiffness restricted to the complement of the "
-        "shell derivative kernel is not sufficiently positive definite: "
-        "smallest/largest eigenvalue = "
-        << smallest_eigenvalue << "/" << largest_eigenvalue << " on the mesh "
-        << mesh
+        "shell derivative kernel is too ill-conditioned for an accurate "
+        "normal-equation solve: smallest/largest eigenvalue = "
+        << smallest_eigenvalue << "/" << largest_eigenvalue
+        << " is below the bound " << fit_minimum_relative_eigenvalue
+        << " on the mesh " << mesh
         << ". Check for an additional gradient nullspace or an excessively "
            "ill-conditioned element.");
   }

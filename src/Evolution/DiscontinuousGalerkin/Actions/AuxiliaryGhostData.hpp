@@ -110,9 +110,8 @@ struct SendAuxiliaryGhostData {
  * action may run after `ApplyBoundaryCorrectionsToTimeDerivative` (which
  * advances them), where it does not delay the right-hand side. Elements using
  * DG need the auxiliary data of neither their DG nor their finite-difference
- * neighbors.
- *
- * Each direction must have at most one (conforming) neighbor.
+ * neighbors. Directions with several (nonconforming) neighbors expect one
+ * message per neighbor, each under its own sender key.
  */
 template <size_t Dim, bool UseNodegroupDgElements>
 struct DrainAuxiliaryGhostData {
@@ -135,13 +134,6 @@ struct DrainAuxiliaryGhostData {
                   "ParallelComponent is a DgElementCollection.");
     const Element<Dim>& element = db::get<::domain::Tags::Element<Dim>>(box);
     const size_t number_of_expected_messages = element.number_of_neighbors();
-    if (number_of_expected_messages != element.neighbors().size()) {
-      ERROR(
-          "DrainAuxiliaryGhostData supports only one neighbor per "
-          "direction, but element "
-          << element.id() << " has " << element.number_of_neighbors()
-          << " neighbors in " << element.neighbors().size() << " directions.");
-    }
     if (number_of_expected_messages == 0) {
       return {Parallel::AlgorithmExecution::Continue, std::nullopt};
     }
