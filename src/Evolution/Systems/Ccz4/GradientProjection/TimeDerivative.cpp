@@ -274,7 +274,7 @@ KernelRates kernel_rates(const KernelInputs& inputs,
   constexpr double c = 1.0;
   constexpr double cleaning_speed = 1.0;
   constexpr double one_over_relaxation_time = 0.0;
-  constexpr bool shifting_shift = false;
+  constexpr bool shifting_shift = ::Ccz4::fd::System::shifting_shift;
   constexpr bool evolve_lapse_and_shift = true;
   ::Ccz4::fd::detail::apply<Dim>(
       make_not_null(&rates.conformal_metric), make_not_null(&rates.lapse),

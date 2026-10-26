@@ -158,16 +158,110 @@ class NormalCharacteristics {
   /// \f$\mathrm{sign}(M)z\f$, zero on the structural kernel.
   NormalSubspaceVector apply_sign(const NormalSubspaceVector& z) const;
 
+  /*!
+   * \brief The full first-order characteristic transform of a 43-component
+   * jump \f$(\Delta w,\Delta q_i)\f$: the 23 amplitudes `fields` of the
+   * embedded eigenvectors of \f$A_n=JF\f$ (ordered as the characteristic
+   * fields) and the twenty tangential amplitudes, stored as the tangential
+   * gradient part `tangential`.
+   *
+   * \details With the Euclidean split \f$\Delta q_i=n_ir+t_i\f$,
+   * \f$\sum_in^it_i=0\f$, and \f$z=(\Delta w,r)\f$, the eigenvectors of
+   * \f$A_n\f$ are the embedded eigenvectors \f$JR_k\f$ of \f$M\f$ (twenty
+   * propagating, three structural \f$\hat\Gamma-b\f$ zeros) and twenty
+   * stationary modes \f$J(-Kt)+(0,t)\f$, where \f$K\f$ solves
+   * \f$M(Kt)=F(0,t)\f$ with no \f$\hat\Gamma-b\f$ characteristic content
+   * (solvable because the \f$\hat\Gamma\f$ and \f$b\f$ rows of \f$F\f$ are
+   * equal). The forward transform is \f$c=T(z+Kt)\f$ together with \f$t\f$,
+   * where \f$T\f$ is `characteristic_fields`; \f$A_n\f$ maps the amplitudes
+   * \f$(c,t)\f$ to \f$(\lambda c,0)\f$. The coupling \f$Kt\f$ is evaluated by
+   * closed-form sector solves in the isotropic frame (block adjugates over
+   * the products of the paired speeds, which the constructor's degeneracy
+   * errors keep away from zero; no individual characteristic speed is divided
+   * by). `normal` must be the covector this decomposition was constructed
+   * with.
+   */
+  void full_characteristic_fields(gsl::not_null<NormalSubspaceVector*> fields,
+                                  gsl::not_null<GradientVector*> tangential,
+                                  const std::array<double, 3>& normal,
+                                  const VelocityVector& jump_w,
+                                  const GradientVector& jump_q) const;
+
+  /*!
+   * \brief The inverse of `full_characteristic_fields`:
+   * \f$(\Delta w,\Delta q)=J(T^{-1}(c)-Kt)+(0,t)\f$.
+   *
+   * \details `tangential` must be tangential to `normal` in the Euclidean
+   * sense, as produced by the forward transform.
+   */
+  void full_fields_from_characteristic_fields(
+      gsl::not_null<VelocityVector*> jump_w,
+      gsl::not_null<GradientVector*> jump_q,
+      const std::array<double, 3>& normal, const NormalSubspaceVector& fields,
+      const GradientVector& tangential) const;
+
+  /*!
+   * \brief The dissipation
+   * \f$(D|A_n|+\sigma_pP_p+\sigma_tP_t+\sigma_gP_g)(\Delta w,\Delta q)\f$ of
+   * a full 43-component jump: characteristic upwinding scaled by \f$D\f$ plus
+   * scalar penalties on the full first-order characteristic jumps.
+   *
+   * \details The operators \f$P_p\f$, \f$P_t\f$ and \f$P_g\f$ are the
+   * spectral projectors of \f$A_n\f$ onto its twenty propagating modes, its
+   * twenty stationary modes carrying tangential-gradient mismatch and its
+   * three stationary \f$\hat\Gamma-b\f$ modes (see
+   * `full_characteristic_fields`); \f$P_p+P_t+P_g=I_{43}\f$. The general
+   * evaluation is the full forward transform, the diagonal weights
+   * \f$d_k=(D|\lambda_k|+\sigma_p)c_k\f$ on the propagating entries,
+   * \f$d_k=\sigma_gc_k\f$ on the kernel entries and \f$\sigma_t\f$ on the
+   * tangential amplitudes, and the inverse transform. Two algebraically
+   * exact shortcuts avoid the stationary coupling: equal
+   * \f$\sigma_p=\sigma_t=\sigma_g\f$ give \f$D|A_n|+\sigma_pI_{43}\f$
+   * through the sign route on `flux`, and equal \f$\sigma_p=\sigma_t\f$ add
+   * \f$(\sigma_g-\sigma_p)P_g\f$ to that through the closed-form
+   * \f$\hat\Gamma-b\f$ kernel projector, whose amplitudes depend only on
+   * \f$\Delta\hat\Gamma-\Delta b\f$. `flux` must be `normal_flux` of the
+   * same jump at the same state and the same `normal` passed here; it is
+   * not used on the general path. The grouping of the stationary modes
+   * assumes the non-advective shift driver
+   * (`Ccz4::fd::System::shifting_shift == false`).
+   */
+  void apply_upwind_and_penalties(gsl::not_null<VelocityVector*> result_w,
+                                  gsl::not_null<GradientVector*> result_q,
+                                  const std::array<double, 3>& normal,
+                                  const VelocityVector& jump_w,
+                                  const GradientVector& jump_q,
+                                  const NormalSubspaceVector& flux,
+                                  double upwind_factor, double sigma_p,
+                                  double sigma_t, double sigma_g) const;
+
   /// Whether the given characteristic field is in the structural kernel.
   static bool is_kernel_field(size_t index);
 
  private:
   NormalSubspaceVector to_isotropic(const NormalSubspaceVector& z) const;
   NormalSubspaceVector from_isotropic(const NormalSubspaceVector& z) const;
+  NormalSubspaceVector fields_from_isotropic(
+      const NormalSubspaceVector& iso) const;
+  NormalSubspaceVector isotropic_from_fields(
+      const NormalSubspaceVector& c) const;
+  // The isotropic components of the stationary coupling Kt of a tangential
+  // gradient jump, from the closed-form sector solves of M(Kt) = F(0,t) with
+  // zero kernel characteristic content.
+  NormalSubspaceVector isotropic_stationary_coupling(
+      const std::array<double, 3>& normal,
+      const GradientVector& tangential) const;
+  // (sigma_g - sigma_p) P_g applied to the jump, added to the result: the
+  // closed-form GammaHat-b kernel projector.
+  void add_kernel_penalty(gsl::not_null<VelocityVector*> result_w,
+                          gsl::not_null<GradientVector*> result_q,
+                          const std::array<double, 3>& normal,
+                          const VelocityVector& jump_w, double weight) const;
 
   LogMetricChart chart_;
   Matrix3 sqrt_metric_{};
   Matrix3 inverse_sqrt_metric_{};
+  std::array<double, 3> shift_{};
   std::array<double, 3> unit_normal_{};
   std::array<double, 3> tangent_1_{};
   std::array<double, 3> tangent_2_{};

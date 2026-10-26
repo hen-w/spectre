@@ -5,10 +5,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <pup.h>
+#include <string>
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
@@ -19,16 +22,66 @@
 #include "Evolution/Systems/Ccz4/GradientProjection/PointwiseFields.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/PrepareChartFields.hpp"
 #include "NumericalAlgorithms/DiscontinuousGalerkin/Formulation.hpp"
+#include "Options/ParseError.hpp"
+#include "Options/ParseOptions.hpp"
 #include "Utilities/ErrorHandling/Error.hpp"
+#include "Utilities/GetOutput.hpp"
 #include "Utilities/Gsl.hpp"
 
 namespace Ccz4::GradientProjection::BoundaryCorrections {
 
+double external_upwind_factor(const ExternalCorrection external_correction) {
+  switch (external_correction) {
+    case ExternalCorrection::Central:
+      return 0.0;
+    case ExternalCorrection::Upwind:
+      return 1.0;
+    case ExternalCorrection::DoubledDissipation:
+      return 2.0;
+    default:
+      ERROR("Invalid ExternalCorrection value "
+            << static_cast<int>(external_correction));
+  }
+}
+
+std::ostream& operator<<(std::ostream& os,
+                         const ExternalCorrection external_correction) {
+  switch (external_correction) {
+    case ExternalCorrection::Central:
+      return os << "Central";
+    case ExternalCorrection::Upwind:
+      return os << "Upwind";
+    case ExternalCorrection::DoubledDissipation:
+      return os << "DoubledDissipation";
+    default:
+      ERROR("Invalid ExternalCorrection value "
+            << static_cast<int>(external_correction));
+  }
+}
+
 UpwindGradientProjection::UpwindGradientProjection(
-    const double external_dissipation_factor,
-    const double internal_scalar_penalty)
-    : external_dissipation_factor_(external_dissipation_factor),
-      internal_scalar_penalty_(internal_scalar_penalty) {}
+    const ExternalCorrection external_correction,
+    const double propagating_scalar_penalty,
+    const double stationary_gradient_scalar_penalty,
+    const double gamma_hat_minus_b_scalar_penalty)
+    : external_correction_(external_correction),
+      propagating_scalar_penalty_(propagating_scalar_penalty),
+      stationary_gradient_scalar_penalty_(stationary_gradient_scalar_penalty),
+      gamma_hat_minus_b_scalar_penalty_(gamma_hat_minus_b_scalar_penalty) {
+  if (not(propagating_scalar_penalty_ >= 0.0 and
+          std::isfinite(propagating_scalar_penalty_) and
+          stationary_gradient_scalar_penalty_ >= 0.0 and
+          std::isfinite(stationary_gradient_scalar_penalty_) and
+          gamma_hat_minus_b_scalar_penalty_ >= 0.0 and
+          std::isfinite(gamma_hat_minus_b_scalar_penalty_))) {
+    ERROR(
+        "The scalar jump penalties must be finite and nonnegative, but are "
+        "(propagating, stationary gradient, GammaHat-b) = ("
+        << propagating_scalar_penalty_ << ", "
+        << stationary_gradient_scalar_penalty_ << ", "
+        << gamma_hat_minus_b_scalar_penalty_ << ").");
+  }
+}
 
 UpwindGradientProjection::UpwindGradientProjection(CkMigrateMessage* msg)
     : BoundaryCorrection(msg) {}
@@ -40,8 +93,10 @@ UpwindGradientProjection::get_clone() const {
 
 void UpwindGradientProjection::pup(PUP::er& p) {
   BoundaryCorrection::pup(p);
-  p | external_dissipation_factor_;
-  p | internal_scalar_penalty_;
+  p | external_correction_;
+  p | propagating_scalar_penalty_;
+  p | stationary_gradient_scalar_penalty_;
+  p | gamma_hat_minus_b_scalar_penalty_;
 }
 
 double UpwindGradientProjection::dg_package_data(
@@ -113,12 +168,18 @@ void UpwindGradientProjection::dg_boundary_terms(
   if (dg_formulation != dg::Formulation::StrongInertial) {
     ERROR("UpwindGradientProjection supports only the strong formulation.");
   }
-  const double dissipation_factor =
-      ForExternalBoundary ? external_dissipation_factor_ : 1.0;
+  const double upwind_factor =
+      ForExternalBoundary ? external_upwind_factor(external_correction_) : 1.0;
   // An analytic exterior state need not match outgoing fields. Penalizing
   // their jumps would impose extra boundary data beyond ordinary upwinding.
-  const double scalar_penalty =
-      ForExternalBoundary ? 0.0 : internal_scalar_penalty_;
+  const double sigma_p =
+      ForExternalBoundary ? 0.0 : propagating_scalar_penalty_;
+  const double sigma_t =
+      ForExternalBoundary ? 0.0 : stationary_gradient_scalar_penalty_;
+  const double sigma_g =
+      ForExternalBoundary ? 0.0 : gamma_hat_minus_b_scalar_penalty_;
+  const bool apply_dissipation = upwind_factor != 0.0 or sigma_p != 0.0 or
+                                 sigma_t != 0.0 or sigma_g != 0.0;
   const size_t number_of_points = get<0>(u_int).size();
   for (size_t s = 0; s < number_of_points; ++s) {
     const PotentialVector u_int_s = potentials_at(u_int, s);
@@ -149,18 +210,19 @@ void UpwindGradientProjection::dg_boundary_terms(
         stf_decode(&u_average[PotentialIndex::log_metric])};
     const NormalSubspaceVector central = normal_flux(
         chart, u_average, normal, jump_w, jump_q, ::Ccz4::fd::System::f);
-    NormalSubspaceVector absolute{};
-    if (dissipation_factor != 0.0) {
+    VelocityVector dissipation_w{};
+    GradientVector dissipation_q{};
+    if (apply_dissipation) {
       const NormalCharacteristics characteristics{chart, u_average, normal,
                                                   ::Ccz4::fd::System::f};
-      absolute = characteristics.apply_sign(central);
+      characteristics.apply_upwind_and_penalties(
+          make_not_null(&dissipation_w), make_not_null(&dissipation_q), normal,
+          jump_w, jump_q, central, upwind_factor, sigma_p, sigma_t, sigma_g);
     }
     VelocityVector correction_w{};
     for (size_t a = 0; a < number_of_velocities; ++a) {
       gsl::at(correction_w, a) =
-          -0.5 * (gsl::at(central, a) +
-                  dissipation_factor * (gsl::at(absolute, a) +
-                                        scalar_penalty * gsl::at(jump_w, a)));
+          -0.5 * (gsl::at(central, a) + gsl::at(dissipation_w, a));
     }
     GradientVector correction_q{};
     for (size_t i = 0; i < 3; ++i) {
@@ -168,10 +230,7 @@ void UpwindGradientProjection::dg_boundary_terms(
         gsl::at(gsl::at(correction_q, i), a) =
             -0.5 *
             (gsl::at(normal, i) * gsl::at(central, number_of_velocities + a) +
-             dissipation_factor *
-                 (gsl::at(normal, i) *
-                      gsl::at(absolute, number_of_velocities + a) +
-                  scalar_penalty * gsl::at(gsl::at(jump_q, i), a)));
+             gsl::at(gsl::at(dissipation_q, i), a));
       }
     }
     PotentialVector correction_u{};
@@ -206,3 +265,25 @@ INSTANTIATE(false)
 INSTANTIATE(true)
 #undef INSTANTIATE
 }  // namespace Ccz4::GradientProjection::BoundaryCorrections
+
+template <>
+Ccz4::GradientProjection::BoundaryCorrections::ExternalCorrection
+Options::create_from_yaml<
+    Ccz4::GradientProjection::BoundaryCorrections::ExternalCorrection>::
+    create<void>(const Options::Option& options) {
+  using ExternalCorrection =
+      Ccz4::GradientProjection::BoundaryCorrections::ExternalCorrection;
+  const auto value = options.parse_as<std::string>();
+  for (const auto external_correction :
+       {ExternalCorrection::Central, ExternalCorrection::Upwind,
+        ExternalCorrection::DoubledDissipation}) {
+    if (value == get_output(external_correction)) {
+      return external_correction;
+    }
+  }
+  PARSE_ERROR(options.context(),
+              "Failed to convert \""
+                  << value
+                  << "\" to ExternalCorrection. Must be one of Central, "
+                     "Upwind, or DoubledDissipation.");
+}

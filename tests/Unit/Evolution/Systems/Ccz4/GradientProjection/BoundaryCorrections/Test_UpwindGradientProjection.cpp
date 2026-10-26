@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <random>
+#include <string>
 #include <vector>
 
 #include "DataStructures/DataVector.hpp"
@@ -38,6 +39,7 @@ namespace {
 namespace gp = Ccz4::GradientProjection;
 namespace helpers = TestHelpers::Ccz4GradientProjection;
 using Correction = gp::BoundaryCorrections::UpwindGradientProjection;
+using gp::BoundaryCorrections::ExternalCorrection;
 using helpers::to_data_vector;
 constexpr const char* module = "GradientProjectionReference";
 constexpr size_t n43 = gp::number_of_target_components;
@@ -147,6 +149,20 @@ Side random_side(const gsl::not_null<std::mt19937*> gen, const size_t n,
   return side;
 }
 
+std::array<double, n43> flatten_target(const gp::VelocityVector& w,
+                                       const gp::GradientVector& q) {
+  std::array<double, n43> result{};
+  for (size_t a = 0; a < gp::number_of_velocities; ++a) {
+    gsl::at(result, a) = gsl::at(w, a);
+  }
+  for (size_t i = 0; i < 3; ++i) {
+    for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+      gsl::at(result, 13 + 10 * i + a) = gsl::at(gsl::at(q, i), a);
+    }
+  }
+  return result;
+}
+
 template <typename WType, typename QType>
 std::array<double, n43> target_at(const WType& w, const QType& q,
                                   const size_t s) {
@@ -219,11 +235,17 @@ void test_against_reference(const gsl::not_null<std::mt19937*> gen) {
   const RawSide exterior_raw =
       random_raw_side(gen, n, normals, -1.0, make_not_null(&exterior_u),
                       make_not_null(&exterior_w));
-  for (const double factor : {0.0, 1.0, 2.0}) {
+  for (const auto external_correction :
+       {ExternalCorrection::Central, ExternalCorrection::Upwind,
+        ExternalCorrection::DoubledDissipation}) {
+    const double factor =
+        gp::BoundaryCorrections::external_upwind_factor(external_correction);
     for (const double sigma : {0.0, 1.0, 2.5}) {
       CAPTURE(factor);
       CAPTURE(sigma);
-      const Correction correction{factor, sigma};
+      // Equal penalties on all three characteristic groups reproduce the
+      // previous componentwise scalar penalty.
+      const Correction correction{external_correction, sigma, sigma, sigma};
       double largest_speed = 0.0;
       const Side interior =
           package(correction, interior_raw, make_not_null(&largest_speed));
@@ -373,7 +395,7 @@ void test_upwind_sign(const double sigma) {
   const gp::LogMetricChart chart{gp::Matrix3{}};
   const gp::NormalCharacteristics characteristics{chart, u, normal,
                                                   ::Ccz4::fd::System::f};
-  const Correction correction{1.0, sigma};
+  const Correction correction{ExternalCorrection::Upwind, sigma, sigma, sigma};
   for (size_t k = 0; k < gp::number_of_normal_components; ++k) {
     if (gp::NormalCharacteristics::is_kernel_field(k)) {
       continue;
@@ -433,7 +455,8 @@ void test_permutation(const gsl::not_null<std::mt19937*> gen) {
   std::vector<std::array<double, 3>> normals(n, {{0.0, 0.0, 1.0}});
   const Side interior = random_side(gen, n, normals, 1.0);
   const Side exterior = random_side(gen, n, normals, -1.0);
-  const Correction correction{1.0, 1.0};
+  // The accepted candidate penalties, exercising the grouped-penalty path.
+  const Correction correction{ExternalCorrection::Upwind, 1.0, 1.0, 0.0};
   const Output output = boundary_terms<false>(correction, interior, exterior);
   const std::array<size_t, 4> permutation{{2, 0, 3, 1}};
   const auto permute = [&permutation](auto tensor) {
@@ -481,7 +504,7 @@ void test_unequal_conformal_factors(const gsl::not_null<std::mt19937*> gen) {
   }
   get<gp::PotentialIndex::conformal_factor>(interior.u) = DataVector{0.5, 0.3};
   get<gp::PotentialIndex::conformal_factor>(exterior.u) = DataVector{1.5, 1.2};
-  const Correction correction{1.0, 1.0};
+  const Correction correction{ExternalCorrection::Upwind, 1.0, 1.0, 1.0};
   const Output output = boundary_terms<false>(correction, interior, exterior);
   for (size_t s = 0; s < 2; ++s) {
     const auto expected = expected_correction(interior, exterior, s, 1.0, 1.0);
@@ -525,7 +548,7 @@ void test_package_errors(const gsl::not_null<std::mt19937*> gen) {
   std::vector<gp::VelocityVector> w{};
   const RawSide raw = random_raw_side(gen, 3, normals, 1.0, make_not_null(&u),
                                       make_not_null(&w));
-  const Correction correction{1.0, 1.0};
+  const Correction correction{ExternalCorrection::Upwind, 1.0, 1.0, 1.0};
   double largest_speed = 0.0;
   RawSide off_constraint = raw;
   for (auto& component : off_constraint.chart.conformal_metric) {
@@ -552,33 +575,205 @@ void test_package_errors(const gsl::not_null<std::mt19937*> gen) {
           "The conformal factor must be positive"));
 }
 
+// The grouped penalties at the accepted candidate (1,1,0): the correction is
+// the uniform-penalty one plus half the GammaHat-b characteristic projection
+// of the jump (the dissipation loses that projection and enters with -1/2),
+// and jumps with equal GammaHat and b jumps receive the uniform correction.
+void test_group_penalties(const gsl::not_null<std::mt19937*> gen) {
+  const size_t n = 4;
+  std::vector<std::array<double, 3>> normals{};
+  for (size_t s = 0; s < n; ++s) {
+    normals.push_back(s == 0 ? std::array<double, 3>{{0.0, 0.0, 1.0}}
+                             : helpers::random_unit_vector(gen));
+  }
+  const Side interior = random_side(gen, n, normals, 1.0);
+  Side exterior = random_side(gen, n, normals, -1.0);
+  const Correction candidate{ExternalCorrection::Upwind, 1.0, 1.0, 0.0};
+  const Correction uniform{ExternalCorrection::Upwind, 1.0, 1.0, 1.0};
+  CHECK(candidate.propagating_scalar_penalty() == 1.0);
+  CHECK(candidate.stationary_gradient_scalar_penalty() == 1.0);
+  CHECK(candidate.gamma_hat_minus_b_scalar_penalty() == 0.0);
+  const Output candidate_output =
+      boundary_terms<false>(candidate, interior, exterior);
+  const Output uniform_output =
+      boundary_terms<false>(uniform, interior, exterior);
+  for (size_t s = 0; s < n; ++s) {
+    gp::PotentialVector u_average{};
+    gp::VelocityVector jump_w{};
+    for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+      gsl::at(u_average, a) =
+          0.5 * (interior.u.get(a)[s] + exterior.u.get(a)[s]);
+    }
+    for (size_t a = 0; a < gp::number_of_velocities; ++a) {
+      gsl::at(jump_w, a) = exterior.w.get(a)[s] - interior.w.get(a)[s];
+    }
+    const gp::LogMetricChart chart{
+        gp::stf_decode(&u_average[gp::PotentialIndex::log_metric])};
+    const gp::NormalCharacteristics characteristics{
+        chart, u_average, normals[s], ::Ccz4::fd::System::f};
+    // P_g [Y] through the unchanged primitives: transform the velocity jump,
+    // keep the kernel entries, invert and embed.
+    gp::NormalSubspaceVector z{};
+    for (size_t a = 0; a < gp::number_of_velocities; ++a) {
+      gsl::at(z, a) = gsl::at(jump_w, a);
+    }
+    auto fields = characteristics.characteristic_fields(z);
+    for (size_t k = 0; k < gp::number_of_normal_components; ++k) {
+      if (not gp::NormalCharacteristics::is_kernel_field(k)) {
+        gsl::at(fields, k) = 0.0;
+      }
+    }
+    gp::VelocityVector projected_w{};
+    gp::GradientVector projected_q{};
+    gp::embed_normal_subspace_vector(
+        make_not_null(&projected_w), make_not_null(&projected_q), normals[s],
+        characteristics.normal_fields_from_characteristic_fields(fields));
+    const auto projected = flatten_target(projected_w, projected_q);
+    const auto candidate_actual =
+        target_at(candidate_output.w, candidate_output.q, s);
+    const auto uniform_actual =
+        target_at(uniform_output.w, uniform_output.q, s);
+    double scale = 1.0;
+    for (size_t row = 0; row < n43; ++row) {
+      scale = std::max(scale, std::abs(gsl::at(uniform_actual, row)));
+    }
+    for (size_t row = 0; row < n43; ++row) {
+      CHECK(gsl::at(candidate_actual, row) ==
+            approx(gsl::at(uniform_actual, row) + 0.5 * gsl::at(projected, row))
+                .scale(scale)
+                .epsilon(1e-11));
+    }
+    // The value-jump input does not depend on the penalties.
+    for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+      CHECK(candidate_output.u.get(a)[s] == uniform_output.u.get(a)[s]);
+    }
+  }
+  // Equal GammaHat and b jumps: the candidate and uniform corrections agree.
+  for (size_t s = 0; s < n; ++s) {
+    for (size_t i = 0; i < 3; ++i) {
+      exterior.w.get(gp::VelocityIndex::b + i)[s] =
+          interior.w.get(gp::VelocityIndex::b + i)[s] +
+          exterior.w.get(gp::VelocityIndex::gamma_hat + i)[s] -
+          interior.w.get(gp::VelocityIndex::gamma_hat + i)[s];
+    }
+  }
+  const Output candidate_equal =
+      boundary_terms<false>(candidate, interior, exterior);
+  const Output uniform_equal =
+      boundary_terms<false>(uniform, interior, exterior);
+  for (size_t s = 0; s < n; ++s) {
+    const auto candidate_actual =
+        target_at(candidate_equal.w, candidate_equal.q, s);
+    const auto uniform_actual = target_at(uniform_equal.w, uniform_equal.q, s);
+    double scale = 1.0;
+    for (size_t row = 0; row < n43; ++row) {
+      scale = std::max(scale, std::abs(gsl::at(uniform_actual, row)));
+    }
+    for (size_t row = 0; row < n43; ++row) {
+      CHECK(gsl::at(candidate_actual, row) ==
+            approx(gsl::at(uniform_actual, row)).scale(scale).epsilon(1e-11));
+    }
+  }
+}
+
 void test_options_and_errors(const gsl::not_null<std::mt19937*> gen) {
   register_factory_classes_with_charm<Metavariables>();
   const auto created =
       TestHelpers::test_creation<std::unique_ptr<evolution::BoundaryCorrection>,
                                  Metavariables>(
           "UpwindGradientProjection:\n"
-          "  ExternalDissipationFactor: 2.0\n"
-          "  InternalScalarPenalty: 0.5\n");
+          "  ExternalCorrection: DoubledDissipation\n"
+          "  PropagatingScalarPenalty: 0.5\n"
+          "  StationaryGradientScalarPenalty: 0.25\n"
+          "  GammaHatMinusBScalarPenalty: 0.75\n");
   const auto* const typed = dynamic_cast<const Correction*>(created.get());
   REQUIRE(typed != nullptr);
-  CHECK(typed->external_dissipation_factor() == 2.0);
-  CHECK(typed->internal_scalar_penalty() == 0.5);
+  CHECK(typed->external_correction() == ExternalCorrection::DoubledDissipation);
+  CHECK(typed->propagating_scalar_penalty() == 0.5);
+  CHECK(typed->stationary_gradient_scalar_penalty() == 0.25);
+  CHECK(typed->gamma_hat_minus_b_scalar_penalty() == 0.75);
   const auto serialized = serialize_and_deserialize(*typed);
-  CHECK(serialized.external_dissipation_factor() == 2.0);
-  CHECK(serialized.internal_scalar_penalty() == 0.5);
+  CHECK(serialized.external_correction() ==
+        ExternalCorrection::DoubledDissipation);
+  CHECK(serialized.propagating_scalar_penalty() == 0.5);
+  CHECK(serialized.stationary_gradient_scalar_penalty() == 0.25);
+  CHECK(serialized.gamma_hat_minus_b_scalar_penalty() == 0.75);
   const auto clone = typed->get_clone();
   const auto& typed_clone = dynamic_cast<const Correction&>(*clone);
-  CHECK(typed_clone.external_dissipation_factor() == 2.0);
-  CHECK(typed_clone.internal_scalar_penalty() == 0.5);
+  CHECK(typed_clone.external_correction() ==
+        ExternalCorrection::DoubledDissipation);
+  CHECK(typed_clone.propagating_scalar_penalty() == 0.5);
+  CHECK(typed_clone.stationary_gradient_scalar_penalty() == 0.25);
+  CHECK(typed_clone.gamma_hat_minus_b_scalar_penalty() == 0.75);
+
+  // The remaining enum values parse; every option is required and every
+  // penalty has a zero lower bound.
+  {
+    const auto central = TestHelpers::test_creation<
+        std::unique_ptr<evolution::BoundaryCorrection>, Metavariables>(
+        "UpwindGradientProjection:\n"
+        "  ExternalCorrection: Central\n"
+        "  PropagatingScalarPenalty: 0.5\n"
+        "  StationaryGradientScalarPenalty: 0.5\n"
+        "  GammaHatMinusBScalarPenalty: 0.0\n");
+    const auto& central_typed = dynamic_cast<const Correction&>(*central);
+    CHECK(central_typed.external_correction() == ExternalCorrection::Central);
+    CHECK(central_typed.stationary_gradient_scalar_penalty() == 0.5);
+  }
+  CHECK(dynamic_cast<const Correction&>(
+            *TestHelpers::test_creation<
+                std::unique_ptr<evolution::BoundaryCorrection>, Metavariables>(
+                "UpwindGradientProjection:\n"
+                "  ExternalCorrection: Upwind\n"
+                "  PropagatingScalarPenalty: 1.0\n"
+                "  StationaryGradientScalarPenalty: 1.0\n"
+                "  GammaHatMinusBScalarPenalty: 0.0\n"))
+            .external_correction() == ExternalCorrection::Upwind);
+
   CHECK_THROWS_WITH(
       (TestHelpers::test_creation<
           std::unique_ptr<evolution::BoundaryCorrection>, Metavariables>(
           "UpwindGradientProjection:\n"
-          "  ExternalDissipationFactor: 1.0\n"
-          "  InternalScalarPenalty: -0.5\n")),
+          "  ExternalCorrection: Upwind\n"
+          "  PropagatingScalarPenalty: -0.5\n"
+          "  StationaryGradientScalarPenalty: 1.0\n"
+          "  GammaHatMinusBScalarPenalty: 0.0\n")),
       Catch::Matchers::ContainsSubstring(
           "Value -0.5 is below the lower bound of 0"));
+  CHECK_THROWS_WITH(
+      (TestHelpers::test_creation<
+          std::unique_ptr<evolution::BoundaryCorrection>, Metavariables>(
+          "UpwindGradientProjection:\n"
+          "  ExternalCorrection: Upwind\n"
+          "  PropagatingScalarPenalty: 1.0\n"
+          "  StationaryGradientScalarPenalty: -0.75\n"
+          "  GammaHatMinusBScalarPenalty: 0.0\n")),
+      Catch::Matchers::ContainsSubstring(
+          "Value -0.75 is below the lower bound of 0"));
+  CHECK_THROWS_WITH(
+      (TestHelpers::test_creation<
+          std::unique_ptr<evolution::BoundaryCorrection>, Metavariables>(
+          "UpwindGradientProjection:\n"
+          "  ExternalCorrection: Upwind\n"
+          "  PropagatingScalarPenalty: 1.0\n"
+          "  StationaryGradientScalarPenalty: 1.0\n"
+          "  GammaHatMinusBScalarPenalty: -0.25\n")),
+      Catch::Matchers::ContainsSubstring(
+          "Value -0.25 is below the lower bound of 0"));
+  CHECK_THROWS_WITH(
+      (TestHelpers::test_creation<
+          std::unique_ptr<evolution::BoundaryCorrection>, Metavariables>(
+          "UpwindGradientProjection:\n"
+          "  ExternalCorrection: OneSided\n"
+          "  PropagatingScalarPenalty: 1.0\n"
+          "  StationaryGradientScalarPenalty: 1.0\n"
+          "  GammaHatMinusBScalarPenalty: 0.0\n")),
+      Catch::Matchers::ContainsSubstring(
+          "Failed to convert \"OneSided\" to ExternalCorrection"));
+  CHECK_THROWS_WITH(
+      (Correction{ExternalCorrection::Upwind, 1.0, -0.5, 0.0}),
+      Catch::Matchers::ContainsSubstring(
+          "The scalar jump penalties must be finite and nonnegative"));
 
   std::vector<std::array<double, 3>> normals(1, {{1.0, 0.0, 0.0}});
   const Side interior = random_side(gen, 1, normals, 1.0);
@@ -602,6 +797,7 @@ SPECTRE_TEST_CASE(
     test_upwind_sign(sigma);
   }
   test_permutation(make_not_null(&gen));
+  test_group_penalties(make_not_null(&gen));
   test_unequal_conformal_factors(make_not_null(&gen));
   test_package_errors(make_not_null(&gen));
   test_options_and_errors(make_not_null(&gen));

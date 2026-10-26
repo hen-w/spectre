@@ -3,9 +3,12 @@
 
 #pragma once
 
+#include <cstdint>
+#include <iosfwd>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
@@ -27,13 +30,39 @@ class not_null;
 namespace PUP {
 class er;
 }  // namespace PUP
+namespace Options {
+class Option;
+template <typename T>
+struct create_from_yaml;
+}  // namespace Options
 /// \endcond
 
 /// Boundary corrections of the CCZ4 gradient-projection scheme.
 namespace Ccz4::GradientProjection::BoundaryCorrections {
+/// \brief The treatment of the dissipative part \f$|A_n|\f$ on external
+/// boundaries: drop it, apply it once, or apply it twice. The central part
+/// \f$A_n\f$ is always applied.
+enum class ExternalCorrection : uint8_t { Central, Upwind, DoubledDissipation };
+
+/// The factor multiplying \f$|A_n|\f$ on external boundaries for the given
+/// `ExternalCorrection`: 0, 1, or 2.
+double external_upwind_factor(ExternalCorrection external_correction);
+
+std::ostream& operator<<(std::ostream& os,
+                         ExternalCorrection external_correction);
 /*!
  * \brief The full upwind correction of the temporary targets plus a scalar
  * jump penalty and the internal value-jump input of the potential mean.
+ *
+ * \warning Upwinding here uses the characteristics of the 43-component
+ * first-order temporary-target operator on `(w, q_i)`, with `q_i = D_i u`.
+ * These generally differ from the 23 second-order characteristics in
+ * `Evolution/Systems/Ccz4/FiniteDifference/Characteristics.hpp`: the full
+ * first-order propagating amplitudes can also contain tangential derivatives
+ * of `u`. The normal-only decomposition in `NormalCharacteristics` is a
+ * computational reduction of the full operator, not a replacement by the
+ * second-order characteristics. The gradients are still recomputed from `u`,
+ * not independently evolved.
  *
  * \details Each element packages the chart fields \f$(w,q_1,q_2,q_3,u)\f$
  * (53 scalars per point) of its face values and its outward Euclidean unit
@@ -49,21 +78,31 @@ namespace Ccz4::GradientProjection::BoundaryCorrections {
  * (see `Ccz4::GradientProjection::NormalCharacteristics`) the target rates
  * receive
  * \f[
- *  Y_t\mathrel{+}=\frac12\mathcal L_f\{A_n+|A_n|+\sigma I_{43}\}[Y],
+ *  Y_t\mathrel{+}=\frac12\mathcal L_f\{A_n+|A_n|
+ *  +\sigma_pP_p+\sigma_tP_t+\sigma_gP_g\}[Y],
  * \f]
- * where \f$\sigma\ge0\f$ is the scalar jump penalty `InternalScalarPenalty`,
- * \f$\mathcal L_f\f$ is the strong-form lift with the Euclidean normal
- * magnitude and the normal matrix uses the Gamma-driver parameter
- * `Ccz4::fd::System::f`. The corrections are written to the targets of
+ * where \f$P_p\f$, \f$P_t\f$ and \f$P_g\f$ are the spectral projectors of
+ * \f$A_n\f$ onto its twenty propagating modes, its twenty stationary modes
+ * carrying tangential-gradient mismatch and its three stationary
+ * \f$\hat\Gamma-b\f$ modes (see
+ * `Ccz4::GradientProjection::NormalCharacteristics::
+ * apply_upwind_and_penalties`),
+ * \f$\sigma_p,\sigma_t,\sigma_g\ge0\f$ are the scalar jump penalties
+ * `PropagatingScalarPenalty`, `StationaryGradientScalarPenalty` and
+ * `GammaHatMinusBScalarPenalty`, \f$\mathcal L_f\f$ is the strong-form lift
+ * with the Euclidean normal magnitude and the normal matrix uses the
+ * Gamma-driver parameter `Ccz4::fd::System::f`. Equal penalties reduce the
+ * penalty term to \f$\sigma_pI_{43}\f$, the previous componentwise scalar
+ * penalty. The corrections are written to the targets of
  * `Ccz4::GradientProjection::Tags::RhsTargets`. On internal faces the
  * potential slots receive \f$\frac12\mathcal L_f(u^+-u^-)\f$, so that after
  * lifting they hold \f$R-S_uu\f$; on external faces they receive nothing.
  * Only the local normal is used; the packaged neighbor normal is ignored.
  *
  * On external faces the exterior state comes from the boundary condition and
- * the scalar jump penalty is omitted. The dissipative part \f$|A_n|\f$ is
- * multiplied by `ExternalDissipationFactor` (0: central, 1: ordinary upwind,
- * 2: doubled dissipation); the central part \f$A_n\f$ is unchanged.
+ * the scalar jump penalties are omitted. The dissipative part \f$|A_n|\f$ is
+ * multiplied by the factor of `ExternalCorrection` (`Central`: 0, `Upwind`:
+ * 1, `DoubledDissipation`: 2); the central part \f$A_n\f$ is unchanged.
  *
  * Only the strong formulation is supported. The physical fields receive no
  * correction: their rates are computed from the corrected targets by
@@ -71,29 +110,54 @@ namespace Ccz4::GradientProjection::BoundaryCorrections {
  */
 class UpwindGradientProjection final : public evolution::BoundaryCorrection {
  public:
-  struct ExternalDissipationFactor {
+  struct ExternalCorrectionOption {
+    static std::string name() { return "ExternalCorrection"; }
+    using type = ExternalCorrection;
+    static constexpr Options::String help = {
+        "The treatment of the dissipative part |A_n| on external boundaries: "
+        "Central drops it, Upwind applies it once, DoubledDissipation applies "
+        "it twice. The central part A_n is always applied."};
+  };
+  struct PropagatingScalarPenalty {
     using type = double;
     static constexpr Options::String help = {
-        "The factor multiplying |A_n| on external boundaries: 0 is "
-        "central, 1 ordinary upwind, 2 doubled dissipation."};
+        "The scalar jump penalty sigma_p on the twenty propagating "
+        "first-order characteristic modes, added to |A_n| on internal faces. "
+        "External boundaries have no scalar jump penalties."};
     static type lower_bound() { return 0.0; }
   };
-  struct InternalScalarPenalty {
+  struct StationaryGradientScalarPenalty {
     using type = double;
     static constexpr Options::String help = {
-        "The scalar jump penalty sigma added to |A_n| on internal faces: 0 is "
-        "ordinary upwind. External boundaries have no scalar jump penalty."};
+        "The scalar jump penalty sigma_t on the twenty stationary "
+        "first-order characteristic modes carrying tangential-gradient "
+        "mismatch, on internal faces. The accepted candidate uses the "
+        "PropagatingScalarPenalty value."};
+    static type lower_bound() { return 0.0; }
+  };
+  struct GammaHatMinusBScalarPenalty {
+    using type = double;
+    static constexpr Options::String help = {
+        "The scalar jump penalty sigma_g on the three stationary GammaHat-b "
+        "first-order characteristic modes, on internal faces. The accepted "
+        "candidate removes it (0); setting all three penalties equal "
+        "recovers the previous componentwise scalar penalty."};
     static type lower_bound() { return 0.0; }
   };
 
-  using options = tmpl::list<ExternalDissipationFactor, InternalScalarPenalty>;
+  using options =
+      tmpl::list<ExternalCorrectionOption, PropagatingScalarPenalty,
+                 StationaryGradientScalarPenalty, GammaHatMinusBScalarPenalty>;
   static constexpr Options::String help = {
-      "Full upwind correction of the CCZ4 gradient-projection targets with a "
-      "scalar jump penalty on internal faces only."};
+      "Full first-order characteristic upwind correction of the CCZ4 "
+      "gradient-projection targets with group scalar jump penalties on "
+      "internal faces only."};
 
   UpwindGradientProjection() = default;
-  UpwindGradientProjection(double external_dissipation_factor,
-                           double internal_scalar_penalty);
+  UpwindGradientProjection(ExternalCorrection external_correction,
+                           double propagating_scalar_penalty,
+                           double stationary_gradient_scalar_penalty,
+                           double gamma_hat_minus_b_scalar_penalty);
   UpwindGradientProjection(const UpwindGradientProjection&) = default;
   UpwindGradientProjection& operator=(const UpwindGradientProjection&) =
       default;
@@ -110,10 +174,18 @@ class UpwindGradientProjection final : public evolution::BoundaryCorrection {
 
   std::unique_ptr<BoundaryCorrection> get_clone() const override;
 
-  double external_dissipation_factor() const {
-    return external_dissipation_factor_;
+  ExternalCorrection external_correction() const {
+    return external_correction_;
   }
-  double internal_scalar_penalty() const { return internal_scalar_penalty_; }
+  double propagating_scalar_penalty() const {
+    return propagating_scalar_penalty_;
+  }
+  double stationary_gradient_scalar_penalty() const {
+    return stationary_gradient_scalar_penalty_;
+  }
+  double gamma_hat_minus_b_scalar_penalty() const {
+    return gamma_hat_minus_b_scalar_penalty_;
+  }
 
   using dg_package_field_tags =
       tmpl::list<Tags::PackagedVelocities, Tags::PackagedGradients,
@@ -162,9 +234,28 @@ class UpwindGradientProjection final : public evolution::BoundaryCorrection {
       dg::Formulation dg_formulation) const;
 
  private:
-  double external_dissipation_factor_ =
+  ExternalCorrection external_correction_ = ExternalCorrection::Upwind;
+  double propagating_scalar_penalty_ =
       std::numeric_limits<double>::signaling_NaN();
-  double internal_scalar_penalty_ =
+  double stationary_gradient_scalar_penalty_ =
+      std::numeric_limits<double>::signaling_NaN();
+  double gamma_hat_minus_b_scalar_penalty_ =
       std::numeric_limits<double>::signaling_NaN();
 };
 }  // namespace Ccz4::GradientProjection::BoundaryCorrections
+
+template <>
+struct Options::create_from_yaml<
+    Ccz4::GradientProjection::BoundaryCorrections::ExternalCorrection> {
+  template <typename Metavariables>
+  static Ccz4::GradientProjection::BoundaryCorrections::ExternalCorrection
+  create(const Options::Option& options) {
+    return create<void>(options);
+  }
+};
+
+template <>
+Ccz4::GradientProjection::BoundaryCorrections::ExternalCorrection
+Options::create_from_yaml<
+    Ccz4::GradientProjection::BoundaryCorrections::ExternalCorrection>::
+    create<void>(const Options::Option& options);

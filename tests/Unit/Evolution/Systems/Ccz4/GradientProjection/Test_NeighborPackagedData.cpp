@@ -87,8 +87,10 @@ gp::PackagedFaceData dg_package(const AllVariables& vars,
                                 const Direction<3>& direction) {
   gp::PackagedFaceData packaged{vars.number_of_grid_points()};
   evolution::dg::Actions::detail::dg_package_data<System>(
-      make_not_null(&packaged), Correction{1.0, 1.0}, vars, normal,
-      {std::nullopt}, direction, System::variables_tag_list{});
+      make_not_null(&packaged),
+      Correction{gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0,
+                 1.0},
+      vars, normal, {std::nullopt}, direction, System::variables_tag_list{});
   return packaged;
 }
 
@@ -162,7 +164,8 @@ void test_face_projection(const gsl::not_null<std::mt19937*> gen) {
   const Direction<3> direction = Direction<3>::lower_eta();
   const AllVariables on_surface = random_face_state(gen, number_of_points);
   const auto normal = random_unit_normal(gen, number_of_points);
-  const Correction correction{1.0, 1.0};
+  const Correction correction{
+      gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0};
   const auto reference = dg_package(on_surface, normal, direction);
 
   {
@@ -362,7 +365,9 @@ auto make_adapter_box(const AdapterInputs& inputs) {
       std::unique_ptr<Ccz4::fd::Reconstructor>{
           std::make_unique<Ccz4::fd::UnlimitedDeg4Prim>()},
       std::unique_ptr<evolution::BoundaryCorrection>{
-          std::make_unique<Correction>(1.0, 1.0)},
+          std::make_unique<Correction>(
+              gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0,
+              1.0)},
       inputs.moving ? std::optional{tnsr::I<DataVector, 3>{
                           inputs.dg_mesh.number_of_grid_points(), 0.0}}
                     : std::optional<tnsr::I<DataVector, 3>>{},
@@ -469,18 +474,20 @@ void test_adapter(const bool linear) {
       gp::Tags::VelocityTarget::type w_correction{n};
       gp::Tags::GradientTarget::type q_correction{n};
       gp::Tags::PotentialRateTarget::type u_correction{n};
-      Correction{1.0, 1.0}.dg_boundary_terms<false>(
-          make_not_null(&w_correction), make_not_null(&q_correction),
-          make_not_null(&u_correction),
-          get<gp::Tags::PackagedVelocities>(interior),
-          get<gp::Tags::PackagedGradients>(interior),
-          get<gp::Tags::PackagedPotentials>(interior),
-          get<Ccz4::Tags::NormalCovector<DataVector, 3>>(interior),
-          get<gp::Tags::PackagedVelocities>(exterior),
-          get<gp::Tags::PackagedGradients>(exterior),
-          get<gp::Tags::PackagedPotentials>(exterior),
-          get<Ccz4::Tags::NormalCovector<DataVector, 3>>(exterior),
-          dg::Formulation::StrongInertial);
+      Correction{gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0,
+                 1.0}
+          .dg_boundary_terms<false>(
+              make_not_null(&w_correction), make_not_null(&q_correction),
+              make_not_null(&u_correction),
+              get<gp::Tags::PackagedVelocities>(interior),
+              get<gp::Tags::PackagedGradients>(interior),
+              get<gp::Tags::PackagedPotentials>(interior),
+              get<Ccz4::Tags::NormalCovector<DataVector, 3>>(interior),
+              get<gp::Tags::PackagedVelocities>(exterior),
+              get<gp::Tags::PackagedGradients>(exterior),
+              get<gp::Tags::PackagedPotentials>(exterior),
+              get<Ccz4::Tags::NormalCovector<DataVector, 3>>(exterior),
+              dg::Formulation::StrongInertial);
       for (const auto& component : w_correction) {
         CHECK(max(abs(component)) < 1e-12);
       }
@@ -747,7 +754,8 @@ void test_adapter_distinct_traces() {
   const auto packages =
       gp::NeighborPackagedData::apply(db::as_access(box), mortars);
   REQUIRE(packages.size() == 6);
-  const Correction correction{1.0, 1.0};
+  const Correction correction{
+      gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0};
   for (const auto& mortar_id : mortars) {
     CAPTURE(mortar_id);
     const Direction<3>& direction = mortar_id.direction();

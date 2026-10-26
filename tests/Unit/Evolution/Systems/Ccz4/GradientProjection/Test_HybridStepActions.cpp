@@ -422,8 +422,8 @@ make_cache(const DomainCreator<3>& creator,
       std::make_unique<TimeSteppers::AdamsBashforth>(time_stepper_order);
   get<Ccz4::Tags::Kappa3>(cache) = 0.5;
   get<evolution::Tags::BoundaryCorrection>(cache) =
-      std::make_unique<gp::BoundaryCorrections::UpwindGradientProjection>(1.0,
-                                                                          1.0);
+      std::make_unique<gp::BoundaryCorrections::UpwindGradientProjection>(
+          gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0);
   get<gp::Tags::TopShellFilterGain>(cache) = 0.1;
   get<::dg::Tags::Formulation>(cache) = ::dg::Formulation::StrongInertial;
   get<domain::Tags::ExternalBoundaryConditions<3>>(cache) =
@@ -782,7 +782,9 @@ void check_dg_element(const MockRuntimeSystem& runner, const ElementId<3>& id,
   reversed_normal.get(dim) = -static_cast<double>(direction.sign());
   const auto fd_package = gp::package_finite_difference_face(
       std::move(face_values), reversed_normal,
-      gp::BoundaryCorrections::UpwindGradientProjection{1.0, 1.0}, direction);
+      gp::BoundaryCorrections::UpwindGradientProjection{
+          gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0},
+      direction);
   const auto expected = evolution::dg::subcell::fd::reconstruct(
       fd_package, dg_mesh.slice_away(dim),
       subcell_mesh.extents().slice_away(dim),

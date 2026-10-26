@@ -114,6 +114,30 @@ std::array<double, 3> shift_values(const double v, const double c_s,
   return {{p + kernel, p, f * s - v * kernel / c_s}};
 }
 
+// Euclidean split of a full jump: the normal gradient part r joins the
+// velocities in the normal-subspace vector z and the tangential remainder is
+// returned separately.
+void split_jump(const gsl::not_null<NormalSubspaceVector*> z,
+                const gsl::not_null<GradientVector*> tangential,
+                const std::array<double, 3>& normal,
+                const VelocityVector& jump_w, const GradientVector& jump_q) {
+  const double normal_squared = dot(normal, normal.data());
+  for (size_t a = 0; a < number_of_velocities; ++a) {
+    gsl::at(*z, a) = gsl::at(jump_w, a);
+  }
+  for (size_t a = 0; a < number_of_potentials; ++a) {
+    const double r =
+        (normal[0] * gsl::at(jump_q[0], a) + normal[1] * gsl::at(jump_q[1], a) +
+         normal[2] * gsl::at(jump_q[2], a)) /
+        normal_squared;
+    gsl::at(*z, number_of_velocities + a) = r;
+    for (size_t i = 0; i < 3; ++i) {
+      gsl::at(gsl::at(*tangential, i), a) =
+          gsl::at(gsl::at(jump_q, i), a) - gsl::at(normal, i) * r;
+    }
+  }
+}
+
 // The conformal factor is stored directly, so its positivity (which the
 // characteristic structure needs) is no longer implied by the chart.
 double checked_conformal_factor(const PotentialVector& u) {
@@ -257,6 +281,8 @@ NormalCharacteristics::NormalCharacteristics(
     : chart_(chart),
       sqrt_metric_(chart.sqrt_metric()),
       inverse_sqrt_metric_(chart.inverse_sqrt_metric()),
+      shift_{{u[PotentialIndex::shift], u[PotentialIndex::shift + 1],
+              u[PotentialIndex::shift + 2]}},
       lapse_(u[PotentialIndex::lapse]),
       conformal_factor_(checked_conformal_factor(u)),
       f_(f) {
@@ -475,7 +501,11 @@ NormalSubspaceVector NormalCharacteristics::from_isotropic(
 
 NormalSubspaceVector NormalCharacteristics::characteristic_fields(
     const NormalSubspaceVector& z) const {
-  const NormalSubspaceVector iso = to_isotropic(z);
+  return fields_from_isotropic(to_isotropic(z));
+}
+
+NormalSubspaceVector NormalCharacteristics::fields_from_isotropic(
+    const NormalSubspaceVector& iso) const {
   const double v = advection_;
   const double alpha = lapse_;
   const double phi = conformal_factor_;
@@ -562,6 +592,11 @@ NormalSubspaceVector NormalCharacteristics::characteristic_fields(
 
 NormalSubspaceVector
 NormalCharacteristics::normal_fields_from_characteristic_fields(
+    const NormalSubspaceVector& c) const {
+  return from_isotropic(isotropic_from_fields(c));
+}
+
+NormalSubspaceVector NormalCharacteristics::isotropic_from_fields(
     const NormalSubspaceVector& c) const {
   const double v = advection_;
   const double alpha = lapse_;
@@ -672,7 +707,7 @@ NormalCharacteristics::normal_fields_from_characteristic_fields(
     gsl::at(iso, z_b + i) = gsl::at(b, i);
     gsl::at(iso, z_r_beta + i) = gsl::at(beta, i);
   }
-  return from_isotropic(iso);
+  return iso;
 }
 
 NormalSubspaceVector NormalCharacteristics::apply_sign(
@@ -686,6 +721,396 @@ NormalSubspaceVector NormalCharacteristics::apply_sign(
     }
   }
   return normal_fields_from_characteristic_fields(fields);
+}
+
+NormalSubspaceVector NormalCharacteristics::isotropic_stationary_coupling(
+    const std::array<double, 3>& normal,
+    const GradientVector& tangential) const {
+  const double v = advection_;
+  const double alpha = lapse_;
+  const double phi = conformal_factor_;
+  const double m = normal_magnitude_;
+  const double phi_squared = phi * phi;
+  const Vector3& n = unit_normal_;
+  const std::array<Vector3, 2> tangents{{tangent_1_, tangent_2_}};
+
+  // Isotropic ingredients of F(0,t): the raised-normal- and shift-contracted
+  // H-gradient chart tangents, the isotropic shift-gradient matrix, and the
+  // conformal-factor and lapse gradient contractions.
+  const Vector3 raised_normal =
+      matrix_times(chart_.inverse_metric(), normal.data());
+  std::array<double, 5> h_nu{};
+  std::array<double, 5> h_beta{};
+  Vector3 tau_phi{};
+  Vector3 tau_alpha{};
+  Matrix3 shift_gradient{};
+  for (size_t i = 0; i < 3; ++i) {
+    const PotentialVector& t_i = gsl::at(tangential, i);
+    for (size_t a = 0; a < 5; ++a) {
+      gsl::at(h_nu, a) += gsl::at(raised_normal, i) *
+                          gsl::at(t_i, PotentialIndex::log_metric + a);
+      gsl::at(h_beta, a) +=
+          gsl::at(shift_, i) * gsl::at(t_i, PotentialIndex::log_metric + a);
+    }
+    gsl::at(tau_phi, i) = t_i[PotentialIndex::conformal_factor];
+    gsl::at(tau_alpha, i) = t_i[PotentialIndex::lapse];
+    for (size_t k = 0; k < 3; ++k) {
+      shift_gradient(i, k) = gsl::at(t_i, PotentialIndex::shift + k);
+    }
+  }
+  const Matrix3 theta_nu = 0.5 * inverse_sqrt_metric_ *
+                           chart_.tangent(stf_decode(h_nu.data())) *
+                           inverse_sqrt_metric_;
+  const Matrix3 theta_beta = 0.5 * inverse_sqrt_metric_ *
+                             chart_.tangent(stf_decode(h_beta.data())) *
+                             inverse_sqrt_metric_;
+  const Matrix3 iso_shift_gradient =
+      inverse_sqrt_metric_ * shift_gradient * sqrt_metric_;
+  const double trace_shift_gradient =
+      shift_gradient(0, 0) + shift_gradient(1, 1) + shift_gradient(2, 2);
+  Vector3 kappa{};
+  for (size_t i = 0; i < 3; ++i) {
+    gsl::at(kappa, i) =
+        alpha * gsl::at(tau_phi, i) / phi - gsl::at(tau_alpha, i);
+  }
+  const Vector3 iso_kappa = matrix_times(inverse_sqrt_metric_, kappa.data());
+  const double normal_kappa = dot(n, iso_kappa.data());
+  const double nu_tau_phi = dot(raised_normal, tau_phi.data());
+  const double nu_tau_alpha = dot(raised_normal, tau_alpha.data());
+  const double beta_tau_phi = dot(shift_, tau_phi.data());
+  const double beta_tau_alpha = dot(shift_, tau_alpha.data());
+
+  // The isotropic components of F(0,t), in the variable convention of
+  // to_isotropic. The GammaHat and b rows are equal and the shift-rate rows
+  // vanish (R_beta = f b at w = 0).
+  Matrix3 a_bar = -alpha * phi_squared * theta_nu +
+                  m * phi_squared * symmetric_outer(n, iso_kappa);
+  Matrix3 h_bar = theta_beta;
+  for (size_t i = 0; i < 3; ++i) {
+    for (size_t j = 0; j < 3; ++j) {
+      h_bar(i, j) +=
+          0.5 * (iso_shift_gradient(i, j) + iso_shift_gradient(j, i));
+    }
+    a_bar(i, i) -= m * phi_squared * normal_kappa / 3.0;
+    h_bar(i, i) -= trace_shift_gradient / 3.0;
+  }
+  h_bar *= m;
+  const double k_bar =
+      4.0 * alpha * phi * nu_tau_phi - phi_squared * nu_tau_alpha;
+  const double theta_bar = 2.0 * alpha * phi * nu_tau_phi;
+  const double ell_bar = m * (beta_tau_phi / phi - trace_shift_gradient / 3.0);
+  const double s_bar = m * beta_tau_alpha;
+  Vector3 gamma_bar{};
+  for (size_t i = 0; i < 3; ++i) {
+    double transposed_shift_normal = 0.0;
+    for (size_t j = 0; j < 3; ++j) {
+      transposed_shift_normal += iso_shift_gradient(j, i) * gsl::at(n, j);
+    }
+    gsl::at(gamma_bar, i) = m * (transposed_shift_normal +
+                                 trace_shift_gradient * gsl::at(n, i) / 3.0);
+  }
+
+  // Sector solves of M(Kt) = F(0,t) with zero kernel characteristic content,
+  // in the unit-normal-normalized variables (all right-hand sides divided by
+  // the conformal normal magnitude). The 2x2 blocks are inverted by their
+  // adjugates over the determinants, which are the products of the paired
+  // characteristic speeds and are kept away from zero by the constructor's
+  // degeneracy errors; the Gamma-driver blocks divide only by f and c_s.
+  const double inv_m = 1.0 / m;
+  const double det_light = v * v - alpha * alpha * phi_squared;
+  const double det_gauge = v * v - 2.0 * alpha * phi_squared;
+  const double light_p = -alpha * phi_squared;
+  const double light_q = -alpha;
+  const auto solve_light = [v, light_p, light_q, det_light](const double b_1,
+                                                            const double b_2) {
+    return std::array<double, 2>{{(v * b_1 - light_p * b_2) / det_light,
+                                  (v * b_2 - light_q * b_1) / det_light}};
+  };
+
+  // Transverse-traceless sector.
+  const std::array<double, 2> tt_a_bar{
+      {(bilinear(tangents[0], a_bar, tangents[0]) -
+        bilinear(tangents[1], a_bar, tangents[1])) *
+           inv_m / std::sqrt(2.0),
+       std::sqrt(2.0) * bilinear(tangents[0], a_bar, tangents[1]) * inv_m}};
+  const std::array<double, 2> tt_h_bar{
+      {(bilinear(tangents[0], h_bar, tangents[0]) -
+        bilinear(tangents[1], h_bar, tangents[1])) *
+           inv_m / std::sqrt(2.0),
+       std::sqrt(2.0) * bilinear(tangents[0], h_bar, tangents[1]) * inv_m}};
+  std::array<std::array<double, 2>, 2> coupling_tt{};
+  for (size_t polarization = 0; polarization < 2; ++polarization) {
+    gsl::at(coupling_tt, polarization) = solve_light(
+        gsl::at(tt_a_bar, polarization), gsl::at(tt_h_bar, polarization));
+  }
+
+  // Vector sector: the driver solution has zero GammaHat and b components, so
+  // the light block decouples with the plain H projection.
+  std::array<std::array<double, 2>, 2> coupling_vector_light{};
+  std::array<double, 2> coupling_vector_beta{};
+  for (size_t tangent = 0; tangent < 2; ++tangent) {
+    const Vector3& t = gsl::at(tangents, tangent);
+    const double b_a = bilinear(t, a_bar, n) * inv_m;
+    const double b_gamma = dot(t, gamma_bar.data()) * inv_m;
+    const double b_h = bilinear(t, h_bar, n) * inv_m - 0.5 * b_gamma;
+    gsl::at(coupling_vector_light, tangent) = solve_light(b_a, b_h);
+    gsl::at(coupling_vector_beta, tangent) = b_gamma;
+  }
+
+  // Scalar sector, through the same decoupling as the transforms.
+  const double b_x = 1.5 * bilinear(n, a_bar, n) * inv_m;
+  const double b_y = 1.5 * bilinear(n, h_bar, n) * inv_m;
+  const double b_theta = theta_bar * inv_m;
+  const double b_k = k_bar * inv_m;
+  const double b_ell = ell_bar * inv_m;
+  const double b_s = s_bar * inv_m;
+  const double b_gamma_n = dot(n, gamma_bar.data()) * inv_m;
+  const double b_psi = b_gamma_n + 4.0 * b_ell;
+  const double b_big_p = b_k - 2.0 * b_theta;
+  const double e_gamma_b =
+      theta_coupling_[0] * b_theta + theta_coupling_[1] * b_psi +
+      lapse_coupling_[0] * b_big_p + lapse_coupling_[1] * b_s;
+  const double e_beta_b =
+      theta_coupling_[2] * b_theta + theta_coupling_[3] * b_psi +
+      lapse_coupling_[2] * b_big_p + lapse_coupling_[3] * b_s;
+  const double k_theta =
+      (v * b_theta - 0.5 * alpha * phi_squared * b_psi) / det_light;
+  const double k_psi = (v * b_psi - 2.0 * alpha * b_theta) / det_light;
+  const double k_big_p = (v * b_big_p + phi_squared * b_s) / det_gauge;
+  const double k_s = (v * b_s + 2.0 * alpha * b_big_p) / det_gauge;
+  const auto light_scalar = solve_light(b_x - b_big_p, b_y - b_gamma_n - b_ell);
+  const double k_gamma_tilde = -e_beta_b / f_;
+  const double k_beta_tilde =
+      0.75 * (b_gamma_n - e_gamma_b - v * k_gamma_tilde);
+  const double k_gamma_n = k_gamma_tilde + theta_coupling_[0] * k_theta +
+                           theta_coupling_[1] * k_psi +
+                           lapse_coupling_[0] * k_big_p +
+                           lapse_coupling_[1] * k_s;
+  const double k_beta_n =
+      k_beta_tilde + theta_coupling_[2] * k_theta + theta_coupling_[3] * k_psi +
+      lapse_coupling_[2] * k_big_p + lapse_coupling_[3] * k_s;
+  const double k_ell = 0.25 * (k_psi - k_gamma_n);
+  const double k_trace = k_big_p + 2.0 * k_theta;
+  const double k_x = light_scalar[0] + k_big_p;
+  const double k_y = light_scalar[1] + k_gamma_n + k_ell;
+
+  // Assemble the isotropic components, mirroring the inverse transform. The
+  // kernel condition makes the GammaHat and b components equal.
+  Matrix3 a_coupling{};
+  Matrix3 h_coupling{};
+  for (size_t i = 0; i < 3; ++i) {
+    for (size_t j = 0; j < 3; ++j) {
+      const double q_ij =
+          gsl::at(n, i) * gsl::at(n, j) - (i == j ? 1.0 : 0.0) / 3.0;
+      a_coupling(i, j) = k_x * q_ij;
+      h_coupling(i, j) = k_y * q_ij;
+      for (size_t tangent = 0; tangent < 2; ++tangent) {
+        const Vector3& t = gsl::at(tangents, tangent);
+        const double sym =
+            gsl::at(n, i) * gsl::at(t, j) + gsl::at(t, i) * gsl::at(n, j);
+        a_coupling(i, j) += gsl::at(coupling_vector_light, tangent)[0] * sym;
+        h_coupling(i, j) += gsl::at(coupling_vector_light, tangent)[1] * sym;
+      }
+      const double basis_plus =
+          (tangents[0][i] * tangents[0][j] - tangents[1][i] * tangents[1][j]) /
+          std::sqrt(2.0);
+      const double basis_cross =
+          (tangents[0][i] * tangents[1][j] + tangents[1][i] * tangents[0][j]) /
+          std::sqrt(2.0);
+      a_coupling(i, j) +=
+          coupling_tt[0][0] * basis_plus + coupling_tt[1][0] * basis_cross;
+      h_coupling(i, j) +=
+          coupling_tt[0][1] * basis_plus + coupling_tt[1][1] * basis_cross;
+    }
+  }
+  NormalSubspaceVector coupling{};
+  const std::array<double, 5> encoded_a = stf_encode(a_coupling);
+  const std::array<double, 5> encoded_h = stf_encode(h_coupling);
+  for (size_t i = 0; i < 5; ++i) {
+    gsl::at(coupling, z_a + i) = gsl::at(encoded_a, i);
+    gsl::at(coupling, z_r_h + i) = gsl::at(encoded_h, i);
+  }
+  coupling[z_k] = k_trace;
+  coupling[z_theta] = k_theta;
+  coupling[z_r_phi] = k_ell;
+  coupling[z_r_lapse] = k_s;
+  for (size_t i = 0; i < 3; ++i) {
+    const double beta_i = k_beta_n * gsl::at(n, i) +
+                          coupling_vector_beta[0] * gsl::at(tangents[0], i) +
+                          coupling_vector_beta[1] * gsl::at(tangents[1], i);
+    gsl::at(coupling, z_gamma + i) = k_gamma_n * gsl::at(n, i);
+    gsl::at(coupling, z_b + i) = k_gamma_n * gsl::at(n, i);
+    gsl::at(coupling, z_r_beta + i) = beta_i;
+  }
+  return coupling;
+}
+
+void NormalCharacteristics::full_characteristic_fields(
+    const gsl::not_null<NormalSubspaceVector*> fields,
+    const gsl::not_null<GradientVector*> tangential,
+    const std::array<double, 3>& normal, const VelocityVector& jump_w,
+    const GradientVector& jump_q) const {
+  NormalSubspaceVector z{};
+  split_jump(make_not_null(&z), tangential, normal, jump_w, jump_q);
+  NormalSubspaceVector iso = to_isotropic(z);
+  const NormalSubspaceVector coupling =
+      isotropic_stationary_coupling(normal, *tangential);
+  for (size_t k = 0; k < number_of_normal_components; ++k) {
+    gsl::at(iso, k) += gsl::at(coupling, k);
+  }
+  *fields = fields_from_isotropic(iso);
+}
+
+void NormalCharacteristics::full_fields_from_characteristic_fields(
+    const gsl::not_null<VelocityVector*> jump_w,
+    const gsl::not_null<GradientVector*> jump_q,
+    const std::array<double, 3>& normal, const NormalSubspaceVector& fields,
+    const GradientVector& tangential) const {
+  const NormalSubspaceVector coupling =
+      isotropic_stationary_coupling(normal, tangential);
+  NormalSubspaceVector iso = isotropic_from_fields(fields);
+  for (size_t k = 0; k < number_of_normal_components; ++k) {
+    gsl::at(iso, k) -= gsl::at(coupling, k);
+  }
+  embed_normal_subspace_vector(jump_w, jump_q, normal, from_isotropic(iso));
+  for (size_t i = 0; i < 3; ++i) {
+    for (size_t a = 0; a < number_of_potentials; ++a) {
+      gsl::at(gsl::at(*jump_q, i), a) += gsl::at(gsl::at(tangential, i), a);
+    }
+  }
+}
+
+void NormalCharacteristics::add_kernel_penalty(
+    const gsl::not_null<VelocityVector*> result_w,
+    const gsl::not_null<GradientVector*> result_q,
+    const std::array<double, 3>& normal, const VelocityVector& jump_w,
+    const double weight) const {
+  const double v = advection_;
+  const double m = normal_magnitude_;
+  const Vector3& n = unit_normal_;
+  Vector3 difference{};
+  for (size_t i = 0; i < 3; ++i) {
+    gsl::at(difference, i) = gsl::at(jump_w, VelocityIndex::gamma_hat + i) -
+                             gsl::at(jump_w, VelocityIndex::b + i);
+  }
+  const Vector3 iso_difference = matrix_times(sqrt_metric_, difference.data());
+  const double amplitude_normal = dot(n, iso_difference.data());
+  Vector3 tangential_part{};
+  for (size_t i = 0; i < 3; ++i) {
+    gsl::at(tangential_part, i) =
+        gsl::at(iso_difference, i) - amplitude_normal * gsl::at(n, i);
+  }
+  // The kernel eigenvectors' inverse-transform images: GammaHat receives the
+  // jump difference itself, b nothing, and the rate slots the closed forms of
+  // the derivation note.
+  Matrix3 h_iso = symmetric_outer(n, tangential_part);
+  for (size_t i = 0; i < 3; ++i) {
+    for (size_t j = 0; j < 3; ++j) {
+      h_iso(i, j) +=
+          0.75 * amplitude_normal *
+          (gsl::at(n, i) * gsl::at(n, j) - (i == j ? 1.0 : 0.0) / 3.0);
+    }
+  }
+  const std::array<double, 5> rate_h = stf_encode(
+      2.0 * chart_.inverse_tangent(sqrt_metric_ * h_iso * sqrt_metric_));
+  Vector3 beta_direction{};
+  for (size_t i = 0; i < 3; ++i) {
+    gsl::at(beta_direction, i) =
+        gsl::at(tangential_part, i) + 0.75 * amplitude_normal * gsl::at(n, i);
+  }
+  const Vector3 rate_beta =
+      matrix_times(inverse_sqrt_metric_, beta_direction.data());
+  PotentialVector rate{};
+  for (size_t a = 0; a < 5; ++a) {
+    gsl::at(rate, PotentialIndex::log_metric + a) = gsl::at(rate_h, a) / m;
+  }
+  rate[PotentialIndex::conformal_factor] =
+      -conformal_factor_ * amplitude_normal / (4.0 * m);
+  for (size_t i = 0; i < 3; ++i) {
+    gsl::at(rate, PotentialIndex::shift + i) = -v * gsl::at(rate_beta, i) / m;
+  }
+  for (size_t i = 0; i < 3; ++i) {
+    gsl::at(*result_w, VelocityIndex::gamma_hat + i) +=
+        weight * gsl::at(difference, i);
+    for (size_t a = 0; a < number_of_potentials; ++a) {
+      gsl::at(gsl::at(*result_q, i), a) +=
+          weight * gsl::at(normal, i) * gsl::at(rate, a);
+    }
+  }
+}
+
+void NormalCharacteristics::apply_upwind_and_penalties(
+    const gsl::not_null<VelocityVector*> result_w,
+    const gsl::not_null<GradientVector*> result_q,
+    const std::array<double, 3>& normal, const VelocityVector& jump_w,
+    const GradientVector& jump_q, const NormalSubspaceVector& flux,
+    const double upwind_factor, const double sigma_p, const double sigma_t,
+    const double sigma_g) const {
+  if (sigma_p == sigma_t) {
+    // Equal propagating and stationary-gradient penalties commute with the
+    // full transform up to the kernel projector, so the penalty is sigma_p
+    // times the jump plus (sigma_g - sigma_p) P_g; the upwinding is the sign
+    // route on the flux.
+    NormalSubspaceVector weighted = characteristic_fields(flux);
+    for (size_t k = 0; k < number_of_normal_components; ++k) {
+      if (is_kernel_field(k)) {
+        gsl::at(weighted, k) = 0.0;
+      } else if (gsl::at(speeds_, k) < 0.0) {
+        gsl::at(weighted, k) *= -upwind_factor;
+      } else {
+        gsl::at(weighted, k) *= upwind_factor;
+      }
+    }
+    embed_normal_subspace_vector(
+        result_w, result_q, normal,
+        normal_fields_from_characteristic_fields(weighted));
+    for (size_t a = 0; a < number_of_velocities; ++a) {
+      gsl::at(*result_w, a) += sigma_p * gsl::at(jump_w, a);
+    }
+    for (size_t i = 0; i < 3; ++i) {
+      for (size_t a = 0; a < number_of_potentials; ++a) {
+        gsl::at(gsl::at(*result_q, i), a) +=
+            sigma_p * gsl::at(gsl::at(jump_q, i), a);
+      }
+    }
+    if (sigma_g != sigma_p) {
+      add_kernel_penalty(result_w, result_q, normal, jump_w, sigma_g - sigma_p);
+    }
+    return;
+  }
+  // General path: the full forward transform, the diagonal weights, and the
+  // inverse transform. The flux is not needed here.
+  NormalSubspaceVector z{};
+  GradientVector tangential{};
+  split_jump(make_not_null(&z), make_not_null(&tangential), normal, jump_w,
+             jump_q);
+  const NormalSubspaceVector coupling =
+      isotropic_stationary_coupling(normal, tangential);
+  NormalSubspaceVector iso = to_isotropic(z);
+  for (size_t k = 0; k < number_of_normal_components; ++k) {
+    gsl::at(iso, k) += gsl::at(coupling, k);
+  }
+  NormalSubspaceVector weighted = fields_from_isotropic(iso);
+  for (size_t k = 0; k < number_of_normal_components; ++k) {
+    if (is_kernel_field(k)) {
+      gsl::at(weighted, k) *= sigma_g;
+    } else {
+      gsl::at(weighted, k) *=
+          upwind_factor * std::abs(gsl::at(speeds_, k)) + sigma_p;
+    }
+  }
+  NormalSubspaceVector iso_out = isotropic_from_fields(weighted);
+  for (size_t k = 0; k < number_of_normal_components; ++k) {
+    gsl::at(iso_out, k) -= sigma_t * gsl::at(coupling, k);
+  }
+  embed_normal_subspace_vector(result_w, result_q, normal,
+                               from_isotropic(iso_out));
+  for (size_t i = 0; i < 3; ++i) {
+    for (size_t a = 0; a < number_of_potentials; ++a) {
+      gsl::at(gsl::at(*result_q, i), a) +=
+          sigma_t * gsl::at(gsl::at(tangential, i), a);
+    }
+  }
 }
 
 void apply_absolute_normal_matrix(const gsl::not_null<VelocityVector*> result_w,

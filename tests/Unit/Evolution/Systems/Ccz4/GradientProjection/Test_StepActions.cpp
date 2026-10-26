@@ -521,7 +521,8 @@ using CacheTuple = tuples::TaggedTuple<
     ::Tags::EventsAndTriggers<Triggers::WhenToCheck::AtSlabs>,
     evolution::Tags::BoundaryCorrection, ::dg::Tags::Formulation,
     domain::Tags::ExternalBoundaryConditions<3>,
-    evolution::initial_data::Tags::InitialData, gp::Tags::TopShellFilterGain>;
+    evolution::initial_data::Tags::InitialData,
+    gp::Tags::TopShellFilterGain>;
 using MutableCacheTuple =
     tuples::TaggedTuple<domain::Tags::FunctionsOfTimeInitialize>;
 
@@ -643,7 +644,8 @@ void test_step_actions(const bool damped) {
   CAPTURE(damped);
   RecordState::calls.clear();
   const size_t order = 3;
-  const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0, 1.0};
+  const gp::BoundaryCorrections::UpwindGradientProjection correction{
+      gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0};
   MockRuntimeSystem runner{
       cache(order, brick(0), correction, top_shell_filter_gain),
       MutableCacheTuple{}};
@@ -1193,8 +1195,9 @@ void test_linearized_operator(const gsl::not_null<std::mt19937*> gen) {
     CAPTURE(kappa_1);
     CAPTURE(eta);
     CAPTURE(sigma);
-    const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0,
-                                                                       sigma};
+    const gp::BoundaryCorrections::UpwindGradientProjection correction{
+        gp::BoundaryCorrections::ExternalCorrection::Upwind, sigma, sigma,
+        sigma};
     const auto creator = brick(refinement_x);
     MockRuntimeSystem runner{cache(3, creator, correction),
                              MutableCacheTuple{}};
@@ -1250,8 +1253,9 @@ void test_linearized_operator_about_background(
     CAPTURE(kappa_1);
     CAPTURE(eta);
     CAPTURE(sigma);
-    const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0,
-                                                                       sigma};
+    const gp::BoundaryCorrections::UpwindGradientProjection correction{
+        gp::BoundaryCorrections::ExternalCorrection::Upwind, sigma, sigma,
+        sigma};
     const auto creator = brick(refinement_x);
     MockRuntimeSystem runner{cache(3, creator, correction),
                              MutableCacheTuple{}};
@@ -1305,7 +1309,8 @@ std::vector<ElementId<3>> sphere_elements(
 void test_sphere_minkowski(const double eta) {
   CAPTURE(eta);
   const auto creator = sphere();
-  const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0, 1.0};
+  const gp::BoundaryCorrections::UpwindGradientProjection correction{
+      gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0};
   MockRuntimeSystem runner{cache(3, creator, correction), MutableCacheTuple{}};
   const auto ids = sphere_elements(make_not_null(&runner), creator, 0.3, eta);
   const size_t total = 6 * number_of_points;
@@ -1328,7 +1333,8 @@ void test_sphere_minkowski(const double eta) {
 // external face has no value jump), and no time derivative.
 void test_external_lift_isolation(const gsl::not_null<std::mt19937*> gen) {
   const auto creator = sphere();
-  const gp::BoundaryCorrections::UpwindGradientProjection correction{1.0, 1.0};
+  const gp::BoundaryCorrections::UpwindGradientProjection correction{
+      gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0};
   MockRuntimeSystem runner{cache(3, creator, correction), MutableCacheTuple{}};
   const auto ids = sphere_elements(make_not_null(&runner), creator, 0.3, 0.4);
   const size_t n = number_of_points;
@@ -1417,7 +1423,10 @@ void test_sphere_linearized(const gsl::not_null<std::mt19937*> gen) {
     CAPTURE(eta);
     CAPTURE(sigma);
     const gp::BoundaryCorrections::UpwindGradientProjection correction{
-        external_factor, sigma};
+        external_factor == 1.0
+            ? gp::BoundaryCorrections::ExternalCorrection::Upwind
+            : gp::BoundaryCorrections::ExternalCorrection::DoubledDissipation,
+        sigma, sigma, sigma};
     MockRuntimeSystem runner{cache(3, creator, correction),
                              MutableCacheTuple{}};
     const auto ids =
