@@ -7,10 +7,21 @@
 #include <cmath>
 #include <cstddef>
 #include <random>
+#include <utility>
 #include <vector>
 
 #include "DataStructures/DataVector.hpp"
+#include "DataStructures/Matrix.hpp"
+#include "DataStructures/Tensor/EagerMath/Determinant.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
+#include "Domain/CoordinateMaps/CoordinateMap.hpp"
+#include "Domain/CoordinateMaps/CoordinateMap.tpp"
+#include "Domain/CoordinateMaps/Distribution.hpp"
+#include "Domain/CoordinateMaps/Identity.hpp"
+#include "Domain/CoordinateMaps/Interval.hpp"
+#include "Domain/CoordinateMaps/ProductMaps.hpp"
+#include "Domain/CoordinateMaps/ProductMaps.tpp"
+#include "Domain/CoordinateMaps/SphericalToCartesianPfaffian.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Chart.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/FinalizeTimeDerivative.hpp"
@@ -23,6 +34,15 @@
 #include "Framework/SetupLocalPythonEnvironment.hpp"
 #include "Framework/TestHelpers.hpp"
 #include "NumericalAlgorithms/LinearOperators/PartialDerivatives.hpp"
+#include "NumericalAlgorithms/Spectral/Basis.hpp"
+#include "NumericalAlgorithms/Spectral/LogicalCoordinates.hpp"
+#include "NumericalAlgorithms/Spectral/Mesh.hpp"
+#include "NumericalAlgorithms/Spectral/ModalToNodalMatrix.hpp"
+#include "NumericalAlgorithms/Spectral/Quadrature.hpp"
+#include "NumericalAlgorithms/SphericalHarmonics/Spherepack.hpp"
+#include "NumericalAlgorithms/SphericalHarmonics/SpherepackCache.hpp"
+#include "NumericalAlgorithms/SphericalHarmonics/SpherepackIterator.hpp"
+#include "Utilities/ConstantExpressions.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/Literals.hpp"
 
@@ -44,14 +64,14 @@ struct ElementData {
 // Random admissible chart fields with q = D u, and random targets, with
 // physical conformal factors in `phi_range`.
 ElementData make_element(const gsl::not_null<std::mt19937*> gen,
-                         const bool curved,
+                         helpers::Geometry geometry,
                          const std::array<double, 2>& phi_range = {
                              {0.6, 1.3}}) {
   ElementData result{};
-  result.geometry = helpers::make_geometry({{4, 4, 4}}, curved);
+  result.geometry = std::move(geometry);
   result.operators =
       gp::LocalOperators{result.geometry.mesh, result.geometry.inverse_jacobian,
-                         result.geometry.det_inverse_jacobian};
+                         result.geometry.det_inverse_jacobian, 2};
   const size_t n = result.geometry.mesh.number_of_grid_points();
   result.chart = helpers::ChartData{n};
   result.q = gp::Tags::PotentialGradients::type{n};
@@ -71,6 +91,66 @@ ElementData make_element(const gsl::not_null<std::mt19937*> gen,
   }
   gp::potential_gradients(make_not_null(&result.q), u, result.geometry.mesh,
                           result.geometry.inverse_jacobian);
+  return result;
+}
+
+ElementData make_element(const gsl::not_null<std::mt19937*> gen,
+                         const bool curved,
+                         const std::array<double, 2>& phi_range = {
+                             {0.6, 1.3}}) {
+  return make_element(gen, helpers::make_geometry({{4, 4, 4}}, curved),
+                      phi_range);
+}
+
+// An element of a spherical shell with a logarithmic radial map, built as by
+// the NonconformingSphericalShells domain creator.
+helpers::Geometry make_shell_geometry(const size_t radial_size,
+                                      const size_t l_max) {
+  using Interval = domain::CoordinateMaps::Interval;
+  using Identity2D = domain::CoordinateMaps::Identity<2>;
+  helpers::Geometry result{};
+  result.mesh =
+      Mesh<3>{{{radial_size, l_max + 1, 2 * l_max + 1}},
+              {{Spectral::Basis::Legendre, Spectral::Basis::SphericalHarmonic,
+                Spectral::Basis::SphericalHarmonic}},
+              {{Spectral::Quadrature::GaussLobatto, Spectral::Quadrature::Gauss,
+                Spectral::Quadrature::Equiangular}}};
+  result.logical = logical_coordinates(result.mesh);
+  const auto map =
+      domain::make_coordinate_map<Frame::ElementLogical, Frame::Inertial>(
+          domain::CoordinateMaps::ProductOf2Maps<Interval, Identity2D>{
+              Interval{-1.0, 1.0, 1.2, 3.1,
+                       domain::CoordinateMaps::Distribution::Logarithmic, 0.0},
+              Identity2D{}},
+          domain::CoordinateMaps::SphericalToCartesianPfaffian{});
+  result.inverse_jacobian = map.inv_jacobian(result.logical);
+  result.det_inverse_jacobian = determinant(result.inverse_jacobian);
+  result.exact_volume = 4.0 * M_PI / 3.0 * (cube(3.1) - cube(1.2));
+  return result;
+}
+
+// A random element of the shell trial space.
+DataVector random_trial_function(const gsl::not_null<std::mt19937*> gen,
+                                 const Mesh<3>& mesh) {
+  std::normal_distribution<double> dist(0.0, 1.0);
+  const size_t radial_size = mesh.extents(0);
+  const size_t l_max = mesh.extents(1) - 1;
+  const auto& ylm = ylm::get_spherepack_cache(l_max);
+  const Matrix& radial_vandermonde =
+      Spectral::modal_to_nodal_matrix(mesh.slice_through(0));
+  DataVector result{mesh.number_of_grid_points(), 0.0};
+  for (size_t k = 0; k < radial_size; ++k) {
+    DataVector coefficients{ylm.spectral_size(), 0.0};
+    for (ylm::SpherepackIterator iterator(l_max, l_max); iterator; ++iterator) {
+      coefficients[iterator()] = dist(*gen);
+    }
+    const DataVector angular = ylm.spec_to_phys(coefficients);
+    for (size_t j = 0; j < angular.size(); ++j) {
+      for (size_t i = 0; i < radial_size; ++i) {
+        result[i + radial_size * j] += radial_vandermonde(i, k) * angular[j];
+      }
+    }
+  }
   return result;
 }
 
@@ -507,6 +587,109 @@ void test_shift_damping_limits(const gsl::not_null<std::mt19937*> gen,
   }
 }
 
+// The finalized chart rates on a spherical-harmonic shell with a nonlinear
+// radial map and a random admissible nonlinear state: the mean rule for
+// inconsistent targets, exact recovery of consistent targets, and the
+// compatibility correction of a derivative-kernel change of the provisional
+// rate, which is copied into the fitted rate without changing its gradient.
+void test_shell(const gsl::not_null<std::mt19937*> gen, const double f) {
+  ElementData data = make_element(gen, make_shell_geometry(4, 3));
+  const Mesh<3>& mesh = data.geometry.mesh;
+  const size_t n = mesh.number_of_grid_points();
+  const Scalar<DataVector> zero_eta{n, 0.0};
+  REQUIRE(data.operators.is_spherical_shell());
+
+  const ChartRates rates = chart_rates(data, data.dt_w, zero_eta, f);
+  for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+    CHECK(data.operators.mean(rates.u_rate.get(a)) ==
+          approx(data.operators.mean(data.dt_u.get(a)))
+              .scale(max_abs(data.dt_u.get(a))));
+    const auto derivative =
+        partial_derivative(Scalar<DataVector>{rates.u_rate.get(a)}, mesh,
+                           data.geometry.inverse_jacobian);
+    for (size_t i = 0; i < 3; ++i) {
+      CHECK_ITERABLE_APPROX(rates.fitted_gradient.get(i, a), derivative.get(i));
+    }
+  }
+
+  // A derivative-kernel change of every provisional rate.
+  const Matrix kernel = data.operators.derivative_kernel();
+  std::normal_distribution<double> dist(0.0, 1.0);
+  ElementData perturbed = data;
+  gp::Tags::PotentialRateTarget::type change{n, 0.0};
+  for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+    for (size_t k = 0; k < kernel.columns(); ++k) {
+      const double coefficient = dist(*gen);
+      for (size_t s = 0; s < n; ++s) {
+        change.get(a)[s] += coefficient * kernel(s, k);
+      }
+    }
+    perturbed.dt_u.get(a) += change.get(a);
+  }
+  const ChartRates perturbed_rates =
+      chart_rates(perturbed, perturbed.dt_w, zero_eta, f);
+  double largest_w_change = 0.0;
+  for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+    const double scale = max_abs(rates.u_rate.get(a)) + max_abs(change.get(a));
+    CHECK_ITERABLE_CUSTOM_APPROX(
+        DataVector{perturbed_rates.u_rate.get(a) - rates.u_rate.get(a)},
+        change.get(a), Approx::custom().epsilon(1e-12).scale(scale));
+    for (size_t i = 0; i < 3; ++i) {
+      CHECK(max_abs(perturbed_rates.fitted_gradient.get(i, a) -
+                    rates.fitted_gradient.get(i, a)) <
+            1e-10 * (1.0 + max_abs(rates.fitted_gradient.get(i, a))));
+    }
+  }
+  for (size_t s = 0; s < n; ++s) {
+    const auto u = gp::potentials_at(data.chart.potentials(), s);
+    const auto w = gp::velocities_at(data.chart.velocities(), s);
+    const auto q = gp::gradients_at(data.q, s);
+    const gp::LogMetricChart chart{
+        gp::stf_decode(&u[gp::PotentialIndex::log_metric])};
+    const auto rate_change = add(gp::potentials_at(perturbed_rates.u_rate, s),
+                                 gp::potentials_at(rates.u_rate, s), -1.0);
+    gp::GradientVector gradient_change{};
+    for (size_t i = 0; i < 3; ++i) {
+      for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+        gsl::at(gsl::at(gradient_change, i), a) =
+            rates.fitted_gradient.get(i, a)[s] -
+            perturbed_rates.fitted_gradient.get(i, a)[s];
+      }
+    }
+    const auto expected = gp::apply_rhs_inverse(
+        u[gp::PotentialIndex::lapse], u[gp::PotentialIndex::conformal_factor],
+        add(gp::potential_rhs(chart, u, gp::VelocityVector{}, gradient_change,
+                              f),
+            gp::potential_rhs_potential_derivative(chart, u, w, q, rate_change),
+            -1.0),
+        f);
+    for (size_t a = 0; a < gp::number_of_velocities; ++a) {
+      const double w_change =
+          perturbed_rates.w_rate.get(a)[s] - rates.w_rate.get(a)[s];
+      largest_w_change = std::max(largest_w_change, std::abs(w_change));
+      CHECK(w_change == approx(gsl::at(expected, a))
+                            .epsilon(1e-10)
+                            .scale(1.0 + std::abs(rates.w_rate.get(a)[s])));
+    }
+  }
+  CHECK(largest_w_change > 0.1);
+
+  // Consistent targets are recovered.
+  gp::Tags::PotentialRateTarget::type exact{n};
+  for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+    exact.get(a) = random_trial_function(gen, mesh);
+  }
+  gp::potential_gradients(make_not_null(&data.dt_q), exact, mesh,
+                          data.geometry.inverse_jacobian);
+  data.dt_u = exact;
+  const ChartRates consistent = chart_rates(data, data.dt_w, zero_eta, f);
+  for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+    CHECK_ITERABLE_CUSTOM_APPROX(
+        consistent.u_rate.get(a), exact.get(a),
+        Approx::custom().epsilon(1e-11).scale(max_abs(exact.get(a))));
+  }
+}
+
 // The overload taking the charts of u computed ahead (as ComputeVolumeTargets
 // keeps them for FinalizeTimeDerivative) gives identical rates.
 void test_precomputed_charts(const gsl::not_null<std::mt19937*> gen) {
@@ -550,6 +733,10 @@ SPECTRE_TEST_CASE(
       test_fitted_shift_damping(make_not_null(&gen), curved, f);
       test_shift_damping_limits(make_not_null(&gen), curved, f);
     }
+  }
+  for (const double f : {1.0, 0.5}) {
+    CAPTURE(f);
+    test_shell(make_not_null(&gen), f);
   }
   test_physical_rates(make_not_null(&gen), false);
   test_physical_rates(make_not_null(&gen), true);

@@ -247,7 +247,7 @@ void test_compute_volume_targets(const gsl::not_null<std::mt19937*> gen) {
   const Scalar<DataVector> eta{n, 0.4};
   const Scalar<DataVector> k_0{n, 0.0};
   const gp::LocalOperators operators{geometry.mesh, geometry.inverse_jacobian,
-                                     geometry.det_inverse_jacobian};
+                                     geometry.det_inverse_jacobian, 4};
   const auto apply = [&]() {
     gp::ComputeVolumeTargets::apply(
         make_not_null(&vars), make_not_null(&dt_vars), make_not_null(&targets),

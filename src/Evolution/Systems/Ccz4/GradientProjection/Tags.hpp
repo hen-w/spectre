@@ -28,9 +28,27 @@ struct TopShellFilterGain {
       "The factor multiplying the highest tensor modal shell of the potential "
       "rates and of GammaHat - b on DG elements before every right-hand side "
       "(at fixed potentials and gradients): 1 leaves the state unfiltered, 0 "
-      "removes the shell."};
+      "removes the shell. On spherical-harmonic shells it multiplies the "
+      "highest radial degree within the retained angular space instead, and "
+      "1 still removes the angular content outside that space (see "
+      "ShellAngularModesToKill)."};
   static type lower_bound() { return 0.0; }
   static type upper_bound() { return 1.0; }
+  using group = ::dg::OptionTags::DiscontinuousGalerkinGroup;
+};
+
+/// \brief The number of angular bands removed by the velocity filter on
+/// spherical-harmonic shells, see
+/// `Ccz4::GradientProjection::Tags::ShellAngularModesToKill`.
+struct ShellAngularModesToKill {
+  using type = size_t;
+  static constexpr Options::String help = {
+      "The number of top angular bands removed by the velocity filter on "
+      "spherical-harmonic shells: the retained angular space is the range of "
+      "the native tensor spherical-harmonic filter with this many removed "
+      "bands (0 still removes the tensor content of total degree above L). "
+      "It must not exceed L on any shell element and is ignored on other "
+      "elements."};
   using group = ::dg::OptionTags::DiscontinuousGalerkinGroup;
 };
 }  // namespace Ccz4::GradientProjection::OptionTags
@@ -145,11 +163,22 @@ struct LocalOperators : db::SimpleTag {
 /// \brief The gain \f$g\f$ of the filter \f$F=\Pi+g(I-\Pi)\f$ on the
 /// highest tensor modal shell, see
 /// `Ccz4::GradientProjection::LocalOperators::apply_filter` and
-/// `Ccz4::GradientProjection::filter_velocities`.
+/// `Ccz4::GradientProjection::filter_velocities`; on spherical-harmonic
+/// shells the radial gain of `Ccz4::GradientProjection::GeneralShellFilter`.
 struct TopShellFilterGain : db::SimpleTag {
   using type = double;
   using option_tags = tmpl::list<OptionTags::TopShellFilterGain>;
   static constexpr bool pass_metavariables = false;
   static type create_from_options(const type gain) { return gain; }
+};
+
+/// \brief The number of angular bands removed by the velocity filter on
+/// spherical-harmonic shells, see
+/// `Ccz4::GradientProjection::ShellFilterAngularSpaces`.
+struct ShellAngularModesToKill : db::SimpleTag {
+  using type = size_t;
+  using option_tags = tmpl::list<OptionTags::ShellAngularModesToKill>;
+  static constexpr bool pass_metavariables = false;
+  static type create_from_options(const type modes) { return modes; }
 };
 }  // namespace Ccz4::GradientProjection::Tags

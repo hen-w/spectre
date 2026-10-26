@@ -96,7 +96,7 @@ void test_filter_velocities(const gsl::not_null<std::mt19937*> gen,
   CAPTURE(unit_background);
   const auto geometry = helpers::make_geometry({{4, 5, 4}}, true);
   const gp::LocalOperators operators{geometry.mesh, geometry.inverse_jacobian,
-                                     geometry.det_inverse_jacobian};
+                                     geometry.det_inverse_jacobian, 4};
   const size_t n = geometry.mesh.number_of_grid_points();
   const double f = Ccz4::fd::System::f;
   helpers::ChartData chart{n};

@@ -54,17 +54,19 @@ void finalized_chart_rates(
   local_operators.check_mesh(mesh);
   const size_t number_of_points = mesh.number_of_grid_points();
 
-  // 1. The constrained least-squares fit of the potential rates.
-  std::array<double, number_of_potentials> means{};
+  // 1. The least-squares fit of the potential rates, completed from the
+  // provisional rates.
+  std::array<const DataVector*, number_of_potentials> provisional{};
   std::array<std::array<const DataVector*, number_of_potentials>, 3> targets{};
   for (size_t a = 0; a < number_of_potentials; ++a) {
-    gsl::at(means, a) = local_operators.mean(dt_u_target.get(a));
+    gsl::at(provisional, a) = &dt_u_target.get(a);
     for (size_t i = 0; i < 3; ++i) {
       gsl::at(gsl::at(targets, i), a) = &dt_q_target.get(i, a);
     }
   }
   std::array<DataVector, number_of_potentials> fitted{};
-  local_operators.fit(make_not_null(&fitted), targets, means);
+  local_operators.fit_from_provisional(make_not_null(&fitted), targets,
+                                       provisional);
   for (size_t a = 0; a < number_of_potentials; ++a) {
     u_rate->get(a) = gsl::at(fitted, a);
   }

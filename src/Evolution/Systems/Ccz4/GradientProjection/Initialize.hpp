@@ -48,10 +48,12 @@ namespace Ccz4::GradientProjection {
  * chart data `Tags::StepChartFields` and `Tags::StepCharts`.
  *
  * It is an `ERROR` if the grid-to-inertial map is time dependent, since the
- * cached operators are valid only for a static mesh.
+ * cached operators are valid only for a static mesh, and on a
+ * spherical-harmonic shell if `Tags::ShellAngularModesToKill` exceeds
+ * \f$L\f$.
  */
 struct InitializeLocalOperators {
-  using const_global_cache_tags = tmpl::list<>;
+  using const_global_cache_tags = tmpl::list<Tags::ShellAngularModesToKill>;
   using mutable_global_cache_tags = tmpl::list<>;
   using simple_tags_from_options = tmpl::list<>;
   using simple_tags = tmpl::list<Tags::LocalOperators, Tags::RhsTargets,
@@ -63,7 +65,8 @@ struct InitializeLocalOperators {
       domain::Tags::InverseJacobian<3, Frame::ElementLogical, Frame::Inertial>,
       domain::Tags::DetInvJacobian<Frame::ElementLogical, Frame::Inertial>,
       domain::CoordinateMaps::Tags::CoordinateMap<3, Frame::Grid,
-                                                  Frame::Inertial>>;
+                                                  Frame::Inertial>,
+      Tags::ShellAngularModesToKill>;
 
   static void apply(
       gsl::not_null<LocalOperators*> local_operators, const Mesh<3>& mesh,
@@ -71,7 +74,8 @@ struct InitializeLocalOperators {
                             Frame::Inertial>& inverse_jacobian,
       const Scalar<DataVector>& det_inverse_jacobian,
       const domain::CoordinateMapBase<Frame::Grid, Frame::Inertial, 3>&
-          grid_to_inertial_map);
+          grid_to_inertial_map,
+      size_t shell_angular_modes_to_kill);
 };
 
 namespace Actions {

@@ -37,10 +37,13 @@
 #include "Evolution/Systems/Ccz4/Ccz4WrappedGr.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Initialize.hpp"
+#include "Evolution/Systems/Ccz4/GradientProjection/LocalOperators.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/System.hpp"
 #include "Evolution/Systems/Ccz4/GradientProjection/Tags.hpp"
+#include "NumericalAlgorithms/Spectral/Basis.hpp"
 #include "NumericalAlgorithms/Spectral/LogicalCoordinates.hpp"
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
+#include "NumericalAlgorithms/Spectral/Quadrature.hpp"
 #include "Options/Protocols/FactoryCreation.hpp"
 #include "Parallel/AlgorithmExecution.hpp"
 #include "Parallel/GlobalCache.hpp"
@@ -188,8 +191,49 @@ void test_check_finite_difference_options() {
   }
 }
 
+// InitializeLocalOperators passes the number of removed angular bands to the
+// operators; on a spherical-harmonic shell it must not exceed L.
+void test_initialize_local_operators() {
+  const auto identity_map =
+      domain::make_coordinate_map_base<Frame::Grid, Frame::Inertial>(
+          domain::CoordinateMaps::Identity<3>{});
+  const auto make_inverse_jacobian = [](const size_t size) {
+    InverseJacobian<DataVector, 3, Frame::ElementLogical, Frame::Inertial>
+        result{size, 0.0};
+    for (size_t i = 0; i < 3; ++i) {
+      result.get(i, i) = 1.0;
+    }
+    return result;
+  };
+  const Mesh<3> cube{3, Spectral::Basis::Legendre,
+                     Spectral::Quadrature::GaussLobatto};
+  gp::LocalOperators operators{};
+  gp::InitializeLocalOperators::apply(
+      make_not_null(&operators), cube,
+      make_inverse_jacobian(cube.number_of_grid_points()),
+      Scalar<DataVector>{cube.number_of_grid_points(), 1.0}, *identity_map, 6);
+  CHECK(operators.shell_angular_modes_to_kill() == 6);
+  CHECK(not operators.is_spherical_shell());
+  const Mesh<3> shell{
+      {{3, 4, 7}},
+      {{Spectral::Basis::Legendre, Spectral::Basis::SphericalHarmonic,
+        Spectral::Basis::SphericalHarmonic}},
+      {{Spectral::Quadrature::GaussLobatto, Spectral::Quadrature::Gauss,
+        Spectral::Quadrature::Equiangular}}};
+  CHECK_THROWS_WITH(
+      gp::InitializeLocalOperators::apply(
+          make_not_null(&operators), shell,
+          make_inverse_jacobian(shell.number_of_grid_points()),
+          Scalar<DataVector>{shell.number_of_grid_points(), 1.0}, *identity_map,
+          4),
+      Catch::Matchers::ContainsSubstring(
+          "ShellAngularModesToKill = 4 of the shell velocity filter exceeds "
+          "L = 3"));
+}
+
 SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.GradientProjection.Initialize",
                   "[Unit][Evolution]") {
+  test_initialize_local_operators();
   test<true>(evolution::dg::subcell::ActiveGrid::Dg);
   test<true>(evolution::dg::subcell::ActiveGrid::Subcell);
   // Without DG-subcell the active grid is ignored.

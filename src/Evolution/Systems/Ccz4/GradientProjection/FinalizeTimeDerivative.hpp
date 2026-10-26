@@ -38,9 +38,11 @@ namespace Ccz4::GradientProjection {
  * `Tags::StepChartFields` (computed by `ComputeVolumeTargets`, as are the
  * charts `Tags::StepCharts`), and \f$q\f$ the stored gradients. Then
  *
- * 1. \f$r\f$ is the element-local constrained least-squares fit of
- *    `LocalOperators::fit` to the gradient targets \f$q_{i,t}^*\f$ with the
- *    mass-weighted mean \f$\overline{R-S_uu}\f$ of the time derivative;
+ * 1. \f$r\f$ is the element-local least-squares fit of
+ *    `LocalOperators::fit_from_provisional` to the gradient targets
+ *    \f$q_{i,t}^*\f$, completed from the provisional rate \f$R-S_uu\f$:
+ *    on tensor-product elements by its mass-weighted mean, on
+ *    spherical-harmonic shells in the full discrete derivative kernel;
  * 2. \f$u_t=r\f$ and
  *    \f$w_t=w_t^*+P\{\sum_iE_i(q_{i,t}^*-D_ir)+R_u(R-r)\}\f$ with \f$R\f$ the
  *    original pointwise potential right-hand side and \f$P\f$ of
@@ -50,7 +52,8 @@ namespace Ccz4::GradientProjection {
  * 3. replace the volume damping \f$-\eta b^i\f$ in the \f$b^i\f$ rate by
  *    \f$-\eta r_\beta^i/f\f$, by adding
  *    \f$-\eta(r_\beta^i/f-b^i)\f$ to that rate only. Here \f$r_\beta\f$ is
- *    the complete fitted shift rate, including its prescribed mean. This
+ *    the complete fitted shift rate, including its completed kernel
+ *    content. This
  *    correction vanishes in the continuum for the non-shifting Gamma driver
  *    \f$\partial_t\beta^i=fb^i\f$. The compatibility identity in step 2 holds
  *    before this damping replacement;

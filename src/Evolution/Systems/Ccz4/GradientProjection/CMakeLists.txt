@@ -66,6 +66,7 @@ target_link_libraries(
   Serialization
   SoCcz4
   Spectral
+  SphericalHarmonics
   Time
   Utilities
   )

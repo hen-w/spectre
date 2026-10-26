@@ -521,8 +521,8 @@ using CacheTuple = tuples::TaggedTuple<
     ::Tags::EventsAndTriggers<Triggers::WhenToCheck::AtSlabs>,
     evolution::Tags::BoundaryCorrection, ::dg::Tags::Formulation,
     domain::Tags::ExternalBoundaryConditions<3>,
-    evolution::initial_data::Tags::InitialData,
-    gp::Tags::TopShellFilterGain>;
+    evolution::initial_data::Tags::InitialData, gp::Tags::TopShellFilterGain,
+    gp::Tags::ShellAngularModesToKill>;
 using MutableCacheTuple =
     tuples::TaggedTuple<domain::Tags::FunctionsOfTimeInitialize>;
 
@@ -585,7 +585,8 @@ CacheTuple cache(const size_t order, const DomainCreator<3>& creator,
           ::dg::Formulation::StrongInertial,
           creator.external_boundary_conditions(),
           std::make_unique<Minkowski>(),
-          filter_gain};
+          filter_gain,
+          size_t{4}};
 }
 
 // Emplaces and initializes an element with the damping parameters kappa_1 and

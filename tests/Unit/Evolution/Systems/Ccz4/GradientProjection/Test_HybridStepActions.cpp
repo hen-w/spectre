@@ -425,6 +425,7 @@ make_cache(const DomainCreator<3>& creator,
       std::make_unique<gp::BoundaryCorrections::UpwindGradientProjection>(
           gp::BoundaryCorrections::ExternalCorrection::Upwind, 1.0, 1.0, 1.0);
   get<gp::Tags::TopShellFilterGain>(cache) = 0.1;
+  get<gp::Tags::ShellAngularModesToKill>(cache) = 4;
   get<::dg::Tags::Formulation>(cache) = ::dg::Formulation::StrongInertial;
   get<domain::Tags::ExternalBoundaryConditions<3>>(cache) =
       creator.external_boundary_conditions();
