@@ -33,6 +33,7 @@
 #include "Domain/Creators/Rectilinear.hpp"
 #include "Domain/Creators/RegisterDerivedWithCharm.hpp"
 #include "Domain/Creators/Sphere.hpp"
+#include "Domain/Creators/SphericalShells.hpp"
 #include "Domain/Creators/Tags/Domain.hpp"
 #include "Domain/Creators/Tags/ExternalBoundaryConditions.hpp"
 #include "Domain/Creators/Tags/FunctionsOfTime.hpp"
@@ -43,6 +44,7 @@
 #include "Domain/Structure/Direction.hpp"
 #include "Domain/Structure/DirectionalId.hpp"
 #include "Domain/Structure/ElementId.hpp"
+#include "Domain/Structure/InitialElementIds.hpp"
 #include "Domain/Structure/SegmentId.hpp"
 #include "Domain/Tags.hpp"
 #include "Evolution/Actions/RunEventsAndDenseTriggers.hpp"
@@ -664,13 +666,64 @@ domain::creators::Sphere sphere() {
           analytic()};
 }
 
+// The analytic Minkowski boundary condition.
+std::unique_ptr<gp::BoundaryConditions::DirichletAnalytic>
+analytic_minkowski() {
+  return std::make_unique<gp::BoundaryConditions::DirichletAnalytic>(
+      std::make_unique<Minkowski>());
+}
+
+// Two spherical-harmonic shells with radii 3, 4.5 and 6, three radial points
+// and the smallest L the creator's options allow (6), with analytic Minkowski
+// data on both boundaries.
+domain::creators::SphericalShells two_shells() {
+  return {3.0,
+          6.0,
+          size_t{0},
+          size_t{3},
+          size_t{6},
+          std::vector<double>{4.5},
+          domain::CoordinateMaps::Distribution::Linear,
+          std::nullopt,
+          analytic_minkowski(),
+          analytic_minkowski()};
+}
+
+// Six excised wedges (equidistant angular maps, three LGL points per
+// dimension) inside one spherical-harmonic shell with the given L and radial
+// points, with analytic Minkowski data on the inner and outer boundaries.
+domain::creators::NonconformingSphericalShells wedge_shell(
+    const size_t l_max, const size_t radial_points,
+    const size_t angular_refinement = 0) {
+  return {1.0,
+          1.5,
+          2.0,
+          std::vector<double>{},
+          std::vector<double>{},
+          std::array<std::vector<domain::CoordinateMaps::Distribution>, 2>{
+              {{domain::CoordinateMaps::Distribution::Linear},
+               {domain::CoordinateMaps::Distribution::Linear}}},
+          size_t{0},
+          angular_refinement,
+          radial_points,
+          l_max,
+          size_t{3},
+          domain::creators::NonconformingSphericalShells::Excision{
+              analytic_minkowski()},
+          false,
+          analytic_minkowski()};
+}
+
 // The velocity filter of ComputeVolumeTargets is active (gain below one) only
 // in the step walkthrough; the linearization checks of the right-hand side
-// run at unit gain, where it is the identity (its arithmetic is tested in
-// Test_Filter).
+// run at unit gain, where it is the identity on tensor-product elements (its
+// arithmetic is tested in Test_Filter). On spherical-harmonic shells it still
+// removes the angular content outside the retained space of
+// `shell_angular_modes_to_kill` removed bands.
 CacheTuple cache(const size_t order, const DomainCreator<3>& creator,
                  const evolution::BoundaryCorrection& correction,
-                 const double filter_gain = 1.0) {
+                 const double filter_gain = 1.0,
+                 const size_t shell_angular_modes_to_kill = 4) {
   return {creator.create_domain(),
           std::make_unique<TimeSteppers::AdamsBashforth>(order),
           kappa_3,
@@ -680,7 +733,7 @@ CacheTuple cache(const size_t order, const DomainCreator<3>& creator,
           creator.external_boundary_conditions(),
           std::make_unique<Minkowski>(),
           filter_gain,
-          size_t{4}};
+          shell_angular_modes_to_kill};
 }
 
 // Emplaces and initializes an element with the damping parameters kappa_1 and
@@ -1131,8 +1184,9 @@ std::vector<DtPhysicalVars> finalized_rates(
     const std::vector<ElementId<3>>& ids, const DataVector& delta,
     const size_t total, const ModelIndex& model_index,
     const Background& background = {}) {
-  const size_t n = number_of_points;
   for (size_t e = 0; e < ids.size(); ++e) {
+    const size_t n =
+        get_tag<domain::Tags::Mesh<3>>(*runner, ids[e]).number_of_grid_points();
     PotentialChart u{n};
     VelocityChart w{n};
     for (size_t s = 0; s < n; ++s) {
@@ -1160,6 +1214,8 @@ std::vector<DtPhysicalVars> finalized_rates(
   }
   for (size_t i = 0; i < 4; ++i) {
     for (const auto& id : ids) {
+      CAPTURE(i);
+      CAPTURE(id);
       REQUIRE(ActionTesting::next_action_if_ready<component>(runner, id));
     }
   }
@@ -1182,7 +1238,6 @@ DataVector linearized_chart_rates(
     const std::vector<ElementId<3>>& ids, const DataVector& delta,
     const size_t total, const ModelIndex& model_index,
     const Background& background_state = {}) {
-  const size_t n = number_of_points;
   // Truncation ~1e-10 and rounding ~1e-11 relative to the rates.
   const double epsilon = 3.0e-6;
   const gp::LogMetricChart background{gp::Matrix3(0.0)};
@@ -1196,7 +1251,7 @@ DataVector linearized_chart_rates(
     auto& derivative = derivatives[e];
     derivative -= minus[e];
     derivative *= 0.5 / epsilon;
-    for (size_t s = 0; s < n; ++s) {
+    for (size_t s = 0; s < derivative.number_of_grid_points(); ++s) {
       const size_t m = model_index(e, s);
       gp::Matrix3 metric_rate{};
       gp::Matrix3 a_tilde_rate{};
@@ -1576,6 +1631,194 @@ void test_sphere_linearized(const gsl::not_null<std::mt19937*> gen) {
     CHECK(other_error < 1.0e-8 * scale);
   }
 }
+
+// An option setting of the boundary correction and the damping for the
+// linearization checks on shell domains: the external dissipation factor,
+// eta, the internal scalar penalties of the propagating, stationary gradient
+// and stationary GammaHat-b modes, and ShellBoundaryModesToKill.
+struct LinearizationOptions {
+  double external_factor;
+  double eta;
+  std::array<double, 3> penalties;
+  std::optional<size_t> shell_boundary_modes_to_kill;
+};
+
+// On spherical-harmonic shells the velocity filter of ComputeVolumeTargets
+// is not the identity at unit gain, so the model applies it too, with this
+// many removed angular bands (fewer than the default four, so that most of
+// the angular content of the perturbation is retained).
+constexpr size_t linearization_shell_angular_modes_to_kill = 1;
+
+// On every element of the domain, the linearization of the actual actions
+// about Minkowski space reproduces the general curved-mesh linear model
+// (GradientProjectionModel.linearized_rates_on_general_mesh), which
+// independently assembles the spherical-harmonic derivatives, the shell
+// gradient fit with its kernel completion, the shell velocity filter, the
+// characteristic projectors of the split scalar penalties, the native
+// wedge-shell transfers and the shell-side boundary-correction filter from
+// the nodal coordinates and inverse Jacobians. The errors on the points of
+// the external faces (at the inner and outer radius) and on all other points
+// are checked separately.
+void check_linearized_on_domain(
+    const gsl::not_null<std::mt19937*> gen, const DomainCreator<3>& creator,
+    const LinearizationOptions& options, const double inner_radius,
+    const double outer_radius,
+    const bool require_multiple_contributors = false) {
+  const double kappa_1 = 0.3;
+  const auto& [external_factor, eta, penalties, boundary_modes_to_kill] =
+      options;
+  CAPTURE(external_factor);
+  CAPTURE(eta);
+  CAPTURE(penalties);
+  // The removed bands of the shell-side boundary filter, -1 without it.
+  const double boundary_modes =
+      boundary_modes_to_kill.has_value()
+          ? static_cast<double>(*boundary_modes_to_kill)
+          : -1.0;
+  CAPTURE(boundary_modes);
+  const gp::BoundaryCorrections::UpwindGradientProjection correction{
+      external_factor == 1.0
+          ? gp::BoundaryCorrections::ExternalCorrection::Upwind
+          : gp::BoundaryCorrections::ExternalCorrection::DoubledDissipation,
+      penalties[0], penalties[1], penalties[2], boundary_modes_to_kill};
+  MockRuntimeSystem runner{cache(3, creator, correction, 1.0,
+                                 linearization_shell_angular_modes_to_kill),
+                           MutableCacheTuple{}};
+  const auto ids = initial_element_ids(creator.initial_refinement_levels());
+  const Slab slab{0.0, 0.03};
+  std::vector<size_t> offsets{0};
+  for (const auto& id : ids) {
+    const auto extents = creator.initial_extents()[id.block_id()];
+    const size_t n = extents[0] * extents[1] * extents[2];
+    emplace_element(make_not_null(&runner), creator, id, TimeStepId{},
+                    TimeStepId{true, 0, slab.start()}, slab.duration(), kappa_1,
+                    DataVector{n, eta}, {}, n);
+    offsets.push_back(offsets.back() + n);
+  }
+  ActionTesting::set_phase(make_not_null(&runner), Parallel::Phase::Evolve);
+  advance_time(make_not_null(&runner), ids);
+  const size_t total = offsets.back();
+  DataVector geometry(total * 12);
+  DataVector layout(4 * ids.size());
+  std::vector<bool> on_external_face(total);
+  for (size_t e = 0; e < ids.size(); ++e) {
+    const auto& mesh = get_tag<domain::Tags::Mesh<3>>(runner, ids[e]);
+    layout[4 * e] =
+        mesh.basis(1) == Spectral::Basis::SphericalHarmonic ? 1.0 : 0.0;
+    for (size_t d = 0; d < 3; ++d) {
+      layout[4 * e + 1 + d] = static_cast<double>(mesh.extents(d));
+    }
+    const auto& x =
+        get_tag<domain::Tags::Coordinates<3, Frame::Inertial>>(runner, ids[e]);
+    const auto& inverse_jacobian =
+        get_tag<domain::Tags::InverseJacobian<3, Frame::ElementLogical,
+                                              Frame::Inertial>>(runner, ids[e]);
+    for (size_t s = 0; s < mesh.number_of_grid_points(); ++s) {
+      const size_t offset = (offsets[e] + s) * 12;
+      for (size_t i = 0; i < 3; ++i) {
+        geometry[offset + i] = x.get(i)[s];
+        for (size_t a = 0; a < 3; ++a) {
+          geometry[offset + 3 + 3 * a + i] = inverse_jacobian.get(a, i)[s];
+        }
+      }
+      const double radius = std::sqrt(
+          square(get<0>(x)[s]) + square(get<1>(x)[s]) + square(get<2>(x)[s]));
+      on_external_face[offsets[e] + s] =
+          std::abs(radius - inner_radius) < 1.0e-10 or
+          std::abs(radius - outer_radius) < 1.0e-10;
+    }
+  }
+  const auto model_index = [&offsets](const size_t e, const size_t s) {
+    return offsets[e] + s;
+  };
+  const DataVector delta = random_vector(gen, 23 * total);
+  const DataVector chart_rates = linearized_chart_rates(
+      make_not_null(&runner), ids, delta, total, model_index);
+  const auto expected = pypp::call<DataVector>(
+      "GradientProjectionModel", "linearized_rates_on_general_mesh", delta,
+      geometry, layout, kappa_1, eta, Ccz4::fd::System::f, external_factor,
+      DataVector{penalties[0], penalties[1], penalties[2]},
+      static_cast<double>(linearization_shell_angular_modes_to_kill),
+      boundary_modes, require_multiple_contributors ? 1.0 : 0.0);
+  const double scale = max(abs(expected));
+  double external_error = 0.0;
+  double other_error = 0.0;
+  for (size_t c = 0; c < 23; ++c) {
+    for (size_t m = 0; m < total; ++m) {
+      const size_t index = c * total + m;
+      const double error = std::abs(chart_rates[index] - expected[index]);
+      double& largest = on_external_face[m] ? external_error : other_error;
+      largest = std::max(largest, error);
+    }
+  }
+  CAPTURE(scale);
+  CAPTURE(external_error);
+  CAPTURE(other_error);
+  CHECK(external_error < 1.0e-8 * scale);
+  CHECK(other_error < 1.0e-8 * scale);
+}
+
+// Two spherical-harmonic shells: the shell derivatives, gradient fit and
+// velocity filter, the conforming shell-shell interface and the analytic
+// closure on both boundaries, for both external dissipation factors with
+// equal, split and unequal scalar penalties at eta = 0, and at eta = 0.1.
+void test_two_shell_linearized(const gsl::not_null<std::mt19937*> gen) {
+  const auto creator = two_shells();
+  for (const auto& options : std::array<LinearizationOptions, 10>{
+           {{1.0, 0.0, {{1.0, 1.0, 1.0}}, std::nullopt},
+            {2.0, 0.0, {{1.0, 1.0, 1.0}}, std::nullopt},
+            {1.0, 0.0, {{1.0, 1.0, 0.0}}, std::nullopt},
+            {2.0, 0.0, {{1.0, 1.0, 0.0}}, std::nullopt},
+            {1.0, 0.0, {{0.0, 0.0, 0.0}}, std::nullopt},
+            {2.0, 0.0, {{0.0, 0.0, 0.0}}, std::nullopt},
+            {1.0, 0.0, {{0.5, 2.0, 1.5}}, std::nullopt},
+            {2.0, 0.0, {{0.5, 2.0, 1.5}}, std::nullopt},
+            {1.0, 0.1, {{1.0, 1.0, 0.0}}, std::nullopt},
+            {2.0, 0.1, {{1.0, 1.0, 1.0}}, std::nullopt}}}) {
+    check_linearized_on_domain(gen, creator, options, 3.0, 6.0);
+  }
+}
+
+// Six wedges inside one spherical-harmonic shell: additionally the
+// nonconforming wedge-shell exchange (the native interpolations in both
+// directions, combined on the single host-labeled shell mortar) and the
+// shell-side boundary-correction filter, without and with it, for both
+// external dissipation factors with equal, split and unequal scalar
+// penalties at eta = 0, and at eta = 0.1.
+void test_wedge_shell_linearized(const gsl::not_null<std::mt19937*> gen) {
+  const auto creator = wedge_shell(4, 3);
+  for (const auto& options : std::array<LinearizationOptions, 12>{
+           {{1.0, 0.0, {{1.0, 1.0, 1.0}}, std::nullopt},
+            {2.0, 0.0, {{1.0, 1.0, 1.0}}, std::nullopt},
+            {1.0, 0.0, {{1.0, 1.0, 0.0}}, std::nullopt},
+            {2.0, 0.0, {{1.0, 1.0, 0.0}}, std::nullopt},
+            {1.0, 0.0, {{0.0, 0.0, 0.0}}, std::nullopt},
+            {2.0, 0.0, {{0.5, 2.0, 1.5}}, std::nullopt},
+            {1.0, 0.0, {{1.0, 1.0, 1.0}}, size_t{2}},
+            {1.0, 0.0, {{1.0, 1.0, 0.0}}, size_t{2}},
+            {2.0, 0.0, {{1.0, 1.0, 0.0}}, size_t{2}},
+            {1.0, 0.0, {{0.5, 2.0, 1.5}}, size_t{2}},
+            {1.0, 0.1, {{1.0, 1.0, 0.0}}, size_t{2}},
+            {2.0, 0.1, {{1.0, 1.0, 1.0}}, std::nullopt}}}) {
+    check_linearized_on_domain(gen, creator, options, 1.0, 2.0);
+  }
+}
+
+// Angularly refined wedges (2x2 patches per wedge) inside the shell: the
+// refined patch boundaries lie on the phi = 0 mod pi/2 planes and the
+// equator, which contain shell collocation points at even L, so single
+// shell points receive data from two (and at the crossings four) wedge
+// patches: the multi-contributor host-mortar averaging genuinely combines
+// contributions (the model asserts this), on top of everything the
+// unrefined test checks.
+void test_refined_wedge_shell_linearized(
+    const gsl::not_null<std::mt19937*> gen) {
+  const auto creator = wedge_shell(4, 3, 1);
+  check_linearized_on_domain(
+      gen, creator, LinearizationOptions{1.0, 0.0, {{1.0, 1.0, 0.0}}, 2}, 1.0,
+      2.0, true);
+}
+
 // A random chart state about Minkowski space with perturbations of size
 // `size`, as physical fields.
 Vars random_state(const gsl::not_null<std::mt19937*> gen, const size_t n,
@@ -1687,29 +1930,9 @@ void test_hook_invocation_conforming(const gsl::not_null<std::mt19937*> gen) {
 // other point changes. The mortar data are set directly (the wedges are not
 // emplaced), and the action's mutator is applied to the shell's DataBox.
 void test_hook_invocation_wedge_shell(const gsl::not_null<std::mt19937*> gen) {
-  const auto analytic = []() {
-    return std::make_unique<gp::BoundaryConditions::DirichletAnalytic>(
-        std::make_unique<Minkowski>());
-  };
   const size_t l_max = 4;
   const size_t radial_points = 3;
-  const domain::creators::NonconformingSphericalShells creator{
-      1.0,
-      1.5,
-      2.0,
-      std::vector<double>{},
-      std::vector<double>{},
-      std::array<std::vector<domain::CoordinateMaps::Distribution>, 2>{
-          {{domain::CoordinateMaps::Distribution::Linear},
-           {domain::CoordinateMaps::Distribution::Linear}}},
-      size_t{0},
-      size_t{0},
-      radial_points,
-      l_max,
-      size_t{3},
-      domain::creators::NonconformingSphericalShells::Excision{analytic()},
-      false,
-      analytic()};
+  const auto creator = wedge_shell(l_max, radial_points);
   const ElementId<3> shell_id{6};
   const Mesh<2> shell_face{
       {{l_max + 1, 2 * l_max + 1}},
@@ -1896,6 +2119,9 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.GradientProjection.StepActions",
   test_sphere_minkowski(0.0);
   test_sphere_minkowski(1.0);
   test_sphere_linearized(make_not_null(&gen));
+  test_two_shell_linearized(make_not_null(&gen));
+  test_wedge_shell_linearized(make_not_null(&gen));
+  test_refined_wedge_shell_linearized(make_not_null(&gen));
   test_external_lift_isolation(make_not_null(&gen));
   test_hook_invocation_conforming(make_not_null(&gen));
   test_hook_invocation_wedge_shell(make_not_null(&gen));
