@@ -894,7 +894,6 @@ GeneralShellFilter::GeneralShellFilter(const Mesh<3>& mesh,
     Matrix& factors = gsl::at(factors_, rank);
     factors = Matrix(dimension, (radial_size + 1) * dimension, 0.0);
     Matrix weighted_basis(rows, dimension);
-    Matrix inverse(dimension, dimension);
     Matrix h(dimension, dimension, 0.0);
     for (size_t i = 0; i < radial_size; ++i) {
       for (size_t a = 0; a < dimension; ++a) {
@@ -910,7 +909,7 @@ GeneralShellFilter::GeneralShellFilter(const Mesh<3>& mesh,
              weighted_basis.spacing(), 0.0, block, factors.spacing());
       lower_cholesky(make_not_null(block), dimension, factors.spacing(), mesh,
                      "angular mass matrix of the retained angular space");
-      blaze::reset(inverse);
+      Matrix inverse(dimension, dimension, 0.0);
       for (size_t a = 0; a < dimension; ++a) {
         inverse(a, a) = 1.0;
       }

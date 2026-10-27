@@ -7,7 +7,6 @@
 #include <array>
 #include <blaze/math/DynamicMatrix.h>
 #include <blaze/math/DynamicVector.h>
-#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -24,7 +23,6 @@
 #include "Framework/Pypp.hpp"
 #include "Framework/SetupLocalPythonEnvironment.hpp"
 #include "Framework/TestHelpers.hpp"
-#include "Parallel/Printf/Printf.hpp"
 #include "Utilities/Algorithm.hpp"
 #include "Utilities/ConstantExpressions.hpp"
 #include "Utilities/Gsl.hpp"
@@ -1292,131 +1290,6 @@ void test_upwind_and_penalties(const std::vector<Case>& all_cases,
   }
 }
 
-// Cost of the dissipation per face point, including the construction of the
-// characteristic data, for the previous componentwise-penalty path and the
-// new grouped penalties.
-void test_timing(const gsl::not_null<std::mt19937*> gen) {
-  constexpr double f = 1.0;
-  struct TimingPoint {
-    gp::LogMetricChart chart;
-    gp::PotentialVector u;
-    std::array<double, 3> normal;
-    gp::VelocityVector jump_w;
-    gp::GradientVector jump_q;
-    gp::NormalSubspaceVector flux;
-  };
-  std::normal_distribution<double> dist(0.0, 1.0);
-  std::vector<TimingPoint> points{};
-  while (points.size() < 100) {
-    const auto state = helpers::random_state(gen, 0.2, 0.2, 0.3);
-    const auto normal = helpers::random_unit_vector(gen);
-    const gp::LogMetricChart chart{
-        gp::stf_decode(&state.u[gp::PotentialIndex::log_metric])};
-    if (transform_condition(
-            gp::NormalCharacteristics{chart, state.u, normal, f}) > 1.0e5) {
-      continue;
-    }
-    TimingPoint point{chart, state.u, normal, {}, {}, {}};
-    for (auto& component : point.jump_w) {
-      component = dist(*gen);
-    }
-    for (size_t i = 0; i < 3; ++i) {
-      for (size_t a = 0; a < gp::number_of_potentials; ++a) {
-        gsl::at(gsl::at(point.jump_q, i), a) = dist(*gen);
-      }
-    }
-    point.flux =
-        gp::normal_flux(chart, state.u, normal, point.jump_w, point.jump_q, f);
-    points.push_back(point);
-  }
-  constexpr size_t passes = 50;
-  double checksum = 0.0;
-  const auto time_ns_per_point = [&points, &checksum](const auto& body) {
-    const auto start = std::chrono::steady_clock::now();
-    for (size_t pass = 0; pass < passes; ++pass) {
-      for (const auto& point : points) {
-        checksum += body(point);
-      }
-    }
-    const auto stop = std::chrono::steady_clock::now();
-    return static_cast<double>(
-               std::chrono::duration_cast<std::chrono::nanoseconds>(stop -
-                                                                    start)
-                   .count()) /
-           static_cast<double>(passes * points.size());
-  };
-  const double old_time = time_ns_per_point([](const TimingPoint& point) {
-    const gp::NormalCharacteristics characteristics{point.chart, point.u,
-                                                    point.normal, f};
-    gp::VelocityVector w{};
-    gp::GradientVector q{};
-    gp::embed_normal_subspace_vector(make_not_null(&w), make_not_null(&q),
-                                     point.normal,
-                                     characteristics.apply_sign(point.flux));
-    for (size_t a = 0; a < gp::number_of_velocities; ++a) {
-      gsl::at(w, a) += gsl::at(point.jump_w, a);
-    }
-    for (size_t i = 0; i < 3; ++i) {
-      for (size_t a = 0; a < gp::number_of_potentials; ++a) {
-        gsl::at(gsl::at(q, i), a) += gsl::at(gsl::at(point.jump_q, i), a);
-      }
-    }
-    return gsl::at(w, 0) + gsl::at(gsl::at(q, 0), 0);
-  });
-  const auto time_new = [&time_ns_per_point](const double sigma_p,
-                                             const double sigma_t,
-                                             const double sigma_g) {
-    return time_ns_per_point(
-        [sigma_p, sigma_t, sigma_g](const TimingPoint& point) {
-          const gp::NormalCharacteristics characteristics{point.chart, point.u,
-                                                          point.normal, f};
-          gp::VelocityVector w{};
-          gp::GradientVector q{};
-          characteristics.apply_upwind_and_penalties(
-              make_not_null(&w), make_not_null(&q), point.normal, point.jump_w,
-              point.jump_q, point.flux, 1.0, sigma_p, sigma_t, sigma_g);
-          return gsl::at(w, 0) + gsl::at(gsl::at(q, 0), 0);
-        });
-  };
-  const double uniform_time = time_new(1.0, 1.0, 1.0);
-  const double candidate_time = time_new(1.0, 1.0, 0.0);
-  const double split_time = time_new(1.0, 0.5, 0.0);
-  // The general path forced at the candidate coefficients, through the public
-  // full transform.
-  const double forced_general_time =
-      time_ns_per_point([](const TimingPoint& point) {
-        const gp::NormalCharacteristics characteristics{point.chart, point.u,
-                                                        point.normal, f};
-        gp::NormalSubspaceVector fields{};
-        gp::GradientVector tangential{};
-        characteristics.full_characteristic_fields(
-            make_not_null(&fields), make_not_null(&tangential), point.normal,
-            point.jump_w, point.jump_q);
-        for (size_t k = 0; k < gp::number_of_normal_components; ++k) {
-          if (not gp::NormalCharacteristics::is_kernel_field(k)) {
-            gsl::at(fields, k) *=
-                std::abs(gsl::at(characteristics.speeds(), k)) + 1.0;
-          } else {
-            gsl::at(fields, k) = 0.0;
-          }
-        }
-        gp::VelocityVector w{};
-        gp::GradientVector q{};
-        characteristics.full_fields_from_characteristic_fields(
-            make_not_null(&w), make_not_null(&q), point.normal, fields,
-            tangential);
-        return gsl::at(w, 0) + gsl::at(gsl::at(q, 0), 0);
-      });
-  Parallel::printf(
-      "UpwindGradientProjection dissipation (ns per point, including the "
-      "characteristic construction): previous componentwise %.0f, "
-      "uniform (1,1,1) %.0f, candidate (1,1,0) %.0f, general split "
-      "(1,0.5,0) %.0f, general forced at the candidate %.0f "
-      "(checksum %.6e)\n",
-      old_time, uniform_time, candidate_time, split_time, forced_general_time,
-      checksum);
-}
-
 // The conformal factor is no longer positive by construction: the normal
 // operator, its characteristic decomposition and speeds reject it.
 void test_conformal_factor_positivity(const double f) {
@@ -1464,5 +1337,4 @@ SPECTRE_TEST_CASE(
     test_conformal_factor_positivity(f);
   }
   test_gamma_driver_parameter();
-  test_timing(make_not_null(&gen));
 }

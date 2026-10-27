@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <iterator>
@@ -44,7 +43,6 @@
 #include "NumericalAlgorithms/SphericalHarmonics/SpherepackIterator.hpp"
 #include "NumericalAlgorithms/SphericalHarmonics/TensorYlmFilter.hpp"
 #include "Options/Protocols/FactoryCreation.hpp"
-#include "Parallel/Printf/Printf.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/Literals.hpp"
 #include "Utilities/ProtocolHelpers.hpp"
@@ -1142,39 +1140,6 @@ void test_shell_boundary_filter_activation(
           "requires a spherical-harmonic face mesh (L + 1, 2 L + 1)"));
 }
 
-// The time of one application of the hook to all 43 components of a face
-// with L = 10 and four removed bands.
-void test_shell_boundary_filter_timing(const gsl::not_null<std::mt19937*> gen) {
-  const size_t l_max = 10;
-  const Mesh<2> face_mesh = shell_face_mesh(l_max);
-  const Correction correction{ExternalCorrection::Upwind, 1.0, 1.0, 0.0,
-                              size_t{4}};
-  Targets targets = random_targets(gen, face_mesh.number_of_grid_points());
-  // Build the cached filters.
-  correction.dg_filter_boundary_correction(make_not_null(&targets), face_mesh,
-                                           true);
-#ifdef SPECTRE_DEBUG
-  const size_t repetitions = 10;
-#else
-  const size_t repetitions = 1000;
-#endif
-  const auto start = std::chrono::steady_clock::now();
-  for (size_t r = 0; r < repetitions; ++r) {
-    correction.dg_filter_boundary_correction(make_not_null(&targets), face_mesh,
-                                             true);
-  }
-  const auto stop = std::chrono::steady_clock::now();
-  const double ns_per_application =
-      static_cast<double>(
-          std::chrono::duration_cast<std::chrono::nanoseconds>(stop - start)
-              .count()) /
-      static_cast<double>(repetitions);
-  Parallel::printf(
-      "UpwindGradientProjection shell boundary filter (L = 10, 4 removed "
-      "bands, all 43 components): %.0f ns per application (checksum %.6e)\n",
-      ns_per_application, targets.data()[0]);
-}
-
 void test_options_and_errors(const gsl::not_null<std::mt19937*> gen) {
   register_factory_classes_with_charm<Metavariables>();
   const auto created =
@@ -1361,6 +1326,5 @@ SPECTRE_TEST_CASE(
   test_package_errors(make_not_null(&gen));
   test_shell_boundary_filter(make_not_null(&gen));
   test_shell_boundary_filter_activation(make_not_null(&gen));
-  test_shell_boundary_filter_timing(make_not_null(&gen));
   test_options_and_errors(make_not_null(&gen));
 }
