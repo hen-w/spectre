@@ -16,6 +16,7 @@
 #include "Domain/CoordinateMaps/Affine.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.hpp"
 #include "Domain/CoordinateMaps/CoordinateMap.tpp"
+#include "Domain/CoordinateMaps/Distribution.hpp"
 #include "Domain/CoordinateMaps/Identity.hpp"
 #include "Domain/CoordinateMaps/Interval.hpp"
 #include "Domain/CoordinateMaps/ProductMaps.hpp"
@@ -104,7 +105,10 @@ void insert_mortar_data(
 
 void test_non_conforming_spheres() {
   const auto creator = domain::creators::NonconformingSphericalShells(
-      2.0, 3.0, 4.0, {}, {}, 0, 2, 5, 8, 11,
+      2.0, 3.0, 4.0, {}, {},
+      {{std::vector{domain::CoordinateMaps::Distribution::Linear},
+        std::vector{domain::CoordinateMaps::Distribution::Linear}}},
+      0, 2, 5, 8, 11,
       domain::creators::NonconformingSphericalShells_detail::Excision{},
       // The pre-refactor creator hardcoded equiangular wedge maps.
       true, nullptr);

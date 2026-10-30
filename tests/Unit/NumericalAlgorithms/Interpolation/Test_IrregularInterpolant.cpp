@@ -3,7 +3,10 @@
 
 #include "Framework/TestingFramework.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
+#include <complex>
 #include <cstddef>
 #include <limits>
 #include <memory>
@@ -12,10 +15,13 @@
 #include <pup.h>
 #include <random>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "DataStructures/ComplexDataVector.hpp"
 #include "DataStructures/DataBox/Tag.hpp"
 #include "DataStructures/DataVector.hpp"
+#include "DataStructures/Index.hpp"
 #include "DataStructures/IndexIterator.hpp"
 #include "DataStructures/TaggedTuple.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
@@ -38,6 +44,7 @@
 #include "Helpers/NumericalAlgorithms/SphericalHarmonics/YlmTestFunctions.hpp"
 #include "NumericalAlgorithms/Interpolation/IrregularInterpolant.hpp"
 #include "NumericalAlgorithms/Spectral/Basis.hpp"
+#include "NumericalAlgorithms/Spectral/CollocationPoints.hpp"
 #include "NumericalAlgorithms/Spectral/LogicalCoordinates.hpp"
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
 #include "NumericalAlgorithms/Spectral/Quadrature.hpp"
@@ -499,6 +506,467 @@ void test_tov(const size_t max_degree, const bool specified_interp_order) {
     CAPTURE(i);
     CHECK(expected_ratio == custom_approx(gsl::at(ratio_of_errors, i)));
   }
+}
+
+// Positions of FD target points along a dimension with
+// `number_of_source_points` uniformly spaced source points, in units of the
+// grid spacing from the first source point. They cover the source points, the
+// points in between, and targets up to half a grid spacing outside the grid.
+// Midpoints between source points are equally close to the centers of two
+// windows of an odd number of source points, so they test how the stencil
+// selection breaks ties. The computed midpoints are guaranteed to be exactly
+// centered between the source points only if the grid spacing is a power of
+// two, so `include_midpoints` must be false for other grids. (Source points
+// are equally close to the centers of two windows of an even number of source
+// points, but there the interpolated value does not depend on the window.)
+std::vector<double> fd_target_positions(const size_t number_of_source_points,
+                                        const bool include_midpoints) {
+  std::vector<double> result{};
+  for (size_t i = 0; i <= 4 * number_of_source_points; ++i) {
+    const double position = 0.25 * static_cast<double>(i) - 0.5;
+    const bool interior_midpoint =
+        position > 0.0 and
+        position < static_cast<double>(number_of_source_points - 1) and
+        position - std::floor(position) == 0.5;
+    if (include_midpoints or not interior_midpoint) {
+      result.push_back(position);
+    }
+  }
+  return result;
+}
+
+// The coordinate of the target point at `position` (see
+// `fd_target_positions`) on the source grid `x`. Targets at integer positions
+// are exactly on source points.
+double fd_target_coordinate(const DataVector& x, const double position) {
+  const size_t last = x.size() - 1;
+  if (position < 0.0) {
+    return x[0] + position * (x[1] - x[0]);
+  }
+  if (position >= static_cast<double>(last)) {
+    return x[last] +
+           (position - static_cast<double>(last)) * (x[last] - x[last - 1]);
+  }
+  const auto cell = static_cast<size_t>(position);
+  return x[cell] +
+         (position - static_cast<double>(cell)) * (x[cell + 1] - x[cell]);
+}
+
+// The first source point of the window of `order + 1` consecutive source
+// points used by the FD interpolation of the given `order` for the target
+// point at `position` (see `fd_target_positions`) on a uniform grid. This is
+// the window whose center is closest to the target point. Ties are broken
+// towards the upper window for orders 1 and 2 (so linear interpolation uses
+// the two source points bracketing the target point) and towards the lower
+// window for higher orders. Near and beyond the ends of the grid the window is
+// shifted to stay inside the grid, i.e. the stencil becomes one-sided.
+size_t expected_window_start(const double position,
+                             const size_t number_of_source_points,
+                             const size_t order) {
+  // The window starting at source point `s` is centered on `s + order / 2`
+  const double centered_start = position - 0.5 * static_cast<double>(order);
+  const double start = order <= 2 ? std::floor(centered_start + 0.5)
+                                  : std::ceil(centered_start - 0.5);
+  return static_cast<size_t>(std::clamp(
+      start, 0.0, static_cast<double>(number_of_source_points - order - 1)));
+}
+
+// Lagrange interpolation weights at `target` of the `width` consecutive points
+// of `x` starting at `start`
+std::vector<double> lagrange_weights(const DataVector& x, const size_t start,
+                                     const size_t width, const double target) {
+  std::vector<double> weights(width, 1.0);
+  for (size_t i = 0; i < width; ++i) {
+    for (size_t j = 0; j < width; ++j) {
+      if (j != i) {
+        weights[i] *= (target - x[start + j]) / (x[start + i] - x[start + j]);
+      }
+    }
+  }
+  return weights;
+}
+
+// For each target point, the source points (as indices into the source data)
+// and weights of its tensor-product FD stencil
+using ReferenceStencils = std::vector<std::vector<std::pair<size_t, double>>>;
+
+template <size_t Dim>
+ReferenceStencils reference_fd_stencils(
+    const Mesh<Dim>& mesh,
+    const std::vector<std::array<double, Dim>>& positions, const size_t order) {
+  ReferenceStencils result(positions.size());
+  for (size_t p = 0; p < positions.size(); ++p) {
+    Index<Dim> window_start{};
+    std::array<std::vector<double>, Dim> weights{};
+    for (size_t d = 0; d < Dim; ++d) {
+      const DataVector& x = Spectral::collocation_points(mesh.slice_through(d));
+      const double position = gsl::at(positions[p], d);
+      window_start[d] = expected_window_start(position, x.size(), order);
+      gsl::at(weights, d) = lagrange_weights(x, window_start[d], order + 1,
+                                             fd_target_coordinate(x, position));
+    }
+    for (IndexIterator<Dim> offset(Index<Dim>(order + 1)); offset; ++offset) {
+      Index<Dim> source_index{};
+      double weight = 1.0;
+      for (size_t d = 0; d < Dim; ++d) {
+        source_index[d] = window_start[d] + offset()[d];
+        weight *= gsl::at(weights, d)[offset()[d]];
+      }
+      result[p].emplace_back(collapsed_index(source_index, mesh.extents()),
+                             weight);
+    }
+  }
+  return result;
+}
+
+DataVector reference_interpolate(const ReferenceStencils& stencils,
+                                 const DataVector& source_data) {
+  DataVector result(stencils.size(), 0.0);
+  for (size_t p = 0; p < stencils.size(); ++p) {
+    for (const auto& [source_index, weight] : stencils[p]) {
+      result[p] += weight * source_data[source_index];
+    }
+  }
+  return result;
+}
+
+// A smooth non-polynomial function, different for each `component`
+template <size_t Dim>
+DataVector nonpolynomial_data(
+    const tnsr::I<DataVector, Dim, Frame::ElementLogical>& x,
+    const size_t component) {
+  const std::array<double, 3> wave_numbers{{2.1, 1.3, -1.7}};
+  DataVector phase(get<0>(x).size(),
+                   0.4 + 0.1 * static_cast<double>(component));
+  for (size_t d = 0; d < Dim; ++d) {
+    phase += gsl::at(wave_numbers, d) * x.get(d);
+  }
+  return DataVector{sin(phase) * exp(0.6 * get<0>(x))};
+}
+
+// A product of polynomials of degree `degree` in each dimension, which the FD
+// interpolation of order `degree` reproduces exactly
+template <size_t Dim>
+DataVector polynomial_data(
+    const tnsr::I<DataVector, Dim, Frame::ElementLogical>& x,
+    const size_t degree) {
+  DataVector result(get<0>(x).size(), 1.0);
+  for (size_t d = 0; d < Dim; ++d) {
+    result *=
+        Polynomial{degree, 1.0 + 0.5 * static_cast<double>(d), 2.0}(x.get(d));
+  }
+  return result;
+}
+
+template <size_t Dim>
+void check_fd_interpolation(const Mesh<Dim>& mesh, const size_t order,
+                            const bool include_midpoints) {
+  CAPTURE(mesh);
+  CAPTURE(order);
+  const size_t number_of_source_points = mesh.number_of_grid_points();
+  // Each target point takes its position in each dimension from the list of
+  // positions for that dimension, so that each position is used at least once
+  // in each dimension, in varying combinations.
+  std::array<std::vector<double>, Dim> positions_in_dim{};
+  size_t number_of_targets = 0;
+  for (size_t d = 0; d < Dim; ++d) {
+    gsl::at(positions_in_dim, d) =
+        fd_target_positions(mesh.extents(d), include_midpoints);
+    number_of_targets =
+        std::max(number_of_targets, gsl::at(positions_in_dim, d).size());
+  }
+  std::vector<std::array<double, Dim>> positions(number_of_targets);
+  tnsr::I<DataVector, Dim, Frame::ElementLogical> target_points{
+      number_of_targets};
+  for (size_t p = 0; p < number_of_targets; ++p) {
+    for (size_t d = 0; d < Dim; ++d) {
+      const auto& positions_d = gsl::at(positions_in_dim, d);
+      gsl::at(positions[p], d) =
+          positions_d[(p + d * positions_d.size() / 3) % positions_d.size()];
+      target_points.get(d)[p] = fd_target_coordinate(
+          Spectral::collocation_points(mesh.slice_through(d)),
+          gsl::at(positions[p], d));
+    }
+  }
+
+  const intrp::Irregular<Dim> interpolant{mesh, target_points, order};
+  const ReferenceStencils stencils =
+      reference_fd_stencils(mesh, positions, order);
+  const auto source_x = logical_coordinates(mesh);
+  // Extrapolating stencils amplify roundoff errors. Shifting the stencil
+  // window by one source point changes the interpolated non-polynomial data by
+  // more than this tolerance.
+  const Approx custom_approx = Approx::custom().epsilon(1.e-10).scale(1.);
+
+  {
+    INFO("DataVector");
+    const DataVector source = nonpolynomial_data(source_x, 0);
+    const DataVector expected = reference_interpolate(stencils, source);
+    const DataVector result = interpolant.interpolate(source);
+    CHECK_ITERABLE_CUSTOM_APPROX(result, expected, custom_approx);
+    DataVector resized_result{2};
+    interpolant.interpolate(make_not_null(&resized_result), source);
+    CHECK_ITERABLE_CUSTOM_APPROX(resized_result, expected, custom_approx);
+
+    const DataVector polynomial_result =
+        interpolant.interpolate(polynomial_data(source_x, order));
+    CHECK_ITERABLE_CUSTOM_APPROX(polynomial_result,
+                                 polynomial_data(target_points, order),
+                                 custom_approx);
+  }
+  {
+    INFO("Variables");
+    using vector_tag = TestTags::Vector<DataVector, Dim>;
+    using tags = tmpl::list<Tags::Scalar, vector_tag>;
+    Variables<tags> source{number_of_source_points};
+    Variables<tags> expected{number_of_targets};
+    get(get<Tags::Scalar>(source)) = nonpolynomial_data(source_x, 0);
+    get(get<Tags::Scalar>(expected)) =
+        reference_interpolate(stencils, get(get<Tags::Scalar>(source)));
+    for (size_t d = 0; d < Dim; ++d) {
+      get<vector_tag>(source).get(d) = nonpolynomial_data(source_x, d + 1);
+      get<vector_tag>(expected).get(d) =
+          reference_interpolate(stencils, get<vector_tag>(source).get(d));
+    }
+    const Variables<tags> result = interpolant.interpolate(source);
+    CHECK_VARIABLES_CUSTOM_APPROX(result, expected, custom_approx);
+  }
+  {
+    INFO("Many components");
+    const size_t number_of_components = 55;
+    std::vector<double> source(number_of_components * number_of_source_points);
+    std::vector<double> expected(number_of_components * number_of_targets);
+    for (size_t c = 0; c < number_of_components; ++c) {
+      const DataVector component_source = nonpolynomial_data(source_x, c);
+      const DataVector component_expected =
+          reference_interpolate(stencils, component_source);
+      for (size_t s = 0; s < number_of_source_points; ++s) {
+        source[c * number_of_source_points + s] = component_source[s];
+      }
+      for (size_t p = 0; p < number_of_targets; ++p) {
+        expected[c * number_of_targets + p] = component_expected[p];
+      }
+    }
+    std::vector<double> result(expected.size());
+    auto result_span = gsl::make_span(result);
+    interpolant.interpolate(make_not_null(&result_span),
+                            gsl::make_span(source));
+    CHECK_ITERABLE_CUSTOM_APPROX(result, expected, custom_approx);
+  }
+  {
+    INFO("Complex data");
+    const size_t number_of_components = 2;
+    std::vector<std::complex<double>> source(number_of_components *
+                                             number_of_source_points);
+    std::vector<std::complex<double>> expected(number_of_components *
+                                               number_of_targets);
+    for (size_t c = 0; c < number_of_components; ++c) {
+      const DataVector real_source = nonpolynomial_data(source_x, 2 * c);
+      const DataVector imag_source = nonpolynomial_data(source_x, 2 * c + 1);
+      const DataVector real_expected =
+          reference_interpolate(stencils, real_source);
+      const DataVector imag_expected =
+          reference_interpolate(stencils, imag_source);
+      for (size_t s = 0; s < number_of_source_points; ++s) {
+        source[c * number_of_source_points + s] = {real_source[s],
+                                                   imag_source[s]};
+      }
+      for (size_t p = 0; p < number_of_targets; ++p) {
+        expected[c * number_of_targets + p] = {real_expected[p],
+                                               imag_expected[p]};
+      }
+    }
+    std::vector<std::complex<double>> result(expected.size());
+    auto result_span = gsl::make_span(result);
+    interpolant.interpolate(make_not_null(&result_span),
+                            gsl::make_span(source));
+    CHECK_ITERABLE_CUSTOM_APPROX(result, expected, custom_approx);
+
+    // The first component as a ComplexDataVector
+    const ComplexDataVector source_dv(source.data(), number_of_source_points);
+    const ComplexDataVector expected_dv(expected.data(), number_of_targets);
+    const ComplexDataVector result_dv = interpolant.interpolate(source_dv);
+    CHECK_ITERABLE_CUSTOM_APPROX(result_dv, expected_dv, custom_approx);
+  }
+  {
+    INFO("Single precision data");
+    const size_t number_of_components = 2;
+    std::vector<float> source(number_of_components * number_of_source_points);
+    for (size_t c = 0; c < number_of_components; ++c) {
+      const DataVector component_source = nonpolynomial_data(source_x, c);
+      for (size_t s = 0; s < number_of_source_points; ++s) {
+        source[c * number_of_source_points + s] =
+            static_cast<float>(component_source[s]);
+      }
+    }
+    std::vector<float> result(number_of_components * number_of_targets);
+    auto result_span = gsl::make_span(result);
+    interpolant.interpolate(make_not_null(&result_span),
+                            gsl::make_span(source));
+    // The sum over the stencil is accumulated in single precision, so each
+    // term can contribute a single-precision rounding error.
+    for (size_t c = 0; c < number_of_components; ++c) {
+      for (size_t p = 0; p < number_of_targets; ++p) {
+        double expected = 0.0;
+        double sum_of_magnitudes = 0.0;
+        for (const auto& [source_index, weight] : stencils[p]) {
+          const double term =
+              weight * static_cast<double>(
+                           source[c * number_of_source_points + source_index]);
+          expected += term;
+          sum_of_magnitudes += std::abs(term);
+        }
+        CAPTURE(p);
+        CHECK(std::abs(result[c * number_of_targets + p] - expected) <=
+              static_cast<double>(stencils[p].size()) *
+                  std::numeric_limits<float>::epsilon() * sum_of_magnitudes);
+      }
+    }
+  }
+  {
+    INFO("Single target point");
+    const DataVector source = nonpolynomial_data(source_x, 0);
+    const DataVector result = interpolant.interpolate(source);
+    for (size_t p = 0; p < number_of_targets; p += 7) {
+      CAPTURE(p);
+      tnsr::I<double, Dim, Frame::ElementLogical> target_point{};
+      tnsr::I<DataVector, Dim, Frame::ElementLogical> target_point_dv{1_st};
+      for (size_t d = 0; d < Dim; ++d) {
+        target_point.get(d) = target_points.get(d)[p];
+        target_point_dv.get(d)[0] = target_point.get(d);
+      }
+      const intrp::Irregular<Dim> single_point_interpolant{mesh, target_point,
+                                                           order};
+      CHECK(single_point_interpolant ==
+            intrp::Irregular<Dim>{mesh, target_point_dv, order});
+      CHECK(single_point_interpolant.interpolate(source)[0] ==
+            approx(result[p]));
+    }
+  }
+  {
+    INFO("No target points");
+    const intrp::Irregular<Dim> no_targets_interpolant{
+        mesh, tnsr::I<DataVector, Dim, Frame::ElementLogical>{0_st}, order};
+    CHECK(no_targets_interpolant.interpolate(nonpolynomial_data(source_x, 0))
+              .size() == 0);
+    const Variables<tmpl::list<Tags::Scalar>> source{number_of_source_points,
+                                                     1.0};
+    CHECK(no_targets_interpolant.interpolate(source).number_of_grid_points() ==
+          0);
+  }
+  {
+    INFO("Default order");
+    const intrp::Irregular<Dim> default_order_interpolant{mesh, target_points};
+    if (order == 1) {
+      CHECK(default_order_interpolant == interpolant);
+    } else {
+      CHECK(default_order_interpolant != interpolant);
+    }
+  }
+  {
+    INFO("Copies and serialization");
+    const DataVector source = nonpolynomial_data(source_x, 0);
+    const DataVector result = interpolant.interpolate(source);
+    test_serialization(interpolant);
+    const auto deserialized = serialize_and_deserialize(interpolant);
+    CHECK(deserialized.interpolate(source) == result);
+    intrp::Irregular<Dim> copy{};
+    CHECK(copy != interpolant);
+    test_serialization(copy);
+    copy = interpolant;
+    CHECK(copy == interpolant);
+    const intrp::Irregular<Dim> moved{std::move(copy)};
+    CHECK(moved.interpolate(source) == result);
+  }
+}
+
+void test_fd_interpolation() {
+  for (size_t order = 1; order <= 6; ++order) {
+    for (const auto quadrature : {Spectral::Quadrature::CellCentered,
+                                  Spectral::Quadrature::FaceCentered}) {
+      // With these numbers of points the grid spacing is 1/4 (coarse) or 1/8
+      // (fine), so all target positions are exact.
+      const size_t n_coarse =
+          quadrature == Spectral::Quadrature::CellCentered ? 8 : 9;
+      const size_t n_fine =
+          quadrature == Spectral::Quadrature::CellCentered ? 16 : 17;
+      const auto basis = Spectral::Basis::FiniteDifference;
+      check_fd_interpolation(Mesh<1>{n_coarse, basis, quadrature}, order, true);
+      check_fd_interpolation(Mesh<1>{n_fine, basis, quadrature}, order, true);
+      check_fd_interpolation(Mesh<1>{11, basis, quadrature}, order, false);
+      check_fd_interpolation(Mesh<2>{{{n_fine, n_coarse}}, basis, quadrature},
+                             order, true);
+      check_fd_interpolation(Mesh<2>{{{7, 10}}, basis, quadrature}, order,
+                             false);
+      check_fd_interpolation(
+          Mesh<3>{{{n_coarse, n_fine, n_coarse}}, basis, quadrature}, order,
+          true);
+      check_fd_interpolation(Mesh<3>{{{10, 7, 12}}, basis, quadrature}, order,
+                             false);
+    }
+  }
+}
+
+void test_fd_coordinate_reuse() {
+  const auto fd = Spectral::Basis::FiniteDifference;
+  const auto cc = Spectral::Quadrature::CellCentered;
+  const auto fc = Spectral::Quadrature::FaceCentered;
+  // The existing FD interpolator reuses the first matching axis's coordinates
+  // for equal extents, even if quadratures differ. Pin that behavior separately
+  // from the interpolation-accuracy tests: changing it is not a storage change.
+  const auto check_coordinate_reuse = [](const Mesh<3>& mesh,
+                                         const Mesh<3>& effective_mesh) {
+    CAPTURE(mesh);
+    tnsr::I<DataVector, 3, Frame::ElementLogical> targets{};
+    get<0>(targets) = DataVector{-0.93, 0.13, 1.02};
+    get<1>(targets) = DataVector{-0.31, 0.91, -1.03};
+    get<2>(targets) = DataVector{0.71, -0.43, 0.27};
+    for (size_t order = 1; order <= 6; ++order) {
+      CHECK(intrp::Irregular<3>{mesh, targets, order} ==
+            intrp::Irregular<3>{effective_mesh, targets, order});
+    }
+  };
+  check_coordinate_reuse(Mesh<3>{{{9, 9, 9}}, {fd, fd, fd}, {cc, fc, fc}},
+                         Mesh<3>{{{9, 9, 9}}, fd, cc});
+  check_coordinate_reuse(Mesh<3>{{{9, 11, 9}}, {fd, fd, fd}, {cc, fc, fc}},
+                         Mesh<3>{{{9, 11, 9}}, {fd, fd, fd}, {cc, fc, cc}});
+  check_coordinate_reuse(Mesh<3>{{{9, 11, 11}}, {fd, fd, fd}, {cc, fc, cc}},
+                         Mesh<3>{{{9, 11, 11}}, {fd, fd, fd}, {cc, fc, fc}});
+}
+
+void test_fd_interpolation_errors() {
+  const tnsr::I<DataVector, 1, Frame::ElementLogical> target_point{1_st, 0.1};
+  const Mesh<1> mesh{8, Spectral::Basis::FiniteDifference,
+                     Spectral::Quadrature::CellCentered};
+  for (const size_t order : {0_st, 7_st}) {
+    CHECK_THROWS_WITH((intrp::Irregular<1>{mesh, target_point, order}),
+                      Catch::Matchers::ContainsSubstring(
+                          "Unsupported fd_to_fd_interp_order: " +
+                          std::to_string(order) + "; expected 1 to 6."));
+  }
+#ifdef SPECTRE_DEBUG
+  CHECK_THROWS_WITH(
+      (intrp::Irregular<1>{Mesh<1>{1, Spectral::Basis::FiniteDifference,
+                                   Spectral::Quadrature::CellCentered},
+                           target_point}),
+      Catch::Matchers::ContainsSubstring(
+          "Need at least 2 points for linear interpolation"));
+  CHECK_THROWS_WITH(
+      (intrp::Irregular<1>{Mesh<1>{4, Spectral::Basis::FiniteDifference,
+                                   Spectral::Quadrature::CellCentered},
+                           target_point, 4}),
+      Catch::Matchers::ContainsSubstring(
+          "Need at least 5 points for quartic interpolation"));
+  const tnsr::I<DataVector, 3, Frame::ElementLogical> target_point_3d{1_st,
+                                                                      0.1};
+  CHECK_THROWS_WITH(
+      (intrp::Irregular<3>{Mesh<3>{{{7, 7, 6}},
+                                   Spectral::Basis::FiniteDifference,
+                                   Spectral::Quadrature::FaceCentered},
+                           target_point_3d, 6}),
+      Catch::Matchers::ContainsSubstring(
+          "Need at least 7 points for degree-6 interpolation"));
+#endif
 }
 
 void test_2d_spherical(const gsl::not_null<std::mt19937*> generator) {
@@ -1044,6 +1512,9 @@ SPECTRE_TEST_CASE("Unit.Numerical.Interpolation.IrregularInterpolant",
       test_tov(max_degree, specified_interp_order);
     }
   }
+  test_fd_interpolation();
+  test_fd_coordinate_reuse();
+  test_fd_interpolation_errors();
   MAKE_GENERATOR(generator);
   test_2d_spherical(make_not_null(&generator));
   test_3d_spherical(make_not_null(&generator));

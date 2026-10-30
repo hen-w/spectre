@@ -5,24 +5,33 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <iterator>
 #include <limits>
 #include <optional>
+#include <pup.h>
+#include <pup_stl.h>
 #include <vector>
 
 #include "DataStructures/DataVector.hpp"
+#include "DataStructures/Index.hpp"
+#include "DataStructures/IndexIterator.hpp"
 #include "DataStructures/Tensor/IndexType.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "NumericalAlgorithms/Interpolation/CardinalInterpolator.hpp"
 #include "NumericalAlgorithms/Spectral/Basis.hpp"
 #include "NumericalAlgorithms/Spectral/BasisFunctions/Zernike.hpp"
+#include "NumericalAlgorithms/Spectral/CollocationPoints.hpp"
 #include "NumericalAlgorithms/Spectral/InterpolationMatrix.hpp"
-#include "NumericalAlgorithms/Spectral/LogicalCoordinates.hpp"
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
 #include "NumericalAlgorithms/Spectral/NodalToModalMatrix.hpp"
 #include "NumericalAlgorithms/Spectral/Quadrature.hpp"
 #include "Utilities/Blas.hpp"
 #include "Utilities/ContainerHelpers.hpp"
+#include "Utilities/ErrorHandling/Assert.hpp"
+#include "Utilities/ErrorHandling/Error.hpp"
+#include "Utilities/Gsl.hpp"
+#include "Utilities/MakeArray.hpp"
 
 namespace {
 template <size_t Dim>
@@ -145,19 +154,29 @@ void compute_zernikeb2_interpolation(
   }
 }
 
+// The Lagrange interpolation stencil of a target point on a 1D FD grid: the
+// interpolated value is the sum of `weights[i]` times the source value at
+// `start + i`. Weights can be exactly zero, e.g. for a target on a source
+// point.
+struct FdStencil {
+  size_t start{0};
+  std::vector<double> weights{};
+};
+
 template <size_t Order>
-std::vector<double> fd_stencil(const DataVector& xi_source, double xi_target);
+FdStencil fd_stencil(const DataVector& xi_source, double xi_target);
 
 // potential future optimization: use the barycentric formula
 
-// Just linear for now, can be extended to higher order...
-// Future optimization: it might be more efficient to use Blaze's sparse
-// matrices since the interpolation matrix is mostly zeros
+// Linear (two-point) interpolation between the bracketing grid points. Targets
+// outside the grid use the first or last 2 points (linear extrapolation).
 template <>
-std::vector<double> fd_stencil<1>(const DataVector& xi_source,
-                                  const double xi_target) {
+FdStencil fd_stencil<1>(const DataVector& xi_source, const double xi_target) {
   ASSERT(std::is_sorted(std::begin(xi_source), std::end(xi_source)),
          "xi_source = " << xi_source);
+  ASSERT(xi_source.size() >= 2,
+         "Need at least 2 points for linear interpolation (got "
+             << xi_source.size() << ")");
   auto xi_u =
       std::upper_bound(std::begin(xi_source), std::end(xi_source), xi_target);
   if (std::end(xi_source) == xi_u) {
@@ -167,24 +186,19 @@ std::vector<double> fd_stencil<1>(const DataVector& xi_source,
     std::advance(xi_u, 1);
   }
   const auto xi_l = std::prev(xi_u);
-  auto index = std::distance(std::begin(xi_source), xi_l);
-  std::vector<double> result(xi_source.size(), 0.0);
-  const auto result_l = std::next(std::begin(result), index);
-  const auto result_u = std::next(result_l, 1);
-  *result_l = (*xi_u - xi_target) / (*xi_u - *xi_l);
-  *result_u = (xi_target - *xi_l) / (*xi_u - *xi_l);
-  return result;
+  return {static_cast<size_t>(std::distance(std::begin(xi_source), xi_l)),
+          {(*xi_u - xi_target) / (*xi_u - *xi_l),
+           (xi_target - *xi_l) / (*xi_u - *xi_l)}};
 }
 
 // Quadratic (three-point) finite-difference interpolation stencil.
-// Returns a weight vector with exactly three non-zero entries corresponding
-// to a chosen triplet of consecutive grid points. For interior targets we pick
-// the more centered of the two possible triplets bracketing the target.
+// Returns the weights of a chosen triplet of consecutive grid points. For
+// interior targets we pick the more centered of the two possible triplets
+// bracketing the target.
 // Edge targets (or outside) use the first or last 3 points, yielding
 // one-sided quadratic extrapolation.
 template <>
-std::vector<double> fd_stencil<2>(const DataVector& xi_source,
-                                  const double xi_target) {
+FdStencil fd_stencil<2>(const DataVector& xi_source, const double xi_target) {
   ASSERT(std::is_sorted(std::begin(xi_source), std::end(xi_source)),
          "xi_source = " << xi_source);
   const size_t num_of_pts = xi_source.size();
@@ -253,12 +267,10 @@ std::vector<double> fd_stencil<2>(const DataVector& xi_source,
   const double denom1 = (x1 - x0) * (x1 - x2);
   const double denom2 = (x2 - x0) * (x2 - x1);
 
-  std::vector<double> w(num_of_pts, 0.0);
-  w[i0] = (xi_target - x1) * (xi_target - x2) / denom0;
-  w[i1] = (xi_target - x0) * (xi_target - x2) / denom1;
-  w[i2] = (xi_target - x0) * (xi_target - x1) / denom2;
-
-  return w;
+  return {i0,
+          {(xi_target - x1) * (xi_target - x2) / denom0,
+           (xi_target - x0) * (xi_target - x2) / denom1,
+           (xi_target - x0) * (xi_target - x1) / denom2}};
 }
 
 // Cubic (four-point) finite-difference interpolation stencil.
@@ -268,8 +280,7 @@ std::vector<double> fd_stencil<2>(const DataVector& xi_source,
 // contain the bracketing pair to best center the target (minimizing distance to
 // the window's midpoint).
 template <>
-std::vector<double> fd_stencil<3>(const DataVector& xi_source,
-                                  const double xi_target) {
+FdStencil fd_stencil<3>(const DataVector& xi_source, const double xi_target) {
   ASSERT(std::is_sorted(std::begin(xi_source), std::end(xi_source)),
          "xi_source = " << xi_source);
   const size_t num_of_pts = xi_source.size();
@@ -327,12 +338,10 @@ std::vector<double> fd_stencil<3>(const DataVector& xi_source,
     return num / denom;
   };
 
-  std::vector<double> w(num_of_pts, 0.0);
-  w[i0] = lagrange_weight(x0, {x1, x2, x3});
-  w[i1] = lagrange_weight(x1, {x0, x2, x3});
-  w[i2] = lagrange_weight(x2, {x0, x1, x3});
-  w[i3] = lagrange_weight(x3, {x0, x1, x2});
-  return w;
+  return {
+      i0,
+      {lagrange_weight(x0, {x1, x2, x3}), lagrange_weight(x1, {x0, x2, x3}),
+       lagrange_weight(x2, {x0, x1, x3}), lagrange_weight(x3, {x0, x1, x2})}};
 }
 
 // Quartic (five-point) finite-difference interpolation stencil.
@@ -341,8 +350,7 @@ std::vector<double> fd_stencil<3>(const DataVector& xi_source,
 // extrapolation). For interior targets we pick
 // the more centered of the two possible 5-point windows bracketing the target.
 template <>
-std::vector<double> fd_stencil<4>(const DataVector& xi_source,
-                                  const double xi_target) {
+FdStencil fd_stencil<4>(const DataVector& xi_source, const double xi_target) {
   ASSERT(std::is_sorted(std::begin(xi_source), std::end(xi_source)),
          "xi_source = " << xi_source);
   const size_t num_of_pts = xi_source.size();
@@ -433,19 +441,17 @@ std::vector<double> fd_stencil<4>(const DataVector& xi_source,
   const double denom3 = (x3 - x0) * (x3 - x1) * (x3 - x2) * (x3 - x4);
   const double denom4 = (x4 - x0) * (x4 - x1) * (x4 - x2) * (x4 - x3);
 
-  std::vector<double> w(num_of_pts, 0.0);
-  w[i0] = (xi_target - x1) * (xi_target - x2) * (xi_target - x3) *
-          (xi_target - x4) / denom0;
-  w[i1] = (xi_target - x0) * (xi_target - x2) * (xi_target - x3) *
-          (xi_target - x4) / denom1;
-  w[i2] = (xi_target - x0) * (xi_target - x1) * (xi_target - x3) *
-          (xi_target - x4) / denom2;
-  w[i3] = (xi_target - x0) * (xi_target - x1) * (xi_target - x2) *
-          (xi_target - x4) / denom3;
-  w[i4] = (xi_target - x0) * (xi_target - x1) * (xi_target - x2) *
-          (xi_target - x3) / denom4;
-
-  return w;
+  return {i0,
+          {(xi_target - x1) * (xi_target - x2) * (xi_target - x3) *
+               (xi_target - x4) / denom0,
+           (xi_target - x0) * (xi_target - x2) * (xi_target - x3) *
+               (xi_target - x4) / denom1,
+           (xi_target - x0) * (xi_target - x1) * (xi_target - x3) *
+               (xi_target - x4) / denom2,
+           (xi_target - x0) * (xi_target - x1) * (xi_target - x2) *
+               (xi_target - x4) / denom3,
+           (xi_target - x0) * (xi_target - x1) * (xi_target - x2) *
+               (xi_target - x3) / denom4}};
 }
 
 template <size_t Dim, typename DataType>
@@ -456,10 +462,9 @@ Matrix interpolation_matrix(
 // Lagrange interpolation stencil of degree `degree` on a window of
 // `degree + 1` consecutive source points: one-sided at the ends of the source
 // grid, otherwise the window containing the target whose end points are most
-// symmetric about it (the same choice as the hard-coded low-order stencils).
-std::vector<double> fd_stencil_lagrange(const DataVector& xi_source,
-                                        const double xi_target,
-                                        const size_t degree) {
+// symmetric about it. Equal imbalances select the lower window.
+FdStencil fd_stencil_lagrange(const DataVector& xi_source,
+                              const double xi_target, const size_t degree) {
   ASSERT(std::is_sorted(std::begin(xi_source), std::end(xi_source)),
          "xi_source = " << xi_source);
   const size_t num_of_pts = xi_source.size();
@@ -490,7 +495,7 @@ std::vector<double> fd_stencil_lagrange(const DataVector& xi_source,
       }
     }
   }
-  std::vector<double> w(num_of_pts, 0.0);
+  FdStencil result{start, std::vector<double>(width)};
   for (size_t i = start; i < start + width; ++i) {
     double weight = 1.0;
     for (size_t j = start; j < start + width; ++j) {
@@ -498,23 +503,142 @@ std::vector<double> fd_stencil_lagrange(const DataVector& xi_source,
         weight *= (xi_target - xi_source[j]) / (xi_source[i] - xi_source[j]);
       }
     }
-    w[i] = weight;
+    result.weights[i - start] = weight;
   }
-  return w;
+  return result;
 }
 
 // Quintic (6-point) interpolation.
 template <>
-std::vector<double> fd_stencil<5>(const DataVector& xi_source,
-                                  const double xi_target) {
+FdStencil fd_stencil<5>(const DataVector& xi_source, const double xi_target) {
   return fd_stencil_lagrange(xi_source, xi_target, 5);
 }
 
 // Sextic (7-point) interpolation.
 template <>
-std::vector<double> fd_stencil<6>(const DataVector& xi_source,
-                                  const double xi_target) {
+FdStencil fd_stencil<6>(const DataVector& xi_source, const double xi_target) {
   return fd_stencil_lagrange(xi_source, xi_target, 6);
+}
+
+FdStencil fd_stencil(const DataVector& xi_source, const double xi_target,
+                     const size_t order) {
+  switch (order) {
+    case 1:
+      return fd_stencil<1>(xi_source, xi_target);
+    case 2:
+      return fd_stencil<2>(xi_source, xi_target);
+    case 3:
+      return fd_stencil<3>(xi_source, xi_target);
+    case 4:
+      return fd_stencil<4>(xi_source, xi_target);
+    case 5:
+      return fd_stencil<5>(xi_source, xi_target);
+    case 6:
+      return fd_stencil<6>(xi_source, xi_target);
+    default:
+      ERROR("Unsupported fd_to_fd_interp_order: " << order
+                                                  << "; expected 1 to 6.");
+  }
+}
+
+// Tensor-product stencils of the target `points` on the FD `mesh`, in the
+// representation described at the `fd_` members of `intrp::Irregular`.
+template <size_t Dim, typename DataType>
+void compute_fd_stencils(
+    const gsl::not_null<std::vector<size_t>*> window_starts,
+    const gsl::not_null<std::vector<size_t>*> stencil_offsets,
+    const gsl::not_null<std::vector<double>*> weights, const Mesh<Dim>& mesh,
+    const tnsr::I<DataType, Dim, Frame::ElementLogical>& points,
+    const std::optional<size_t>& fd_to_fd_interp_order) {
+  constexpr size_t default_order = 1;  // linear interpolation by default
+  const size_t order = fd_to_fd_interp_order.value_or(default_order);
+  const size_t number_of_target_points = get_size(get<0>(points));
+  std::array<DataVector, Dim> xi_source{};
+  std::array<size_t, Dim> source_strides{};
+  for (size_t d = 0; d < Dim; ++d) {
+    // Preserve the existing FD coordinate convention: equal extents reuse
+    // the first matching axis's coordinates, including for mixed quadratures.
+    size_t coordinate_dimension = d;
+    for (size_t previous = 0; previous < d; ++previous) {
+      if (mesh.extents(previous) == mesh.extents(d)) {
+        coordinate_dimension = previous;
+        break;
+      }
+    }
+    gsl::at(xi_source, d) =
+        Spectral::collocation_points(mesh.slice_through(coordinate_dimension));
+    gsl::at(source_strides, d) =
+        d == 0 ? 1 : gsl::at(source_strides, d - 1) * mesh.extents(d - 1);
+  }
+  window_starts->resize(number_of_target_points);
+  stencil_offsets->clear();
+  weights->clear();
+  std::array<FdStencil, Dim> stencils{};
+  Index<Dim> stencil_extents{};
+  for (size_t p = 0; p < number_of_target_points; ++p) {
+    size_t window_start = 0;
+    for (size_t d = 0; d < Dim; ++d) {
+      FdStencil& stencil = gsl::at(stencils, d);
+      stencil = fd_stencil(gsl::at(xi_source, d), get_element(points.get(d), p),
+                           order);
+      ASSERT(stencil.start + stencil.weights.size() <= mesh.extents(d),
+             "The FD stencil [" << stencil.start << ", "
+                                << stencil.start + stencil.weights.size()
+                                << ") exceeds the " << mesh.extents(d)
+                                << " source points in dimension " << d);
+      if (p == 0) {
+        stencil_extents[d] = stencil.weights.size();
+      }
+      ASSERT(stencil.weights.size() == stencil_extents[d],
+             "All FD stencils must have the same size, but in dimension "
+                 << d << " target point " << p << " has "
+                 << stencil.weights.size() << " points instead of "
+                 << stencil_extents[d]);
+      window_start += stencil.start * gsl::at(source_strides, d);
+    }
+    (*window_starts)[p] = window_start;
+    if (p == 0) {
+      stencil_offsets->reserve(stencil_extents.product());
+      for (IndexIterator<Dim> index(stencil_extents); index; ++index) {
+        size_t offset = 0;
+        for (size_t d = 0; d < Dim; ++d) {
+          offset += index()[d] * gsl::at(source_strides, d);
+        }
+        stencil_offsets->push_back(offset);
+      }
+      weights->reserve(number_of_target_points * stencil_offsets->size());
+    }
+    for (IndexIterator<Dim> index(stencil_extents); index; ++index) {
+      double weight = stencils[0].weights[index()[0]];
+      for (size_t d = 1; d < Dim; ++d) {
+        weight *= gsl::at(stencils, d).weights[index()[d]];
+      }
+      weights->push_back(weight);
+    }
+  }
+}
+
+// Dense interpolation matrix of the FD stencils, for the FD+Cartoon meshes,
+// which reduce to lower-dimensional FD meshes.
+template <size_t Dim, typename DataType>
+Matrix fd_interpolation_matrix(
+    const Mesh<Dim>& mesh,
+    const tnsr::I<DataType, Dim, Frame::ElementLogical>& points,
+    const std::optional<size_t>& fd_to_fd_interp_order) {
+  std::vector<size_t> window_starts{};
+  std::vector<size_t> stencil_offsets{};
+  std::vector<double> weights{};
+  compute_fd_stencils(make_not_null(&window_starts),
+                      make_not_null(&stencil_offsets), make_not_null(&weights),
+                      mesh, points, fd_to_fd_interp_order);
+  Matrix result(window_starts.size(), mesh.number_of_grid_points(), 0.0);
+  for (size_t p = 0, w = 0; p < window_starts.size(); ++p) {
+    for (const size_t offset : stencil_offsets) {
+      result(p, window_starts[p] + offset) = weights[w];
+      ++w;
+    }
+  }
+  return result;
 }
 
 template <typename DataType>
@@ -523,51 +647,7 @@ Matrix interpolation_matrix(
     const tnsr::I<DataType, 1, Frame::ElementLogical>& points,
     const std::optional<size_t>& fd_to_fd_interp_order) {
   if (mesh.basis()[0] == Spectral::Basis::FiniteDifference) {
-    auto source_xi = logical_coordinates(mesh);
-    const auto number_of_source_points = mesh.number_of_grid_points();
-    const DataVector xi_source(get<0>(source_xi).data(),
-                               number_of_source_points);
-    const size_t number_of_target_points = get_size(get<0>(points));
-    Matrix result(number_of_target_points, number_of_source_points);
-    constexpr size_t default_order = 1;  // linear interpolation by default
-    for (size_t p = 0; p < number_of_target_points; ++p) {
-      const double xi_target = get_element(get<0>(points), p);
-      std::vector<double> stencil;
-      switch (fd_to_fd_interp_order.value_or(default_order)) {
-        case 1: {
-          stencil = fd_stencil<1>(xi_source, xi_target);
-          break;
-        }
-        case 2: {
-          stencil = fd_stencil<2>(xi_source, xi_target);
-          break;
-        }
-        case 3: {
-          stencil = fd_stencil<3>(xi_source, xi_target);
-          break;
-        }
-        case 4: {
-          stencil = fd_stencil<4>(xi_source, xi_target);
-          break;
-        }
-        case 5: {
-          stencil = fd_stencil<5>(xi_source, xi_target);
-          break;
-        }
-        case 6: {
-          stencil = fd_stencil<6>(xi_source, xi_target);
-          break;
-        }
-        default:
-          ERROR("Unsupported fd_to_fd_interp_order: "
-                << fd_to_fd_interp_order.value_or(default_order)
-                << "; expected 1 to 6.");
-      }
-      for (size_t i = 0; i < number_of_source_points; ++i) {
-        result(p, i) = stencil[i];
-      }
-    }
-    return result;
+    return fd_interpolation_matrix(mesh, points, fd_to_fd_interp_order);
   }
 
   // Not FD, so use spectral interpolation
@@ -593,67 +673,7 @@ Matrix interpolation_matrix(
   if (mesh.basis()[0] == Spectral::Basis::FiniteDifference) {
     ASSERT(mesh.basis()[1] == Spectral::Basis::FiniteDifference,
            "Mixed FD and DG bases are not supported. Mesh = " << mesh);
-    auto source_xi = logical_coordinates(mesh);
-    DataVector xi_source{get<0>(source_xi).data(), mesh.extents(0)};
-    DataVector eta_source;
-    if (mesh.extents(1) == mesh.extents(0)) {
-      eta_source.set_data_ref(&xi_source);
-    } else {
-      eta_source.destructive_resize(mesh.extents(1));
-      for (size_t j = 0; j < mesh.extents(1); ++j) {
-        eta_source[j] = get<1>(source_xi)[j * mesh.extents(0)];
-      }
-    }
-    constexpr size_t default_order = 1;  // linear interpolation by default
-    for (size_t p = 0; p < number_of_target_points; ++p) {
-      const double xi_target = get_element(get<0>(points), p);
-      const double eta_target = get_element(get<1>(points), p);
-      std::vector<double> xi_stencil;
-      std::vector<double> eta_stencil;
-      switch (fd_to_fd_interp_order.value_or(default_order)) {
-        case 1: {
-          xi_stencil = fd_stencil<1>(xi_source, xi_target);
-          eta_stencil = fd_stencil<1>(eta_source, eta_target);
-          break;
-        }
-        case 2: {
-          xi_stencil = fd_stencil<2>(xi_source, xi_target);
-          eta_stencil = fd_stencil<2>(eta_source, eta_target);
-          break;
-        }
-        case 3: {
-          xi_stencil = fd_stencil<3>(xi_source, xi_target);
-          eta_stencil = fd_stencil<3>(eta_source, eta_target);
-          break;
-        }
-        case 4: {
-          xi_stencil = fd_stencil<4>(xi_source, xi_target);
-          eta_stencil = fd_stencil<4>(eta_source, eta_target);
-          break;
-        }
-        case 5: {
-          xi_stencil = fd_stencil<5>(xi_source, xi_target);
-          eta_stencil = fd_stencil<5>(eta_source, eta_target);
-          break;
-        }
-        case 6: {
-          xi_stencil = fd_stencil<6>(xi_source, xi_target);
-          eta_stencil = fd_stencil<6>(eta_source, eta_target);
-          break;
-        }
-        default:
-          ERROR("Unsupported fd_to_fd_interp_order: "
-                << fd_to_fd_interp_order.value_or(default_order)
-                << "; expected 1 to 6.");
-      }
-      for (size_t j = 0, s = 0; j < mesh.extents(1); ++j) {
-        for (size_t i = 0; i < mesh.extents(0); ++i) {
-          result(p, s) = xi_stencil[i] * eta_stencil[j];
-          ++s;
-        }
-      }
-    }
-    return result;
+    return fd_interpolation_matrix(mesh, points, fd_to_fd_interp_order);
   } else if (mesh.basis()[0] == Spectral::Basis::SphericalHarmonic) {
     ASSERT(mesh.basis()[1] == Spectral::Basis::SphericalHarmonic,
            "Expected both dimensions to have spherical harmonic basis. Mesh = "
@@ -713,95 +733,10 @@ Matrix interpolation_matrix(
           fd_to_fd_interp_order == std::nullopt,
       "fd_to_fd_interp_order only applies to FD meshes. But Mesh is " << mesh);
 
+  // Meshes that are FD in all dimensions are handled by `compute_fd_stencils`
   if (mesh.basis() == std::array{Spectral::Basis::FiniteDifference,
                                  Spectral::Basis::FiniteDifference,
-                                 Spectral::Basis::FiniteDifference}) {
-    auto source_xi = logical_coordinates(mesh);
-    DataVector xi_source{get<0>(source_xi).data(), mesh.extents(0)};
-    DataVector eta_source;
-    if (mesh.extents(1) == mesh.extents(0)) {
-      eta_source.set_data_ref(&xi_source);
-    } else {
-      eta_source.destructive_resize(mesh.extents(1));
-      for (size_t j = 0; j < mesh.extents(1); ++j) {
-        eta_source[j] = get<1>(source_xi)[j * mesh.extents(0)];
-      }
-    }
-    DataVector zeta_source;
-    if (mesh.extents(2) == mesh.extents(0)) {
-      zeta_source.set_data_ref(&xi_source);
-    } else if (mesh.extents(2) == mesh.extents(1)) {
-      zeta_source.set_data_ref(&eta_source);
-    } else {
-      zeta_source.destructive_resize(mesh.extents(2));
-      for (size_t k = 0; k < mesh.extents(2); ++k) {
-        zeta_source[k] =
-            get<2>(source_xi)[k * mesh.extents(0) * mesh.extents(1)];
-      }
-    }
-    constexpr size_t default_order = 1;  // linear interpolation by default
-    for (size_t p = 0; p < number_of_target_points; ++p) {
-      const double xi_target = get_element(get<0>(points), p);
-      const double eta_target = get_element(get<1>(points), p);
-      const double zeta_target = get_element(get<2>(points), p);
-      std::vector<double> xi_stencil;
-      std::vector<double> eta_stencil;
-      std::vector<double> zeta_stencil;
-      switch (fd_to_fd_interp_order.value_or(default_order)) {
-        case 1: {
-          xi_stencil = fd_stencil<1>(xi_source, xi_target);
-          eta_stencil = fd_stencil<1>(eta_source, eta_target);
-          zeta_stencil = fd_stencil<1>(zeta_source, zeta_target);
-          break;
-        }
-        case 2: {
-          xi_stencil = fd_stencil<2>(xi_source, xi_target);
-          eta_stencil = fd_stencil<2>(eta_source, eta_target);
-          zeta_stencil = fd_stencil<2>(zeta_source, zeta_target);
-          break;
-        }
-        case 3: {
-          xi_stencil = fd_stencil<3>(xi_source, xi_target);
-          eta_stencil = fd_stencil<3>(eta_source, eta_target);
-          zeta_stencil = fd_stencil<3>(zeta_source, zeta_target);
-          break;
-        }
-        case 4: {
-          xi_stencil = fd_stencil<4>(xi_source, xi_target);
-          eta_stencil = fd_stencil<4>(eta_source, eta_target);
-          zeta_stencil = fd_stencil<4>(zeta_source, zeta_target);
-          break;
-        }
-        case 5: {
-          xi_stencil = fd_stencil<5>(xi_source, xi_target);
-          eta_stencil = fd_stencil<5>(eta_source, eta_target);
-          zeta_stencil = fd_stencil<5>(zeta_source, zeta_target);
-          break;
-        }
-        case 6: {
-          xi_stencil = fd_stencil<6>(xi_source, xi_target);
-          eta_stencil = fd_stencil<6>(eta_source, eta_target);
-          zeta_stencil = fd_stencil<6>(zeta_source, zeta_target);
-          break;
-        }
-        default:
-          ERROR("Unsupported fd_to_fd_interp_order: "
-                << fd_to_fd_interp_order.value_or(default_order)
-                << "; expected 1 to 6.");
-      }
-      for (size_t k = 0, s = 0; k < mesh.extents(2); ++k) {
-        for (size_t j = 0; j < mesh.extents(1); ++j) {
-          for (size_t i = 0; i < mesh.extents(0); ++i) {
-            result(p, s) = xi_stencil[i] * eta_stencil[j] * zeta_stencil[k];
-            ++s;
-          }
-        }
-      }
-    }
-    return result;
-  } else if (mesh.basis() == std::array{Spectral::Basis::FiniteDifference,
-                                        Spectral::Basis::FiniteDifference,
-                                        Spectral::Basis::Cartoon}) {
+                                 Spectral::Basis::Cartoon}) {
     // Axial Symmetry -> call 2D implementation
     tnsr::I<DataType, 2, Frame::ElementLogical> points_2d{};
     if constexpr (std::is_same_v<DataType, DataVector>) {
@@ -894,31 +829,88 @@ template <size_t Dim>
 Irregular<Dim>::Irregular() = default;
 
 template <size_t Dim>
+template <typename DataType>
+void Irregular<Dim>::initialize(
+    const Mesh<Dim>& source_mesh,
+    const tnsr::I<DataType, Dim, Frame::ElementLogical>& target_points,
+    const std::optional<size_t>& fd_to_fd_interp_order) {
+  if (source_mesh.basis() ==
+      make_array<Dim>(Spectral::Basis::FiniteDifference)) {
+    uses_fd_stencils_ = true;
+    number_of_source_points_ = source_mesh.number_of_grid_points();
+    compute_fd_stencils(make_not_null(&fd_window_starts_),
+                        make_not_null(&fd_stencil_offsets_),
+                        make_not_null(&fd_weights_), source_mesh, target_points,
+                        fd_to_fd_interp_order);
+  } else {
+    interpolation_matrix_ =
+        interpolation_matrix(source_mesh, target_points, fd_to_fd_interp_order);
+  }
+}
+
+template <size_t Dim>
 Irregular<Dim>::Irregular(
     const Mesh<Dim>& source_mesh,
     const tnsr::I<DataVector, Dim, Frame::ElementLogical>& target_points,
-    const std::optional<size_t>& fd_to_fd_interp_order)
-    : interpolation_matrix_(interpolation_matrix(source_mesh, target_points,
-                                                 fd_to_fd_interp_order)) {}
+    const std::optional<size_t>& fd_to_fd_interp_order) {
+  initialize(source_mesh, target_points, fd_to_fd_interp_order);
+}
 
 template <size_t Dim>
 Irregular<Dim>::Irregular(
     const Mesh<Dim>& source_mesh,
     const tnsr::I<double, Dim, Frame::ElementLogical>& target_point,
-    const std::optional<size_t>& fd_to_fd_interp_order)
-    : interpolation_matrix_(interpolation_matrix(source_mesh, target_point,
-                                                 fd_to_fd_interp_order)) {}
+    const std::optional<size_t>& fd_to_fd_interp_order) {
+  initialize(source_mesh, target_point, fd_to_fd_interp_order);
+}
 
 template <size_t Dim>
 void Irregular<Dim>::pup(PUP::er& p) {
+  p | uses_fd_stencils_;
   p | interpolation_matrix_;
+  p | number_of_source_points_;
+  p | fd_window_starts_;
+  p | fd_stencil_offsets_;
+  p | fd_weights_;
+}
+
+template <size_t Dim>
+template <typename ValueType>
+void Irregular<Dim>::interpolate_with_fd_stencils(
+    const gsl::span<ValueType> result,
+    const gsl::span<const ValueType> input) const {
+  const size_t number_of_targets = fd_window_starts_.size();
+  const size_t stencil_size = fd_stencil_offsets_.size();
+  ASSERT(input.size() % number_of_source_points_ == 0,
+         "Number of points in 'input', "
+             << input.size()
+             << ",\n must be a multiple of the source grid points, "
+             << number_of_source_points_
+             << ", that was passed into the constructor");
+  const size_t number_of_components = input.size() / number_of_source_points_;
+  ASSERT(result.size() == number_of_components * number_of_targets,
+         "The result must be of size "
+             << number_of_components * number_of_targets << " but got "
+             << result.size());
+  for (size_t component = 0; component < number_of_components; ++component) {
+    const size_t input_offset = component * number_of_source_points_;
+    const size_t result_offset = component * number_of_targets;
+    for (size_t p = 0, w = 0; p < number_of_targets; ++p) {
+      const size_t window_start = input_offset + fd_window_starts_[p];
+      ValueType sum{};
+      for (size_t q = 0; q < stencil_size; ++q, ++w) {
+        sum += fd_weights_[w] * input[window_start + fd_stencil_offsets_[q]];
+      }
+      result[result_offset + p] = sum;
+    }
+  }
 }
 
 template <size_t Dim>
 void Irregular<Dim>::interpolate(const gsl::not_null<DataVector*> result,
                                  const DataVector& input) const {
-  const size_t m = interpolation_matrix_.rows();
-  const size_t k = interpolation_matrix_.columns();
+  const size_t m = number_of_target_points();
+  const size_t k = number_of_source_points();
   ASSERT(k == input.size(),
          "Number of points in 'input', "
              << input.size()
@@ -926,6 +918,11 @@ void Irregular<Dim>::interpolate(const gsl::not_null<DataVector*> result,
              << ", that was passed into the constructor");
   if (result->size() != m) {
     result->destructive_resize(m);
+  }
+  if (uses_fd_stencils_) {
+    interpolate_with_fd_stencils(gsl::make_span(result->data(), m),
+                                 gsl::make_span(input.data(), k));
+    return;
   }
   dgemv_('n', m, k, 1.0, interpolation_matrix_.data(),
          interpolation_matrix_.spacing(), input.data(), 1, 0.0, result->data(),
@@ -942,8 +939,8 @@ DataVector Irregular<Dim>::interpolate(const DataVector& input) const {
 template <size_t Dim>
 void Irregular<Dim>::interpolate(const gsl::not_null<ComplexDataVector*> result,
                                  const ComplexDataVector& input) const {
-  const size_t m = interpolation_matrix_.rows();
-  const size_t k = interpolation_matrix_.columns();
+  const size_t m = number_of_target_points();
+  const size_t k = number_of_source_points();
   ASSERT(k == input.size(),
          "Number of points in 'input', "
              << input.size()
@@ -951,6 +948,11 @@ void Irregular<Dim>::interpolate(const gsl::not_null<ComplexDataVector*> result,
              << ", that was passed into the constructor");
   if (result->size() != m) {
     result->destructive_resize(m);
+  }
+  if (uses_fd_stencils_) {
+    interpolate_with_fd_stencils(gsl::make_span(result->data(), m),
+                                 gsl::make_span(input.data(), k));
+    return;
   }
   // Possible performance optimization: can possibly be written as a single
   // `dgemm` call, or might be faster using `zgemv`.
@@ -1030,20 +1032,32 @@ void span_interpolate_impl(const gsl::not_null<gsl::span<ValueType>*> result,
 template <size_t Dim>
 void Irregular<Dim>::interpolate(const gsl::not_null<gsl::span<double>*> result,
                                  const gsl::span<const double>& input) const {
-  span_interpolate_impl(result, input, interpolation_matrix_);
+  if (uses_fd_stencils_) {
+    interpolate_with_fd_stencils(*result, input);
+  } else {
+    span_interpolate_impl(result, input, interpolation_matrix_);
+  }
 }
 
 template <size_t Dim>
 void Irregular<Dim>::interpolate(
     const gsl::not_null<gsl::span<std::complex<double>>*> result,
     const gsl::span<const std::complex<double>>& input) const {
-  span_interpolate_impl(result, input, interpolation_matrix_);
+  if (uses_fd_stencils_) {
+    interpolate_with_fd_stencils(*result, input);
+  } else {
+    span_interpolate_impl(result, input, interpolation_matrix_);
+  }
 }
 
 template <size_t Dim>
 void Irregular<Dim>::interpolate(const gsl::not_null<gsl::span<float>*> result,
                                  const gsl::span<const float>& input) const {
-  span_interpolate_impl(result, input, interpolation_matrix_);
+  if (uses_fd_stencils_) {
+    interpolate_with_fd_stencils(*result, input);
+  } else {
+    span_interpolate_impl(result, input, interpolation_matrix_);
+  }
 }
 
 template <size_t Dim>
