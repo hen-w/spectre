@@ -1688,6 +1688,221 @@ void test_shell_filter_errors() {
                     Catch::Matchers::ContainsSubstring(
                         "is defined only on spherical-harmonic shells"));
 }
+
+// Dense references of the tensor-product operators for the production mass,
+// built otherwise independently of the production operators from the gradient
+// matrices G_i of `partial_derivative` and from the retained Legendre modes of
+// `mode`. The fit is the solution of the Lagrange system of the constrained
+// least-squares problem,
+//
+//   [K_D  m] [r     ]   [b_D ]
+//   [m^T  0] [lambda] = [V mu],
+//
+// with K_D = sum_i G_i^T M G_i and b_D = sum_i G_i^T M q*_i, which uses no
+// basis of the mean-zero subspace. The retained projection is the
+// mass-weighted least-squares projection M^{-1/2} Q Q^T M^{1/2} with
+// M^{1/2} B = Q R, B the retained modes.
+struct TensorProductReference {
+  DataVector mass;
+  std::array<Matrix, 3> gradients;
+  Matrix lagrange_inverse;
+  Matrix retained_basis;
+};
+
+TensorProductReference make_tensor_product_reference(const Geometry& geometry,
+                                                     const DataVector& mass) {
+  const size_t n = geometry.mesh.number_of_grid_points();
+  const auto& extents = geometry.mesh.extents();
+  TensorProductReference result{};
+  result.mass = mass;
+  for (auto& gradient_matrix : result.gradients) {
+    gradient_matrix = Matrix(n, n);
+  }
+  for (size_t column = 0; column < n; ++column) {
+    DataVector unit{n, 0.0};
+    unit[column] = 1.0;
+    const auto unit_gradient = gradient(geometry, unit);
+    for (size_t i = 0; i < 3; ++i) {
+      for (size_t point = 0; point < n; ++point) {
+        gsl::at(result.gradients, i)(point, column) =
+            gsl::at(unit_gradient, i)[point];
+      }
+    }
+  }
+  Matrix lagrange(n + 1, n + 1, 0.0);
+  for (const Matrix& gradient_matrix : result.gradients) {
+    for (size_t column = 0; column < n; ++column) {
+      for (size_t row = 0; row < n; ++row) {
+        for (size_t point = 0; point < n; ++point) {
+          lagrange(row, column) += gradient_matrix(point, row) * mass[point] *
+                                   gradient_matrix(point, column);
+        }
+      }
+    }
+  }
+  for (size_t point = 0; point < n; ++point) {
+    lagrange(point, n) = mass[point];
+    lagrange(n, point) = mass[point];
+  }
+  result.lagrange_inverse = blaze::inv(lagrange);
+
+  const DataVector sqrt_mass = sqrt(mass);
+  Matrix weighted_modes(n,
+                        (extents[0] - 1) * (extents[1] - 1) * (extents[2] - 1));
+  size_t mode_index = 0;
+  for (size_t l = 0; l + 1 < extents[0]; ++l) {
+    for (size_t m = 0; m + 1 < extents[1]; ++m) {
+      for (size_t k = 0; k + 1 < extents[2]; ++k) {
+        const DataVector weighted_mode = sqrt_mass * mode(geometry, l, m, k);
+        for (size_t point = 0; point < n; ++point) {
+          weighted_modes(point, mode_index) = weighted_mode[point];
+        }
+        ++mode_index;
+      }
+    }
+  }
+  Matrix upper_triangular{};
+  blaze::qr(weighted_modes, result.retained_basis, upper_triangular);
+  return result;
+}
+
+DataVector reference_fit(const TensorProductReference& reference,
+                         const TargetArray& targets, const double mean) {
+  const size_t n = reference.mass.size();
+  blaze::DynamicVector<double> rhs(n + 1, 0.0);
+  for (size_t i = 0; i < 3; ++i) {
+    const Matrix& gradient_matrix = gsl::at(reference.gradients, i);
+    for (size_t column = 0; column < n; ++column) {
+      for (size_t point = 0; point < n; ++point) {
+        rhs[column] += gradient_matrix(point, column) * reference.mass[point] *
+                       gsl::at(targets, i)[point];
+      }
+    }
+  }
+  rhs[n] = sum(reference.mass) * mean;
+  const blaze::DynamicVector<double> solution =
+      reference.lagrange_inverse * rhs;
+  DataVector result{n};
+  for (size_t point = 0; point < n; ++point) {
+    result[point] = solution[point];
+  }
+  return result;
+}
+
+DataVector reference_projection(const TensorProductReference& reference,
+                                const DataVector& field) {
+  const size_t n = field.size();
+  const DataVector sqrt_mass = sqrt(reference.mass);
+  blaze::DynamicVector<double> weighted(n);
+  for (size_t point = 0; point < n; ++point) {
+    weighted[point] = sqrt_mass[point] * field[point];
+  }
+  const blaze::DynamicVector<double> coefficients =
+      blaze::trans(reference.retained_basis) * weighted;
+  const blaze::DynamicVector<double> projected =
+      reference.retained_basis * coefficients;
+  DataVector result{n};
+  for (size_t point = 0; point < n; ++point) {
+    result[point] = projected[point] / sqrt_mass[point];
+  }
+  return result;
+}
+
+// The tensor-product fit and filter against the dense references, for the
+// operators as built and after serialization. Both sides are direct dense
+// solves of small well-conditioned systems, compared with the 1e-12 of the
+// consistency checks of `test_fit` and `test_filter`.
+void test_tensor_product_reference(const Geometry& geometry,
+                                   const gsl::not_null<std::mt19937*> gen) {
+  const gp::LocalOperators built{geometry.mesh, geometry.inverse_jacobian,
+                                 geometry.det_inverse_jacobian, 4};
+  const auto deserialized = serialize_and_deserialize(built);
+  const TensorProductReference reference =
+      make_tensor_product_reference(geometry, built.mass());
+  const size_t n = geometry.mesh.number_of_grid_points();
+  const auto custom = Approx::custom().epsilon(1e-12).scale(1.0);
+
+  // Arbitrary gradient targets and nonzero means of all potentials.
+  std::array<TargetArray, gp::number_of_potentials> targets{};
+  std::array<std::array<const DataVector*, gp::number_of_potentials>, 3>
+      target_pointers{};
+  std::array<double, gp::number_of_potentials> means{};
+  for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+    gsl::at(targets, a) = random_targets(gen, n);
+    for (size_t i = 0; i < 3; ++i) {
+      gsl::at(gsl::at(target_pointers, i), a) =
+          &gsl::at(gsl::at(targets, a), i);
+    }
+    gsl::at(means, a) = 0.3 * static_cast<double>(a) - 1.1;
+  }
+  // Fields with retained and removed content, split by the reference
+  // projection.
+  std::array<DataVector, 2> retained{};
+  std::array<DataVector, 2> removed{};
+  for (size_t field_index = 0; field_index < 2; ++field_index) {
+    gsl::at(retained, field_index) =
+        reference_projection(reference, random_field(gen, n));
+    const DataVector field = random_field(gen, n);
+    gsl::at(removed, field_index) =
+        field - reference_projection(reference, field);
+  }
+
+  for (const auto* operators : {&built, &deserialized}) {
+    std::array<DataVector, gp::number_of_potentials> fitted{};
+    operators->fit(make_not_null(&fitted), target_pointers, means);
+    for (size_t a = 0; a < gp::number_of_potentials; ++a) {
+      CHECK_ITERABLE_CUSTOM_APPROX(
+          gsl::at(fitted, a),
+          reference_fit(reference, gsl::at(targets, a), gsl::at(means, a)),
+          custom);
+    }
+    std::array<DataVector, 1> fitted_single{};
+    operators->fit(
+        make_not_null(&fitted_single),
+        {{{{&targets[1][0]}}, {{&targets[1][1]}}, {{&targets[1][2]}}}},
+        {{means[1]}});
+    CHECK_ITERABLE_CUSTOM_APPROX(fitted_single[0],
+                                 reference_fit(reference, targets[1], means[1]),
+                                 custom);
+
+    const DataVector field = retained[0] + removed[0];
+    CHECK_ITERABLE_CUSTOM_APPROX(operators->project_retained(field),
+                                 retained[0], custom);
+    for (const double gain : {0.0, 0.37, 1.0}) {
+      CAPTURE(gain);
+      DataVector filtered = field;
+      operators->apply_filter(make_not_null(&filtered), gain);
+      CHECK_ITERABLE_CUSTOM_APPROX(
+          filtered, DataVector{retained[0] + gain * removed[0]}, custom);
+      // Distinct fields with identical values are valid inputs.
+      std::array<DataVector, 3> batch{
+          {field, DataVector{retained[1] + removed[1]}, field}};
+      const std::vector<gsl::not_null<DataVector*>> batch_fields{
+          make_not_null(&batch[0]), make_not_null(&batch[1]),
+          make_not_null(&batch[2])};
+      operators->apply_filter(batch_fields, gain);
+      CHECK_ITERABLE_CUSTOM_APPROX(
+          batch[0], DataVector{retained[0] + gain * removed[0]}, custom);
+      CHECK_ITERABLE_CUSTOM_APPROX(
+          batch[1], DataVector{retained[1] + gain * removed[1]}, custom);
+      CHECK_ITERABLE_CUSTOM_APPROX(
+          batch[2], DataVector{retained[0] + gain * removed[0]}, custom);
+
+      // Reject both adjacent and nonadjacent duplicates before modifying any
+      // field, including when the gain is one.
+      const auto before_error = batch;
+      for (const size_t duplicate_index : std::array<size_t, 2>{{0, 2}}) {
+        CAPTURE(duplicate_index);
+        auto duplicate_fields = batch_fields;
+        duplicate_fields.push_back(batch_fields[duplicate_index]);
+        CHECK_THROWS_WITH(operators->apply_filter(duplicate_fields, gain),
+                          Catch::Matchers::ContainsSubstring(
+                              "requires distinct field pointers"));
+        CHECK(batch == before_error);
+      }
+    }
+  }
+}
 }  // namespace
 
 SPECTRE_TEST_CASE(
@@ -1789,4 +2004,19 @@ SPECTRE_TEST_CASE(
         modes_to_kill, deformed, make_not_null(&gen));
   }
   test_shell_filter_errors();
+}
+
+SPECTRE_TEST_CASE(
+    "Unit.Evolution.Systems.Ccz4.GradientProjection."
+    "LocalOperatorsTensorProductReference",
+    "[Unit][Evolution]") {
+  MAKE_GENERATOR(gen);
+  // The minimal mesh, whose only retained mode is the constant, and an
+  // anisotropic one, both with the nonseparable mass of the curved map.
+  for (const auto& extents :
+       std::vector<std::array<size_t, 3>>{{{2, 2, 2}}, {{3, 4, 5}}}) {
+    CAPTURE(extents);
+    test_tensor_product_reference(make_geometry(extents, true),
+                                  make_not_null(&gen));
+  }
 }

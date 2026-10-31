@@ -372,6 +372,44 @@ void lower_cholesky(const gsl::not_null<double*> matrix, const size_t size,
   }
 }
 
+// Apply the Householder reflection I - 2 v v^T, with the unit vector
+// v = `reflector`, to each column of `matrix`.
+void reflect_columns(const gsl::not_null<Matrix*> matrix,
+                     const DataVector& reflector) {
+  ASSERT(matrix->rows() == reflector.size(),
+         "Expected " << reflector.size() << " rows, got " << matrix->rows());
+  for (size_t column = 0; column < matrix->columns(); ++column) {
+    double projection = 0.0;
+    for (size_t row = 0; row < matrix->rows(); ++row) {
+      projection += reflector[row] * (*matrix)(row, column);
+    }
+    for (size_t row = 0; row < matrix->rows(); ++row) {
+      (*matrix)(row, column) -= 2.0 * projection * reflector[row];
+    }
+  }
+}
+
+// Replace each column x of `values` by x - Q Q^T x, Q the orthonormal columns
+// of `basis`. The dense products call BLAS through dgemm_: Blaze runs them
+// with its own kernel or with whichever cblas_dgemm is linked first, which may
+// be an unoptimized reference implementation, and LIBXSMM (dgemm_<true>) is
+// meant for small matrices.
+void subtract_projection(const gsl::not_null<Matrix*> values,
+                         const Matrix& basis) {
+  ASSERT(values->rows() == basis.rows(),
+         "Expected " << basis.rows() << " rows, got " << values->rows());
+  const size_t rows = basis.rows();
+  const size_t modes = basis.columns();
+  const size_t columns = values->columns();
+  Matrix coefficients(modes, columns);
+  dgemm_('T', 'N', modes, columns, rows, 1.0, basis.data(), basis.spacing(),
+         values->data(), values->spacing(), 0.0, coefficients.data(),
+         coefficients.spacing());
+  dgemm_('N', 'N', rows, columns, modes, -1.0, basis.data(), basis.spacing(),
+         coefficients.data(), coefficients.spacing(), 1.0, values->data(),
+         values->spacing());
+}
+
 double max_abs(const Matrix& matrix) {
   double result = 0.0;
   for (size_t column = 0; column < matrix.columns(); ++column) {
@@ -1347,7 +1385,9 @@ void LocalOperators::build_tensor_product(const Mesh<3>& mesh) {
       {mesh.extents(0), mesh.extents(1), mesh.extents(2)}};
 
   // Mass-weighted QR of the Legendre Vandermonde matrix with columns ordered
-  // (constant, remaining retained modes, removed shell).
+  // (constant, remaining retained modes, removed shell). Its trailing columns
+  // Q_high, the only ones kept, are an orthonormal basis of the orthogonal
+  // complement of the weighted retained modes.
   const std::array<const Matrix*, 3> vandermonde{
       {&Spectral::modal_to_nodal_matrix(mesh.slice_through(0)),
        &Spectral::modal_to_nodal_matrix(mesh.slice_through(1)),
@@ -1382,8 +1422,12 @@ void LocalOperators::build_tensor_product(const Mesh<3>& mesh) {
       }
     }
   }
+  Matrix orthonormal_basis{};
   Matrix upper_triangular{};
-  blaze::qr(weighted_basis, orthonormal_basis_, upper_triangular);
+  blaze::qr(weighted_basis, orthonormal_basis, upper_triangular);
+  removed_basis_ = blaze::submatrix(
+      orthonormal_basis, 0, number_of_retained_modes_, number_of_points,
+      number_of_points - number_of_retained_modes_);
 
   // Dense ordinary derivative matrices D_i.
   std::array<Matrix, 3> logical_derivatives{};
@@ -1426,10 +1470,37 @@ void LocalOperators::build_tensor_product(const Mesh<3>& mesh) {
     }
     scaled_stiffness += blaze::trans(c) * c;
   }
+  // The mean-zero basis Z0 = M^{-1/2} H E: H = I - 2 v v^T is the Householder
+  // reflection with H q = -e_0 for the unit vector q = M^{1/2} 1 / sqrt(V),
+  // and E embeds R^{N-1} as the vectors orthogonal to e_0, so H E is an
+  // orthonormal basis of the orthogonal complement of q. As q_0 > 0,
+  // |q + e_0| >= sqrt(2) involves no cancellation.
+  fit_reflector_ = sqrt_mass_ / std::sqrt(volume_);
+  fit_reflector_[0] += 1.0;
+  fit_reflector_ /= std::sqrt(sum(fit_reflector_ * fit_reflector_));
+  // Z0^T K_D Z0 = E^T H A H E, A the scaled stiffness, is the trailing block
+  // of A - 2 v w^T - 2 w v^T + 4 (v^T w) v v^T with w = A v.
+  DataVector stiffness_reflector{number_of_points, 0.0};
+  for (size_t column = 0; column < number_of_points; ++column) {
+    for (size_t row = 0; row < number_of_points; ++row) {
+      stiffness_reflector[row] +=
+          scaled_stiffness(row, column) * fit_reflector_[column];
+    }
+  }
+  const double reflector_stiffness_reflector =
+      sum(fit_reflector_ * stiffness_reflector);
   const size_t reduced_size = number_of_points - 1;
-  const Matrix q_1 = blaze::submatrix(orthonormal_basis_, 0, 1,
-                                      number_of_points, reduced_size);
-  Matrix reduced_stiffness = blaze::trans(q_1) * scaled_stiffness * q_1;
+  Matrix reduced_stiffness(reduced_size, reduced_size);
+  for (size_t column = 1; column < number_of_points; ++column) {
+    for (size_t row = 1; row < number_of_points; ++row) {
+      reduced_stiffness(row - 1, column - 1) =
+          scaled_stiffness(row, column) -
+          2.0 * fit_reflector_[row] * stiffness_reflector[column] -
+          2.0 * stiffness_reflector[row] * fit_reflector_[column] +
+          4.0 * reflector_stiffness_reflector * fit_reflector_[row] *
+              fit_reflector_[column];
+    }
+  }
   // Symmetrize the roundoff before the eigenvalue check and factorization.
   reduced_stiffness =
       0.5 * (reduced_stiffness + blaze::trans(reduced_stiffness));
@@ -1841,16 +1912,11 @@ void LocalOperators::fit(
       scaled_rhs(point, field) = b_d[point] / sqrt_mass_[point];
     }
   }
-  // The dense products call BLAS through dgemm_: Blaze runs them with its own
-  // kernel or with whichever cblas_dgemm is linked first, which may be an
-  // unoptimized reference implementation, and LIBXSMM (dgemm_<true>) is meant
-  // for small matrices.
-  const auto q_1 = blaze::submatrix(orthonormal_basis_, 0, 1, number_of_points,
-                                    reduced_size);
-  Matrix reduced(reduced_size, NumberOfFields);
-  dgemm_('T', 'N', reduced_size, NumberOfFields, number_of_points, 1.0,
-         q_1.data(), q_1.spacing(), scaled_rhs.data(), scaled_rhs.spacing(),
-         0.0, reduced.data(), reduced.spacing());
+  // The coordinates Z0^T b_D = E^T H M^{-1/2} b_D in the mean-zero basis
+  // Z0 = M^{-1/2} H E.
+  reflect_columns(make_not_null(&scaled_rhs), fit_reflector_);
+  Matrix reduced =
+      blaze::submatrix(scaled_rhs, 1, 0, reduced_size, NumberOfFields);
   blaze::blas_int_t info = 0;
   blaze::potrs('L', static_cast<blaze::blas_int_t>(reduced_size),
                static_cast<blaze::blas_int_t>(NumberOfFields),
@@ -1861,10 +1927,10 @@ void LocalOperators::fit(
   if (info != 0) {
     ERROR("Cholesky solve of the gradient fit failed with info = " << info);
   }
-  Matrix scaled_fit(number_of_points, NumberOfFields);
-  dgemm_('N', 'N', number_of_points, NumberOfFields, reduced_size, 1.0,
-         q_1.data(), q_1.spacing(), reduced.data(), reduced.spacing(), 0.0,
-         scaled_fit.data(), scaled_fit.spacing());
+  // M^{1/2} Z0 y = H E y, with first coordinate zero before the reflection.
+  Matrix scaled_fit(number_of_points, NumberOfFields, 0.0);
+  blaze::submatrix(scaled_fit, 1, 0, reduced_size, NumberOfFields) = reduced;
+  reflect_columns(make_not_null(&scaled_fit), fit_reflector_);
   for (size_t field = 0; field < NumberOfFields; ++field) {
     DataVector& result = gsl::at(*fields, field);
     result.destructive_resize(number_of_points);
@@ -2040,18 +2106,15 @@ void LocalOperators::solve_spherical_shell(
 DataVector LocalOperators::project_retained(const DataVector& field) const {
   require_tensor_product("project_retained");
   const size_t number_of_points = mesh_.number_of_grid_points();
-  blaze::DynamicVector<double> weighted(number_of_points);
+  Matrix weighted(number_of_points, 1);
   for (size_t point = 0; point < number_of_points; ++point) {
-    weighted[point] = sqrt_mass_[point] * field[point];
+    weighted(point, 0) = sqrt_mass_[point] * field[point];
   }
-  const auto q_low = blaze::submatrix(
-      orthonormal_basis_, 0, 0, number_of_points, number_of_retained_modes_);
-  const blaze::DynamicVector<double> coefficients =
-      blaze::trans(q_low) * weighted;
-  const blaze::DynamicVector<double> projected = q_low * coefficients;
+  // M^{1/2} Pi v = M^{1/2} v - Q_high Q_high^T M^{1/2} v.
+  subtract_projection(make_not_null(&weighted), removed_basis_);
   DataVector result{number_of_points};
   for (size_t point = 0; point < number_of_points; ++point) {
-    result[point] = projected[point] / sqrt_mass_[point];
+    result[point] = weighted(point, 0) / sqrt_mass_[point];
   }
   return result;
 }
@@ -2069,6 +2132,16 @@ void LocalOperators::apply_filter(
   require_tensor_product("apply_filter");
   const size_t number_of_points = mesh_.number_of_grid_points();
   const size_t number_of_fields = fields.size();
+  for (size_t i = 0; i < number_of_fields; ++i) {
+    for (size_t j = 0; j < i; ++j) {
+      if (fields[i].get() == fields[j].get()) {
+        ERROR(
+            "LocalOperators::apply_filter requires distinct field pointers, "
+            "but entries "
+            << j << " and " << i << " point to the same field.");
+      }
+    }
+  }
   Matrix weighted(number_of_points, number_of_fields);
   for (size_t field_index = 0; field_index < number_of_fields; ++field_index) {
     const DataVector& field = *fields[field_index];
@@ -2076,21 +2149,13 @@ void LocalOperators::apply_filter(
       weighted(point, field_index) = sqrt_mass_[point] * field[point];
     }
   }
-  // The retained modes are the leading columns of the orthonormal basis.
-  Matrix coefficients(number_of_retained_modes_, number_of_fields);
-  dgemm_('T', 'N', number_of_retained_modes_, number_of_fields,
-         number_of_points, 1.0, orthonormal_basis_.data(),
-         orthonormal_basis_.spacing(), weighted.data(), weighted.spacing(), 0.0,
-         coefficients.data(), coefficients.spacing());
-  Matrix projected(number_of_points, number_of_fields);
-  dgemm_('N', 'N', number_of_points, number_of_fields,
-         number_of_retained_modes_, 1.0, orthonormal_basis_.data(),
-         orthonormal_basis_.spacing(), coefficients.data(),
-         coefficients.spacing(), 0.0, projected.data(), projected.spacing());
+  // The weighted projections M^{1/2} Pi v of all fields, computed before any
+  // field is written.
+  subtract_projection(make_not_null(&weighted), removed_basis_);
   DataVector unweighted{number_of_points};
   for (size_t field_index = 0; field_index < number_of_fields; ++field_index) {
     for (size_t point = 0; point < number_of_points; ++point) {
-      unweighted[point] = projected(point, field_index) / sqrt_mass_[point];
+      unweighted[point] = weighted(point, field_index) / sqrt_mass_[point];
     }
     DataVector& field = *fields[field_index];
     field = gain * field + (1.0 - gain) * unweighted;
@@ -2131,8 +2196,9 @@ void LocalOperators::pup(PUP::er& p) {
   p | sqrt_mass_;
   p | volume_;
   p | inverse_jacobian_;
-  p | orthonormal_basis_;
+  p | removed_basis_;
   p | number_of_retained_modes_;
+  p | fit_reflector_;
   p | fit_cholesky_factor_;
   p | shell_factors_;
   p | shell_kernel_reflectors_;
@@ -2150,8 +2216,9 @@ bool operator==(const LocalOperators& lhs, const LocalOperators& rhs) {
          lhs.mass_ == rhs.mass_ and lhs.sqrt_mass_ == rhs.sqrt_mass_ and
          lhs.volume_ == rhs.volume_ and
          lhs.inverse_jacobian_ == rhs.inverse_jacobian_ and
-         lhs.orthonormal_basis_ == rhs.orthonormal_basis_ and
+         lhs.removed_basis_ == rhs.removed_basis_ and
          lhs.number_of_retained_modes_ == rhs.number_of_retained_modes_ and
+         lhs.fit_reflector_ == rhs.fit_reflector_ and
          lhs.fit_cholesky_factor_ == rhs.fit_cholesky_factor_ and
          lhs.shell_factors_ == rhs.shell_factors_ and
          lhs.shell_kernel_reflectors_ == rhs.shell_kernel_reflectors_ and

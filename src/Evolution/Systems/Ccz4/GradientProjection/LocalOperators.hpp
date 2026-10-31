@@ -223,8 +223,15 @@ bool operator!=(const SeparableShellFilter& lhs,
  *   \f$\min_r\frac12\sum_i(D_ir-q_i^*)^TM(D_ir-q_i^*)\f$ subject to
  *   \f$m^Tr/V=\mu\f$, as
  *   \f$r=\mu\mathbf 1+Z_0(Z_0^TK_DZ_0)^{-1}Z_0^Tb_D\f$ with
- *   \f$K_D=\sum_iD_i^TMD_i\f$, \f$b_D=\sum_iD_i^TMq_i^*\f$ and \f$Z_0\f$ a
- *   basis of the mass-zero-mean subspace. The Cholesky factor of
+ *   \f$K_D=\sum_iD_i^TMD_i\f$, \f$b_D=\sum_iD_i^TMq_i^*\f$ and the basis
+ *   \f$Z_0=M^{-1/2}HE\f$ of the mass-zero-mean subspace: \f$E\f$ embeds
+ *   \f$\mathbb R^{N-1}\f$, \f$N\f$ the number of grid points, as the vectors
+ *   orthogonal to the first unit vector \f$e_0\f$, and \f$H=I-2vv^T\f$,
+ *   \f$v=(q+e_0)/\|q+e_0\|\f$, is the Householder reflection with \f$Hq=-e_0\f$
+ *   for \f$q=M^{1/2}\mathbf 1/\sqrt V\f$. With \f$A=M^{-1/2}K_DM^{-1/2}\f$ and
+ *   \f$w=Av\f$, \f$Z_0^TK_DZ_0=E^THAHE\f$ is the trailing block of
+ *   \f$A-2vw^T-2wv^T+4(v^Tw)vv^T\f$; \f$H\f$ acts on the right-hand sides and
+ *   solutions by rank-one updates. The Cholesky factor of
  *   \f$Z_0^TK_DZ_0\f$ is built once; it is an `ERROR` if this matrix has a
  *   relative eigenvalue below \f$10^{-8}\f$ (the same bound as the shell
  *   fit): the eigenvalues are squared singular values of the fit operator,
@@ -235,13 +242,11 @@ bool operator!=(const SeparableShellFilter& lhs,
  *   where \f$\Pi\f$ is the \f$M\f$-orthogonal projector onto the
  *   tensor-product polynomials of degree at most \f$p_i-1\f$ in every logical
  *   direction. The removed shell \f$\max(l/p_0,m/p_1,n/p_2)=1\f$ contains the
- *   top mode in each direction.
- *
- * Both use one mass-weighted QR factorization
- * \f$M^{1/2}B=QR\f$ of the Legendre Vandermonde matrix \f$B\f$ with columns
- * ordered (constant, remaining retained modes, removed shell), so
- * \f$Z_0=M^{-1/2}Q_{[:,1:]}\f$ and
- * \f$\Pi=M^{-1/2}Q_{\mathrm{low}}Q_{\mathrm{low}}^TM^{1/2}\f$.
+ *   top mode in each direction. With the mass-weighted QR factorization
+ *   \f$M^{1/2}B=QR\f$ of the Legendre Vandermonde matrix \f$B\f$ with the
+ *   retained modes ordered before the removed shell, the trailing columns
+ *   \f$Q_{\mathrm{high}}\f$ of the removed shell, which alone are stored,
+ *   give \f$\Pi=I-M^{-1/2}Q_{\mathrm{high}}Q_{\mathrm{high}}^TM^{1/2}\f$.
  *
  * On spherical-harmonic shells the trial space of the fit is spanned by all
  * \f$P_k(\xi)Y_{lm}\f$ with \f$0\le k<N_r\f$ and \f$0\le l\le L\f$ (real
@@ -381,8 +386,8 @@ class LocalOperators {
 
   /// Apply the top-shell filter with the given `gain` in place to each of
   /// `fields`: the same as `apply_filter` on each field, with the projections
-  /// of all fields computed by one matrix-matrix product. It is an `ERROR` on
-  /// a spherical-harmonic shell.
+  /// of all fields computed together by matrix-matrix products. It is an
+  /// `ERROR` on a spherical-harmonic shell or if any field pointer is repeated.
   void apply_filter(const std::vector<gsl::not_null<DataVector*>>& fields,
                     double gain) const;
 
@@ -453,10 +458,13 @@ class LocalOperators {
   DataVector sqrt_mass_{};
   double volume_ = 0.0;
   std::array<DataVector, 9> inverse_jacobian_{};
-  // Tensor-product elements: Q of the mass-weighted QR, columns (constant,
-  // retained, removed shell).
-  Matrix orthonormal_basis_{};
+  // Tensor-product elements: the columns Q_high of Q of the mass-weighted QR
+  // that belong to the removed shell.
+  Matrix removed_basis_{};
   size_t number_of_retained_modes_ = 0;
+  // Tensor-product elements: the unit vector v of the Householder reflection
+  // H = I - 2 v v^T of the mean-zero basis Z0 = M^{-1/2} H E.
+  DataVector fit_reflector_{};
   // Tensor-product elements: lower Cholesky factor of Z0^T K_D Z0.
   Matrix fit_cholesky_factor_{};
   // Shells: the lower triangle (with the diagonal) holds L_G. The upper
