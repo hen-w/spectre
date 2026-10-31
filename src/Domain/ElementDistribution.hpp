@@ -48,7 +48,26 @@ enum class ElementWeight {
   /// by both the number of grid points and minimum spacing between grid points
   /// in that `Element` (see `get_num_points_and_grid_spacing_cost()` for
   /// details)
-  NumGridPointsAndGridSpacing
+  NumGridPointsAndGridSpacing,
+  /// A test weighting scheme specialized to a single static DG-subcell layout:
+  /// a 3D filled sphere in which every block except the one named `InnerCube`
+  /// is DG-only (listed in the subcell option `OnlyDgBlocksAndGroups`). The
+  /// subcell initialization then puts on FD exactly the `InnerCube` elements
+  /// that do not touch the cube's boundary, i.e. those whose segment index
+  /// \f$i\f$ satisfies \f$0 < i < 2^L - 1\f$ in every dimension for cube
+  /// refinement level \f$L\f$. The one-element-thick collar of the cube
+  /// borders the DG-only blocks and stays on DG, as do all other blocks. FD
+  /// weights are \f$\prod_i (2N_i - 1)\f$; all other weights are
+  /// \f$\prod_i N_i\f$.
+  ///
+  /// \warning This is not a general subcell-aware weighting.
+  /// `get_element_costs()` has no access to `OnlyDgBlocksAndGroups` or to the
+  /// TCI configuration, so it cannot detect other FD layouts and weights them
+  /// incorrectly. It checks only the domain structure: the domain must be 3D
+  /// with exactly one block named `InnerCube`, connected to other blocks on all
+  /// six faces, with isotropic initial refinement \f$L \geq 2\f$ and isotropic
+  /// initial extents. Any other structure is an error.
+  TestInteriorCubeGridPoints
 };
 
 std::ostream& operator<<(std::ostream& os, ElementWeight weight);
@@ -206,9 +225,12 @@ struct Options::create_from_yaml<domain::ElementWeight> {
             "choose another element distribution.");
       }
       return domain::ElementWeight::NumGridPointsAndGridSpacing;
+    } else if (ordering == "TestInteriorCubeGridPoints") {
+      return domain::ElementWeight::TestInteriorCubeGridPoints;
     }
     PARSE_ERROR(options.context(),
-                "ElementWeight must be 'Uniform', 'NumGridPoints', or, "
-                "'NumGridPointsAndGridSpacing'");
+                "ElementWeight must be 'Uniform', 'NumGridPoints', "
+                "'NumGridPointsAndGridSpacing', or "
+                "'TestInteriorCubeGridPoints'");
   }
 };

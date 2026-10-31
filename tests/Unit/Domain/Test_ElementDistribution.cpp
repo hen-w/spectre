@@ -8,24 +8,34 @@
 #include <cstddef>
 #include <functional>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "Domain/Block.hpp"
+#include "Domain/CoordinateMaps/CoordinateMap.hpp"
+#include "Domain/CoordinateMaps/CoordinateMap.tpp"
+#include "Domain/CoordinateMaps/Identity.hpp"
+#include "Domain/CreateInitialElement.hpp"
 #include "Domain/Creators/AlignedLattice.hpp"
 #include "Domain/Creators/DomainCreator.hpp"
 #include "Domain/Creators/NonconformingSphericalShells.hpp"
 #include "Domain/Creators/Sphere.hpp"
 #include "Domain/Domain.hpp"
 #include "Domain/ElementDistribution.hpp"
+#include "Domain/Structure/Element.hpp"
 #include "Domain/Structure/ElementId.hpp"
 #include "Domain/Structure/InitialElementIds.hpp"
 #include "Domain/Structure/ZCurve.hpp"
+#include "Framework/TestCreation.hpp"
+#include "Framework/TestHelpers.hpp"
 #include "Utilities/Algorithm.hpp"
 #include "Utilities/ConstantExpressions.hpp"
+#include "Utilities/GetOutput.hpp"
 #include "Utilities/Gsl.hpp"
+#include "Utilities/Literals.hpp"
 
 namespace {
 // Check the static FD set independently of block connectivity: the cube and
@@ -632,6 +642,265 @@ void test_proc_retrieval(
     }
   }
 }
+
+template <bool LocalTimeStepping>
+struct ElementWeightMetavars {
+  static constexpr bool local_time_stepping = LocalTimeStepping;
+};
+
+void test_element_weight_options() {
+  using domain::ElementWeight;
+  for (const auto weight :
+       {ElementWeight::Uniform, ElementWeight::NumGridPoints,
+        ElementWeight::NumGridPointsAndGridSpacing,
+        ElementWeight::TestInteriorCubeGridPoints}) {
+    CHECK(
+        TestHelpers::test_creation<ElementWeight, ElementWeightMetavars<true>>(
+            get_output(weight)) == weight);
+    test_serialization(weight);
+  }
+  CHECK(get_output(ElementWeight::TestInteriorCubeGridPoints) ==
+        "TestInteriorCubeGridPoints");
+  // Unlike NumGridPointsAndGridSpacing, the test weighting does not require
+  // local time stepping.
+  CHECK(TestHelpers::test_creation<ElementWeight, ElementWeightMetavars<false>>(
+            "TestInteriorCubeGridPoints") ==
+        ElementWeight::TestInteriorCubeGridPoints);
+  CHECK_THROWS_WITH(
+      (TestHelpers::test_creation<ElementWeight, ElementWeightMetavars<true>>(
+          "InteriorCube")),
+      Catch::Matchers::ContainsSubstring(
+          "ElementWeight must be 'Uniform', 'NumGridPoints', "
+          "'NumGridPointsAndGridSpacing', or 'TestInteriorCubeGridPoints'"));
+}
+
+// A filled sphere with the structure of the all-wedges-DG layout: a cube with
+// isotropic refinement and extents inside three shells of wedges with
+// anisotropic extents. The angular refinements of the inner two shells are
+// given, so the cube-wedge interface may be conforming or not.
+domain::creators::Sphere interior_cube_sphere(
+    const size_t cube_refinement, const size_t cube_extents,
+    const std::array<size_t, 2>& shell_angular_refinements) {
+  using RefinementOrExtents =
+      std::unordered_map<std::string, std::array<size_t, 3>>;
+  return domain::creators::Sphere{
+      2.424871130596428,
+      515.938061,
+      domain::creators::Sphere::InnerCube{0.0},
+      RefinementOrExtents{
+          {"InnerCube", {{cube_refinement, cube_refinement, cube_refinement}}},
+          {"Shell0",
+           {{shell_angular_refinements[0], shell_angular_refinements[0], 0}}},
+          {"Shell1",
+           {{shell_angular_refinements[1], shell_angular_refinements[1], 0}}},
+          {"Shell2", {{1, 1, 1}}}},
+      RefinementOrExtents{
+          {"InnerCube", {{cube_extents, cube_extents, cube_extents}}},
+          {"Shell0", {{8, 8, 11}}},
+          {"Shell1", {{8, 8, 9}}},
+          {"Shell2", {{7, 7, 10}}}},
+      false,
+      std::nullopt,
+      {25.0, 100.0}};
+}
+
+// The InnerCube elements that `evolution::dg::subcell::Actions::Initialize`
+// puts on FD when every other block is DG-only: an element stays on DG if its
+// block is DG-only or if any of its neighbors is in a DG-only block. This uses
+// the neighbors of the initial elements, not their segment indices.
+std::unordered_set<ElementId<3>> fd_elements_with_dg_only_exterior(
+    const std::vector<Block<3>>& blocks,
+    const std::vector<std::array<size_t, 3>>& refinements) {
+  std::unordered_set<ElementId<3>> fd_elements{};
+  for (const auto& block : blocks) {
+    if (block.name() != "InnerCube") {
+      continue;
+    }
+    for (const auto& element_id :
+         initial_element_ids(block.id(), refinements[block.id()])) {
+      const Element<3> element =
+          domain::create_initial_element(element_id, blocks, refinements);
+      // Only the DG-only blocks touch the outer boundary, so the subcell
+      // external-boundary rule cannot change the decision.
+      CHECK(element.external_boundaries().empty());
+      if (alg::none_of(element.neighbors(),
+                       [&block](const auto& direction_and_neighbors) {
+                         return alg::any_of(
+                             direction_and_neighbors.second.ids(),
+                             [&block](const ElementId<3>& neighbor_id) {
+                               return neighbor_id.block_id() != block.id();
+                             });
+                       })) {
+        fd_elements.insert(element_id);
+      }
+    }
+  }
+  return fd_elements;
+}
+
+// Compare the TestInteriorCubeGridPoints weights with the FD set found from the
+// initial element neighbors, and check the element counts and costs expected
+// for the layout.
+void test_interior_cube_costs(const domain::creators::Sphere& sphere,
+                              const size_t expected_num_fd,
+                              const size_t expected_num_collar,
+                              const double expected_fd_cost,
+                              const double expected_collar_cost) {
+  const auto domain = sphere.create_domain();
+  const auto& blocks = domain.blocks();
+  const auto refinements = sphere.initial_refinement_levels();
+  const auto extents = sphere.initial_extents();
+  const auto costs = domain::get_element_costs(
+      blocks, refinements, extents,
+      domain::ElementWeight::TestInteriorCubeGridPoints, std::nullopt,
+      std::nullopt);
+  const auto fd_elements =
+      fd_elements_with_dg_only_exterior(blocks, refinements);
+  CHECK(fd_elements.size() == expected_num_fd);
+  size_t num_fd = 0;
+  size_t num_collar = 0;
+  std::unordered_set<size_t> dg_wedge_blocks{};
+  for (const auto& [id, cost] : costs) {
+    const auto& block = blocks[id.block_id()];
+    if (fd_elements.contains(id)) {
+      CHECK(cost == expected_fd_cost);
+      ++num_fd;
+    } else if (block.name() == "InnerCube") {
+      CHECK(cost == expected_collar_cost);
+      ++num_collar;
+    } else {
+      CHECK(block.name().starts_with("Shell"));
+      const auto& block_extents = extents[id.block_id()];
+      CHECK(cost == static_cast<double>(block_extents[0] * block_extents[1] *
+                                        block_extents[2]));
+      dg_wedge_blocks.insert(id.block_id());
+    }
+  }
+  CHECK(num_fd == expected_num_fd);
+  CHECK(num_collar == expected_num_collar);
+  // All six wedges of all three shells
+  CHECK(dg_wedge_blocks.size() == 18);
+}
+
+void test_interior_cube_errors(const domain::creators::Sphere& sphere) {
+  const auto test_weight_costs = [](const auto& blocks, const auto& refinements,
+                                    const auto& extents) {
+    return domain::get_element_costs(
+        blocks, refinements, extents,
+        domain::ElementWeight::TestInteriorCubeGridPoints, std::nullopt,
+        std::nullopt);
+  };
+  const auto domain = sphere.create_domain();
+  const auto& blocks = domain.blocks();
+  const auto refinements = sphere.initial_refinement_levels();
+  const auto extents = sphere.initial_extents();
+  REQUIRE(blocks.back().name() == "InnerCube");
+  const size_t cube_id = blocks.back().id();
+
+  // The NumGridPoints FD weighting still rejects this layout.
+  CHECK_THROWS_WITH(
+      domain::get_element_costs(blocks, refinements, extents,
+                                domain::ElementWeight::NumGridPoints,
+                                std::nullopt, std::nullopt),
+      Catch::Matchers::ContainsSubstring(
+          "InnerCube block has initial refinement"));
+
+  for (const auto& cube_refinement :
+       {std::array<size_t, 3>{{1, 1, 1}}, std::array<size_t, 3>{{3, 3, 2}}}) {
+    auto invalid_refinements = refinements;
+    invalid_refinements[cube_id] = cube_refinement;
+    CHECK_THROWS_WITH(
+        test_weight_costs(blocks, invalid_refinements, extents),
+        Catch::Matchers::ContainsSubstring(
+            "requires isotropic initial refinement of at least 2 in the "
+            "InnerCube block"));
+  }
+  auto invalid_extents = extents;
+  invalid_extents[cube_id] = {{4, 4, 5}};
+  CHECK_THROWS_WITH(test_weight_costs(blocks, refinements, invalid_extents),
+                    Catch::Matchers::ContainsSubstring(
+                        "requires isotropic initial extents in the InnerCube "
+                        "block"));
+
+  const domain::creators::Sphere excised_sphere{
+      2.424871130596428,
+      515.938061,
+      domain::creators::Sphere::Excision{},
+      1_st,
+      4_st,
+      false};
+  CHECK_THROWS_WITH(
+      test_weight_costs(excised_sphere.create_domain().blocks(),
+                        excised_sphere.initial_refinement_levels(),
+                        excised_sphere.initial_extents()),
+      Catch::Matchers::ContainsSubstring(
+          "requires exactly one block named 'InnerCube', but found 0"));
+
+  // A lone InnerCube block has external boundaries on all six faces.
+  const auto lone_inner_cube = [](const size_t id) {
+    return Block<3>{
+        domain::make_coordinate_map_base<Frame::BlockLogical, Frame::Inertial>(
+            domain::CoordinateMaps::Identity<3>{}),
+        id,
+        {},
+        "InnerCube"};
+  };
+  std::vector<Block<3>> lone_blocks{};
+  lone_blocks.push_back(lone_inner_cube(0));
+  CHECK_THROWS_WITH(
+      test_weight_costs(lone_blocks,
+                        std::vector<std::array<size_t, 3>>(1, {{2, 2, 2}}),
+                        std::vector<std::array<size_t, 3>>(1, {{4, 4, 4}})),
+      Catch::Matchers::ContainsSubstring(
+          "requires the InnerCube block to be connected to other blocks on all "
+          "6 faces"));
+  lone_blocks.push_back(lone_inner_cube(1));
+  CHECK_THROWS_WITH(
+      test_weight_costs(lone_blocks,
+                        std::vector<std::array<size_t, 3>>(2, {{2, 2, 2}}),
+                        std::vector<std::array<size_t, 3>>(2, {{4, 4, 4}})),
+      Catch::Matchers::ContainsSubstring(
+          "requires exactly one block named 'InnerCube', but found 2"));
+
+  const auto lattice_1d = domain::creators::AlignedLattice<1>(
+      {{{{0.0, 1.0}}}}, {{2}}, {{4}}, {}, {}, {});
+  const auto lattice_2d = domain::creators::AlignedLattice<2>(
+      {{{{0.0, 1.0}}, {{0.0, 1.0}}}}, {{2, 2}}, {{4, 4}}, {}, {}, {});
+  CHECK_THROWS_WITH(
+      test_weight_costs(lattice_1d.create_domain().blocks(),
+                        lattice_1d.initial_refinement_levels(),
+                        lattice_1d.initial_extents()),
+      Catch::Matchers::ContainsSubstring(
+          "requires a 3D domain, but the domain has dimension 1"));
+  CHECK_THROWS_WITH(
+      test_weight_costs(lattice_2d.create_domain().blocks(),
+                        lattice_2d.initial_refinement_levels(),
+                        lattice_2d.initial_extents()),
+      Catch::Matchers::ContainsSubstring(
+          "requires a 3D domain, but the domain has dimension 2"));
+}
+
+void test_interior_cube_weighting() {
+  test_element_weight_options();
+  // The production layout: cube refinement 3 with 4^3 DG points, inside
+  // innermost wedges of angular refinement 2 (a nonconforming interface). The
+  // refinement-2 cube has a conforming interface, the refinement-4 cube a
+  // nonconforming one.
+  const auto production_sphere = interior_cube_sphere(3, 4, {{2, 1}});
+  test_interior_cube_costs(production_sphere, 216, 296, 343.0, 64.0);
+  test_interior_cube_costs(interior_cube_sphere(2, 5, {{2, 1}}), 8, 56, 729.0,
+                           125.0);
+  test_interior_cube_costs(interior_cube_sphere(4, 3, {{3, 2}}), 2744, 1352,
+                           125.0, 27.0);
+  for (const size_t num_procs : {186_st, 372_st}) {
+    test_weighted_element_distribution_construction(
+        domain::ElementWeight::TestInteriorCubeGridPoints, production_sphere,
+        num_procs);
+    test_proc_retrieval(domain::ElementWeight::TestInteriorCubeGridPoints,
+                        production_sphere, num_procs);
+  }
+  test_interior_cube_errors(production_sphere);
+}
 }  // namespace
 
 SPECTRE_TEST_CASE("Unit.Domain.ElementDistribution", "[Domain][Unit]") {
@@ -678,4 +947,6 @@ SPECTRE_TEST_CASE("Unit.Domain.ElementDistribution", "[Domain][Unit]") {
   // `Element`s in the domain
   test_proc_retrieval(domain::ElementWeight::NumGridPointsAndGridSpacing,
                       lattice_2d, 100, std::unordered_set<size_t>{17});
+
+  test_interior_cube_weighting();
 }

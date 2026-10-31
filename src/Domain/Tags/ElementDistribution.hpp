@@ -29,7 +29,11 @@ struct ElementDistribution {
   using type = Options::Auto<ElementWeight, RoundRobin>;
   static constexpr Options::String help = {
       "Weighting pattern to use for ZCurve element distribution. Specify "
-      "RoundRobin to just place each element on the next core."};
+      "RoundRobin to just place each element on the next core. "
+      "TestInteriorCubeGridPoints is a test weighting valid only for a 3D "
+      "filled sphere in which every block except InnerCube is DG-only: it "
+      "weights the InnerCube elements not touching the cube's boundary by "
+      "their FD point count and all other elements by their DG point count."};
   using group = Parallel::OptionTags::Parallelization;
 };
 }  // namespace OptionTags
