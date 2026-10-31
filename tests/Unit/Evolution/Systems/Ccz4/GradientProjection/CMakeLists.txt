@@ -7,6 +7,7 @@ set(LIBRARY_SOURCES
   BoundaryConditions/Test_DirichletAnalytic.cpp
   BoundaryCorrections/Test_UpwindGradientProjection.cpp
   Test_Chart.cpp
+  Test_ErrorControl.cpp
   Test_Filter.cpp
   Test_FinalizeTimeDerivative.cpp
   Test_FiniteDifferenceGradients.cpp

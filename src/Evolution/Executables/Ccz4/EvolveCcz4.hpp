@@ -93,6 +93,7 @@
 #include "Time/CleanHistory.hpp"
 #include "Time/RecordTimeStepperData.hpp"
 #include "Time/StepChoosers/Constant.hpp"
+#include "Time/StepChoosers/ErrorControl.hpp"
 #include "Time/StepChoosers/LimitIncrease.hpp"
 #include "Time/StepChoosers/Maximum.hpp"
 #include "Time/StepChoosers/StepChooser.hpp"
@@ -222,17 +223,24 @@ struct EvolutionMetavars {
                     Ccz4::BoundaryConditions::BoundaryCondition>>>,
         tmpl::pair<LtsTimeStepper, TimeSteppers::lts_time_steppers>,
         tmpl::pair<PhaseChange, PhaseControl::factory_creatable_classes>,
-        // The evolved Variables include the scratch gradients, so step
-        // choosers that measure the evolved variables (error control) or
-        // need characteristic-speed compute tags (CFL) are not offered.
+        // Step choosers that need characteristic-speed compute tags (CFL)
+        // are not offered. The slab-size error control measures the evolved
+        // Variables, including the scratch gradients. Their time derivatives
+        // are zero, so the Adams-Bashforth and Adams-Moulton
+        // predictor-corrector error estimates (linear combinations of the
+        // recorded time derivatives) vanish on them.
         tmpl::pair<
             StepChooser<StepChooserUse::LtsStep>,
             tmpl::list<StepChoosers::Constant, StepChoosers::LimitIncrease,
                        StepChoosers::Maximum>>,
         tmpl::pair<
             StepChooser<StepChooserUse::Slab>,
-            tmpl::list<StepChoosers::Constant, StepChoosers::LimitIncrease,
-                       StepChoosers::Maximum, StepChoosers::StepToTimes>>,
+            tmpl::list<
+                StepChoosers::Constant,
+                StepChoosers::ErrorControl<StepChooserUse::Slab,
+                                           typename system::variables_tag>,
+                StepChoosers::LimitIncrease, StepChoosers::Maximum,
+                StepChoosers::StepToTimes>>,
         tmpl::pair<TimeSequence<double>,
                    TimeSequences::all_time_sequences<double>>,
         tmpl::pair<TimeSequence<std::uint64_t>,
