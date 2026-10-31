@@ -74,9 +74,10 @@ namespace Actions {
  * \brief On finite-difference elements, between the two ghost-data
  * exchanges: overwrite the stored gradients with
  * `finite_difference_potential_gradients` of the fourth-order derivatives of
- * the physical fields (`Ccz4::fd::spacetime_derivatives`, using the ghost data
- * of the first exchange and of the external boundaries), so that the second
- * exchange sends them to the DG neighbors.
+ * the physical fields `Ccz4::fd::System::second_derivative_tags`
+ * (`Ccz4::fd::spacetime_derivatives`, using the ghost data of the first
+ * exchange and of the external boundaries), so that the second exchange sends
+ * them to the DG neighbors.
  *
  * \details It is an `ERROR` if the lapse and shift are not evolved, since the
  * DG elements always evolve them.
@@ -96,9 +97,10 @@ struct ComputeFiniteDifferenceGradients {
           "and shift, so the finite-difference elements must too "
           "(EvolveLapseAndShift).");
     }
-    using gradients_tags = typename ::Ccz4::fd::System::gradients_tags;
-    using deriv_tags = db::wrap_tags_in<::Tags::deriv, gradients_tags,
-                                        tmpl::size_t<3>, Frame::Inertial>;
+    using deriv_tags =
+        db::wrap_tags_in<::Tags::deriv,
+                         typename ::Ccz4::fd::System::second_derivative_tags,
+                         tmpl::size_t<3>, Frame::Inertial>;
     constexpr size_t fd_order = 4;
     const Mesh<3>& subcell_mesh =
         db::get<evolution::dg::subcell::Tags::Mesh<3>>(box);

@@ -67,6 +67,15 @@ struct System {
   // The variables differentiated by finite differences: the physical fields.
   using gradients_tags = original_evolved_variables_tags;
 
+  // The physical fields whose first derivatives define the auxiliary fields
+  // A_i, B_k^i, D_kij and P_i, so the right-hand side needs their second
+  // derivatives. Their first derivatives also form the stored gradients
+  // `Tags::PotentialGradients` sent to the DG neighbors.
+  using second_derivative_tags =
+      tmpl::list<::Ccz4::Tags::ConformalMetric<DataVector, 3>,
+                 ::Ccz4::Tags::ConformalFactor<DataVector>,
+                 gr::Tags::Lapse<DataVector>, gr::Tags::Shift<DataVector, 3>>;
+
   using compute_largest_characteristic_speed =
       ComputeLargestCharacteristicSpeed<Frame::Inertial>;
 };

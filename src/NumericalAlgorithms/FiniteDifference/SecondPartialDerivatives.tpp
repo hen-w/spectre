@@ -6,6 +6,8 @@
 #include "NumericalAlgorithms/FiniteDifference/SecondPartialDerivatives.hpp"
 
 #include <array>
+#include <cstddef>
+#include <utility>
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
@@ -41,6 +43,11 @@ struct LogicalImpl;
 // i varying the fastest, which is different from any of the logical
 // derivatives index (d, i, j, k, s). We assume ddu is symmetric in the
 // two derivative indices.
+//
+// Each component of ddu is computed in a single pass over the grid points
+// that sums, in this order, the inverse-Jacobian terms of the logical index
+// pairs (0, 0), (0, 1), ..., (Dim - 1, Dim - 1) and then the inverse-Hessian
+// terms of the logical dimensions 0, ..., Dim - 1.
 template <typename ResultTags, size_t Dim, typename DerivativeFrame,
           typename ValueType = typename Variables<ResultTags>::value_type,
           typename VectorType = typename Variables<ResultTags>::vector_type>
@@ -60,8 +67,11 @@ void second_partial_derivatives_impl(
   ValueType* ptr_ddu = ddu->data();
   const size_t num_grid_points = ddu->number_of_grid_points();
   VectorType lhs{};
-  VectorType first_logical_du{};
-  VectorType second_logical_du{};
+  // Views of the logical derivatives of one tensor component of `u`: the
+  // second logical derivatives of the logical index pairs (0, 0), (0, 1), ...,
+  // (Dim - 1, Dim - 1), and the first logical derivatives.
+  std::array<VectorType, Dim * Dim> second_logical_du{};
+  std::array<VectorType, Dim> first_logical_du{};
 
   // The storage indices into the inverse Jacobian are precomputed to avoid
   // having to recompute them for each tensor component of `u`.
@@ -88,9 +98,91 @@ void second_partial_derivatives_impl(
       }
     }
   }
+  const auto inverse_jacobian_component =
+      [&inverse_jacobian, &jacobian_indices](
+          const size_t logical_deriv_index,
+          const size_t deriv_index) -> const DataVector& {
+    return *(
+        inverse_jacobian.begin() +
+        gsl::at(gsl::at(jacobian_indices, logical_deriv_index), deriv_index));
+  };
+  const auto inverse_hessian_component =
+      [&inverse_hessian, &hessian_indices](
+          const size_t logical_deriv_index, const size_t first_deriv_index,
+          const size_t second_deriv_index) -> const DataVector& {
+    return *(inverse_hessian.begin() +
+             gsl::at(gsl::at(gsl::at(hessian_indices, logical_deriv_index),
+                             first_deriv_index),
+                     second_deriv_index));
+  };
+
+  // The second logical derivatives of the logical index pairs, ordered as in
+  // `second_logical_du`.
+  std::array<const ValueType*, Dim * Dim>
+      second_logical_partial_derivatives_of_u{};
+  for (size_t first_logical_deriv_index = 0; first_logical_deriv_index < Dim;
+       ++first_logical_deriv_index) {
+    for (size_t second_logical_deriv_index = 0;
+         second_logical_deriv_index < Dim; ++second_logical_deriv_index) {
+      const ValueType*& second_logical_partial_derivative_of_u =
+          gsl::at(second_logical_partial_derivatives_of_u,
+                  first_logical_deriv_index * Dim + second_logical_deriv_index);
+      if (first_logical_deriv_index == second_logical_deriv_index) {
+        second_logical_partial_derivative_of_u =
+            gsl::at(pure_second_logical_partial_derivatives_of_u,
+                    first_logical_deriv_index);
+      } else {
+        // we need to map (first_logical_deriv_index,
+        // second_logical_deriv_index) to an index
+        // single_mixed_partial_index into the
+        // mixed_second_logical_partial_derivatives_of_u. For
+        // single_mixed_partial_index, 0 is xy deriv, 1 is yz deriv,
+        // and 2 is xz deriv. So we need a symmetric map (0,1)->0,
+        // (0,2)->2, (1,2)->1.
+        const size_t single_mixed_partial_index =
+            [first_logical_deriv_index,
+             second_logical_deriv_index]() -> size_t {
+          if (first_logical_deriv_index * second_logical_deriv_index != 0) {
+            return 1;
+          } else if (first_logical_deriv_index + second_logical_deriv_index ==
+                     1) {
+            return 0;
+          } else {
+            return 2;
+          }
+        }();
+        second_logical_partial_derivative_of_u =
+            gsl::at(mixed_second_logical_partial_derivatives_of_u,
+                    single_mixed_partial_index);
+      }
+    }
+  }
 
   for (size_t component_index = 0;
        component_index < number_of_independent_components; ++component_index) {
+    // clang-tidy: const cast is fine since we won't modify the data and we
+    // need it to easily hook into the expression templates.
+    for (size_t logical_pair_index = 0; logical_pair_index < Dim * Dim;
+         ++logical_pair_index) {
+      gsl::at(second_logical_du, logical_pair_index)
+          .set_data_ref(
+              // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+              const_cast<ValueType*>(
+                  gsl::at(second_logical_partial_derivatives_of_u,
+                          logical_pair_index)) +
+                  component_index * num_grid_points,
+              num_grid_points);
+    }
+    for (size_t d = 0; d < Dim; ++d) {
+      gsl::at(first_logical_du, d)
+          .set_data_ref(
+              // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+              const_cast<ValueType*>(
+                  gsl::at(first_logical_partial_derivatives_of_u, d)) +
+                  component_index * num_grid_points,
+              num_grid_points);
+    }
+
     for (size_t first_deriv_index = 0; first_deriv_index < Dim;
          ++first_deriv_index) {
       for (size_t second_deriv_index = first_deriv_index;
@@ -98,98 +190,23 @@ void second_partial_derivatives_impl(
         lhs.set_data_ref(ptr_ddu, num_grid_points);
         ptr_ddu += num_grid_points;
 
-        // clang-tidy: const cast is fine since we won't modify the data and we
-        // need it to easily hook into the expression templates.
-        second_logical_du.set_data_ref(
-            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
-            const_cast<ValueType*>(
-                gsl::at(pure_second_logical_partial_derivatives_of_u, 0)) +
-                component_index * num_grid_points,
-            num_grid_points);
-
-        lhs = (*(inverse_jacobian.begin() +
-                 gsl::at(gsl::at(jacobian_indices, 0), first_deriv_index))) *
-              (*(inverse_jacobian.begin() +
-                 gsl::at(gsl::at(jacobian_indices, 0), second_deriv_index))) *
-              second_logical_du;
-
-        for (size_t first_logical_deriv_index = 0;
-             first_logical_deriv_index < Dim; ++first_logical_deriv_index) {
-          for (size_t second_logical_deriv_index = 0;
-               second_logical_deriv_index < Dim; ++second_logical_deriv_index) {
-            if (first_logical_deriv_index + second_logical_deriv_index != 0) {
-              if (first_logical_deriv_index == second_logical_deriv_index) {
-                // clang-tidy: const cast is fine since we won't modify the data
-                // and we need it to easily hook into the expression templates.
-                second_logical_du.set_data_ref(
-                    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
-                    const_cast<ValueType*>(
-                        gsl::at(pure_second_logical_partial_derivatives_of_u,
-                                first_logical_deriv_index)) +
-                        component_index * num_grid_points,
-                    num_grid_points);
-              } else {
-                // we need to map (first_logical_deriv_index,
-                // second_logical_deriv_index) to an index
-                // single_mixed_partial_index into the
-                // mixed_second_logical_partial_derivatives_of_u. For
-                // single_mixed_partial_index, 0 is xy deriv, 1 is yz deriv,
-                // and 2 is xz deriv. So we need a symmetric map (0,1)->0,
-                // (0,2)->2, (1,2)->1.
-                const size_t single_mixed_partial_index =
-                    [first_logical_deriv_index,
-                     second_logical_deriv_index]() -> size_t {
-                  if (first_logical_deriv_index * second_logical_deriv_index !=
-                      0) {
-                    return 1;
-                  } else if (first_logical_deriv_index +
-                                 second_logical_deriv_index ==
-                             1) {
-                    return 0;
-                  } else {
-                    return 2;
-                  }
-                }();
-                // clang-tidy: const cast is fine since we won't modify the data
-                // and we need it to easily hook into the expression templates.
-                second_logical_du.set_data_ref(
-                    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
-                    const_cast<ValueType*>(
-                        gsl::at(mixed_second_logical_partial_derivatives_of_u,
-                                single_mixed_partial_index)) +
-                        component_index * num_grid_points,
-                    num_grid_points);
-              }
-
-              lhs +=
-                  (*(inverse_jacobian.begin() +
-                     gsl::at(
-                         gsl::at(jacobian_indices, first_logical_deriv_index),
-                         first_deriv_index))) *
-                  (*(inverse_jacobian.begin() +
-                     gsl::at(
-                         gsl::at(jacobian_indices, second_logical_deriv_index),
-                         second_deriv_index))) *
-                  second_logical_du;
-            }
-          }
-        }
-        // Now add in the terms with the inverse hessian
-        for (size_t d = 0; d < Dim; ++d) {
-          // clang-tidy: const cast is fine since we won't modify the data
-          // and we need it to easily hook into the expression templates.
-          first_logical_du.set_data_ref(
-              // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
-              const_cast<ValueType*>(
-                  gsl::at(first_logical_partial_derivatives_of_u, d)) +
-                  component_index * num_grid_points,
-              num_grid_points);
-          lhs += (*(inverse_hessian.begin() +
-                    gsl::at(
-                        gsl::at(gsl::at(hessian_indices, d), first_deriv_index),
-                        second_deriv_index))) *
-                 first_logical_du;
-        }
+        // A single expression, so the terms are summed at each grid point
+        // in the order of the folds (left to right) and `lhs` is written once.
+        [&]<size_t... LogicalPairIndices, size_t... LogicalDerivIndices>(
+            std::index_sequence<LogicalPairIndices...> /*meta*/,
+            std::index_sequence<LogicalDerivIndices...> /*meta*/) {
+          lhs = ((... + (inverse_jacobian_component(LogicalPairIndices / Dim,
+                                                    first_deriv_index) *
+                         inverse_jacobian_component(LogicalPairIndices % Dim,
+                                                    second_deriv_index) *
+                         gsl::at(second_logical_du, LogicalPairIndices))) +
+                 ... +
+                 (inverse_hessian_component(LogicalDerivIndices,
+                                            first_deriv_index,
+                                            second_deriv_index) *
+                  gsl::at(first_logical_du, LogicalDerivIndices)));
+        }(std::make_index_sequence<Dim * Dim>{},
+          std::make_index_sequence<Dim>{});
       }
     }
   }
@@ -202,6 +219,7 @@ void second_partial_derivatives(
         Variables<db::wrap_tags_in<::Tags::second_deriv, DerivativeTags,
                                    tmpl::size_t<Dim>, DerivativeFrame>>*>
         second_partial_derivatives,
+    const std::array<gsl::span<const double>, Dim>& first_logical_derivatives,
     const gsl::span<const double>& volume_vars,
     const DirectionMap<Dim, gsl::span<const double>>& ghost_cell_vars,
     const Mesh<Dim>& volume_mesh, const size_t number_of_variables,
@@ -222,6 +240,13 @@ void second_partial_derivatives(
              << second_partial_derivatives->size() << " and "
              << second_partial_derivatives->number_of_grid_points()
              << " grid points.");
+  for (size_t i = 0; i < Dim; ++i) {
+    ASSERT(gsl::at(first_logical_derivatives, i).size() == volume_vars.size(),
+           "The first logical derivatives must have size "
+               << volume_vars.size() << " but has size "
+               << gsl::at(first_logical_derivatives, i).size()
+               << " in dimension " << i);
+  }
 
   // compute the pure and second logical derivatives
   const size_t second_logical_derivs_internal_buffer_size =
@@ -232,33 +257,22 @@ void second_partial_derivatives(
                             })
                ->second.size() +
        2 * volume_vars.size());
-  DataVector buffer(3 * Dim * volume_vars.size() +
+  DataVector buffer(2 * Dim * volume_vars.size() +
                     second_logical_derivs_internal_buffer_size);
 
-  // The first_logical_partial_derivs is only needed for inverse_hessian
-  std::array<gsl::span<double>, Dim> first_logical_partial_derivs{};
   std::array<gsl::span<double>, Dim> pure_second_logical_partial_derivs{};
   std::array<gsl::span<double>, Dim> mixed_second_logical_partial_derivs{};
   for (size_t i = 0; i < Dim; ++i) {
-    gsl::at(first_logical_partial_derivs, i) =
+    gsl::at(pure_second_logical_partial_derivs, i) =
         gsl::make_span(&buffer[i * volume_vars.size()], volume_vars.size());
   }
   for (size_t i = Dim; i < 2 * Dim; ++i) {
-    gsl::at(pure_second_logical_partial_derivs, i - Dim) =
-        gsl::make_span(&buffer[i * volume_vars.size()], volume_vars.size());
-  }
-  for (size_t i = 2 * Dim; i < 3 * Dim; ++i) {
-    gsl::at(mixed_second_logical_partial_derivs, i - 2 * Dim) =
+    gsl::at(mixed_second_logical_partial_derivs, i - Dim) =
         gsl::make_span(&buffer[i * volume_vars.size()], volume_vars.size());
   }
   gsl::span<double> span_buffer =
-      gsl::make_span(&buffer[3 * Dim * volume_vars.size()],
+      gsl::make_span(&buffer[2 * Dim * volume_vars.size()],
                      second_logical_derivs_internal_buffer_size);
-
-  // Compute first logical derivatives (used in the inverse-hessian terms)
-  fd::logical_partial_derivatives(make_not_null(&first_logical_partial_derivs),
-                                  volume_vars, ghost_cell_vars, volume_mesh,
-                                  number_of_variables, fd_order);
 
   detail::second_logical_partial_derivatives_impl(
       make_not_null(&pure_second_logical_partial_derivs),
@@ -268,7 +282,7 @@ void second_partial_derivatives(
   std::array<const double*, Dim> first_logical_partial_derivs_ptrs{};
   for (size_t i = 0; i < Dim; ++i) {
     gsl::at(first_logical_partial_derivs_ptrs, i) =
-        gsl::at(first_logical_partial_derivs, i).data();
+        gsl::at(first_logical_derivatives, i).data();
   }
 
   std::array<const double*, Dim> pure_second_logical_partial_derivs_ptrs{};
@@ -288,6 +302,42 @@ void second_partial_derivatives(
       pure_second_logical_partial_derivs_ptrs,
       mixed_second_logical_partial_derivs_ptrs,
       Variables<DerivativeTags>::number_of_independent_components,
+      inverse_jacobian, inverse_hessian);
+}
+
+template <typename DerivativeTags, size_t Dim, typename DerivativeFrame>
+void second_partial_derivatives(
+    const gsl::not_null<
+        Variables<db::wrap_tags_in<::Tags::second_deriv, DerivativeTags,
+                                   tmpl::size_t<Dim>, DerivativeFrame>>*>
+        second_partial_derivatives,
+    const gsl::span<const double>& volume_vars,
+    const DirectionMap<Dim, gsl::span<const double>>& ghost_cell_vars,
+    const Mesh<Dim>& volume_mesh, const size_t number_of_variables,
+    const size_t fd_order,
+    const InverseJacobian<DataVector, Dim, Frame::ElementLogical,
+                          DerivativeFrame>& inverse_jacobian,
+    const InverseHessian<DataVector, Dim, Frame::ElementLogical,
+                         DerivativeFrame>& inverse_hessian) {
+  ASSERT(fd_order == 4, "Only fd_order == 4 is supported at the moment.");
+  ASSERT(Dim == 3, "Only 3 dimensions is supported at the moment.");
+  // Compute first logical derivatives (used in the inverse-hessian terms)
+  DataVector buffer(Dim * volume_vars.size());
+  std::array<gsl::span<double>, Dim> first_logical_partial_derivs{};
+  std::array<gsl::span<const double>, Dim> const_first_logical_partial_derivs{};
+  for (size_t i = 0; i < Dim; ++i) {
+    gsl::at(first_logical_partial_derivs, i) =
+        gsl::make_span(&buffer[i * volume_vars.size()], volume_vars.size());
+    gsl::at(const_first_logical_partial_derivs, i) =
+        gsl::at(first_logical_partial_derivs, i);
+  }
+  fd::logical_partial_derivatives(make_not_null(&first_logical_partial_derivs),
+                                  volume_vars, ghost_cell_vars, volume_mesh,
+                                  number_of_variables, fd_order);
+
+  fd::second_partial_derivatives<DerivativeTags>(
+      second_partial_derivatives, const_first_logical_partial_derivs,
+      volume_vars, ghost_cell_vars, volume_mesh, number_of_variables, fd_order,
       inverse_jacobian, inverse_hessian);
 }
 }  // namespace fd

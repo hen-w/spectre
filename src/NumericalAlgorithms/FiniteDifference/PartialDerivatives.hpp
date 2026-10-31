@@ -64,4 +64,28 @@ void partial_derivatives(
     const Mesh<Dim>& volume_mesh, size_t number_of_variables, size_t fd_order,
     const InverseJacobian<DataVector, Dim, Frame::ElementLogical,
                           DerivativeFrame>& inverse_jacobian);
+
+/*!
+ * \brief Compute the partial derivative on the `DerivativeFrame` using the
+ * `inverse_jacobian`, and keep the logical partial derivatives it is computed
+ * from.
+ *
+ * \details `logical_derivatives` must hold `Dim` spans of size
+ * `volume_vars.size()`, which are set to the result of
+ * `fd::logical_partial_derivatives()`. The partial derivatives are the same as
+ * those of the overload without `logical_derivatives`. The logical derivatives
+ * can be passed to `fd::second_partial_derivatives()` to avoid computing them
+ * again.
+ */
+template <typename DerivativeTags, size_t Dim, typename DerivativeFrame>
+void partial_derivatives(
+    gsl::not_null<Variables<db::wrap_tags_in<
+        Tags::deriv, DerivativeTags, tmpl::size_t<Dim>, DerivativeFrame>>*>
+        partial_derivatives,
+    gsl::not_null<std::array<gsl::span<double>, Dim>*> logical_derivatives,
+    const gsl::span<const double>& volume_vars,
+    const DirectionMap<Dim, gsl::span<const double>>& ghost_cell_vars,
+    const Mesh<Dim>& volume_mesh, size_t number_of_variables, size_t fd_order,
+    const InverseJacobian<DataVector, Dim, Frame::ElementLogical,
+                          DerivativeFrame>& inverse_jacobian);
 }  // namespace fd

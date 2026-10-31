@@ -96,4 +96,30 @@ void second_partial_derivatives(
                           DerivativeFrame>& inverse_jacobian,
     const InverseHessian<DataVector, Dim, Frame::ElementLogical,
                          DerivativeFrame>& inverse_hessian);
+
+/*!
+ * \brief Compute the second partial derivatives on the `DerivativeFrame` as
+ * above, given the first logical partial derivatives of the variables.
+ *
+ * \details `first_logical_derivatives[d]` must hold the first logical partial
+ * derivatives in dimension `d` that `fd::logical_partial_derivatives()`
+ * computes from the same `volume_vars`, `ghost_cell_vars`, `volume_mesh`,
+ * `number_of_variables` and `fd_order`. This avoids computing them again when
+ * they are also needed for the first partial derivatives (see
+ * `fd::partial_derivatives()`).
+ */
+template <typename DerivativeTags, size_t Dim, typename DerivativeFrame>
+void second_partial_derivatives(
+    gsl::not_null<
+        Variables<db::wrap_tags_in<::Tags::second_deriv, DerivativeTags,
+                                   tmpl::size_t<Dim>, DerivativeFrame>>*>
+        second_partial_derivatives,
+    const std::array<gsl::span<const double>, Dim>& first_logical_derivatives,
+    const gsl::span<const double>& volume_vars,
+    const DirectionMap<Dim, gsl::span<const double>>& ghost_cell_vars,
+    const Mesh<Dim>& volume_mesh, size_t number_of_variables, size_t fd_order,
+    const InverseJacobian<DataVector, Dim, Frame::ElementLogical,
+                          DerivativeFrame>& inverse_jacobian,
+    const InverseHessian<DataVector, Dim, Frame::ElementLogical,
+                         DerivativeFrame>& inverse_hessian);
 }  // namespace fd

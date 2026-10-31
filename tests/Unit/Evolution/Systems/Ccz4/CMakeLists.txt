@@ -16,6 +16,7 @@ set(LIBRARY_SOURCES
   FiniteDifference/Test_UnlimitedDeg4Prim.cpp
   FiniteDifference/Test_EnforceConstrainedEvolution.cpp
   FiniteDifference/Test_Filter.cpp
+  FiniteDifference/Test_FirstAndSecondDerivatives.cpp
   FiniteDifference/Test_GhostData.cpp
   FiniteDifference/Test_RadiationCharacteristics.cpp
   FiniteDifference/Test_ResizeTimeDerivatives.cpp

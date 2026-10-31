@@ -17,6 +17,7 @@ set(LIBRARY_SOURCES
   Test_PartialDerivatives.cpp
   Test_PositivityPreservingAdaptiveOrder.cpp
   Test_SecondPartialDerivatives.cpp
+  Test_SecondPartialDerivativesFromLogical.cpp
   Test_Unlimited.cpp
   Test_Wcns5z.cpp
   )

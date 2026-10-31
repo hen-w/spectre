@@ -563,6 +563,13 @@ struct SoTimeDerivative {
     using deriv_var_tag = db::wrap_tags_in<::Tags::deriv, gradients_tags,
                                            tmpl::size_t<Dim>, Frame::Inertial>;
     Variables<deriv_var_tag> cell_centered_Ccz4_derivs{num_pts};
+    // The second spatial derivatives are only computed for the evolved
+    // variables that need them.
+    using second_deriv_var_tag =
+        db::wrap_tags_in<::Tags::second_deriv,
+                         typename System::second_derivative_tags,
+                         tmpl::size_t<Dim>, Frame::Inertial>;
+    Variables<second_deriv_var_tag> cell_centered_Ccz4_second_derivs{num_pts};
     const auto& cell_centered_logical_to_inertial_inv_jacobian =
         db::get<evolution::dg::subcell::fd::Tags::
                     InverseJacobianLogicalToInertial<Dim>>(*box);
@@ -573,11 +580,13 @@ struct SoTimeDerivative {
     const bool evolve_lapse_and_shift =
         get<::Ccz4::fd::Tags::EvolveLapseAndShift>(*box);
 
-    ::Ccz4::fd::spacetime_derivatives(
-        make_not_null(&cell_centered_Ccz4_derivs), evolved_vars,
+    ::Ccz4::fd::first_and_second_spacetime_derivatives(
+        make_not_null(&cell_centered_Ccz4_derivs),
+        make_not_null(&cell_centered_Ccz4_second_derivs), evolved_vars,
         db::get<evolution::dg::subcell::Tags::GhostDataForReconstruction<Dim>>(
             *box),
-        fd_order, subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian);
+        fd_order, subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
+        cell_centered_logical_to_inertial_inv_hessian);
 
     const auto& d_lapse =
         get<::Tags::deriv<gr::Tags::Lapse<DataVector>, tmpl::size_t<Dim>,
@@ -593,19 +602,6 @@ struct SoTimeDerivative {
         get<::Tags::deriv<::Ccz4::Tags::ConformalFactor<DataVector>,
                           tmpl::size_t<Dim>, Frame::Inertial>>(
             cell_centered_Ccz4_derivs);
-
-    // compute second derivatives of the evolved variables
-    using second_deriv_var_tag =
-        db::wrap_tags_in<::Tags::second_deriv, gradients_tags,
-                         tmpl::size_t<Dim>, Frame::Inertial>;
-    Variables<second_deriv_var_tag> cell_centered_Ccz4_second_derivs{num_pts};
-
-    Ccz4::fd::second_spacetime_derivatives(
-        make_not_null(&cell_centered_Ccz4_second_derivs), evolved_vars,
-        db::get<evolution::dg::subcell::Tags::GhostDataForReconstruction<Dim>>(
-            *box),
-        fd_order, subcell_mesh, cell_centered_logical_to_inertial_inv_jacobian,
-        cell_centered_logical_to_inertial_inv_hessian);
 
     const auto& d_d_lapse =
         get<::Tags::second_deriv<gr::Tags::Lapse<DataVector>, tmpl::size_t<Dim>,

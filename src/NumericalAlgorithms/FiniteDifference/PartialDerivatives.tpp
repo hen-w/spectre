@@ -89,4 +89,37 @@ void partial_derivatives(
       inverse_jacobian);
 }
 
+template <typename DerivativeTags, size_t Dim, typename DerivativeFrame>
+void partial_derivatives(
+    const gsl::not_null<Variables<db::wrap_tags_in<
+        Tags::deriv, DerivativeTags, tmpl::size_t<Dim>, DerivativeFrame>>*>
+        partial_derivatives,
+    const gsl::not_null<std::array<gsl::span<double>, Dim>*>
+        logical_derivatives,
+    const gsl::span<const double>& volume_vars,
+    const DirectionMap<Dim, gsl::span<const double>>& ghost_cell_vars,
+    const Mesh<Dim>& volume_mesh, const size_t number_of_variables,
+    const size_t fd_order,
+    const InverseJacobian<DataVector, Dim, Frame::ElementLogical,
+                          DerivativeFrame>& inverse_jacobian) {
+  ASSERT(partial_derivatives->size() == Dim * volume_vars.size(),
+         "The partial derivatives Variables must have size "
+             << Dim * volume_vars.size()
+             << " (Dim * volume_vars.size()) but has size "
+             << partial_derivatives->size() << " and "
+             << partial_derivatives->number_of_grid_points()
+             << " grid points.");
+  logical_partial_derivatives(logical_derivatives, volume_vars, ghost_cell_vars,
+                              volume_mesh, number_of_variables, fd_order);
+
+  std::array<const double*, Dim> logical_partial_derivs_ptrs{};
+  for (size_t i = 0; i < Dim; ++i) {
+    gsl::at(logical_partial_derivs_ptrs, i) =
+        gsl::at(*logical_derivatives, i).data();
+  }
+  ::partial_derivatives_detail::partial_derivatives_impl(
+      partial_derivatives, logical_partial_derivs_ptrs,
+      Variables<DerivativeTags>::number_of_independent_components,
+      inverse_jacobian);
+}
 }  // namespace fd
