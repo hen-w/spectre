@@ -7,15 +7,21 @@
 #include <optional>
 #include <tuple>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 
 #include "DataStructures/DataBox/DataBox.hpp"
 #include "DataStructures/TaggedTuple.hpp"
+#include "Domain/CreateInitialElement.hpp"
+#include "Domain/Creators/Tags/Domain.hpp"
+#include "Domain/Creators/Tags/InitialRefinementLevels.hpp"
+#include "Domain/Domain.hpp"
 #include "Domain/Structure/DirectionalId.hpp"
 #include "Domain/Structure/Element.hpp"
 #include "Domain/Tags.hpp"
 #include "Evolution/DgSubcell/ActiveGrid.hpp"
 #include "Evolution/DgSubcell/GhostData.hpp"
+#include "Evolution/DgSubcell/InitialActiveGrid.hpp"
 #include "Evolution/DgSubcell/Mesh.hpp"
 #include "Evolution/DgSubcell/Projection.hpp"
 #include "Evolution/DgSubcell/RdmpTciData.hpp"
@@ -64,7 +70,8 @@ namespace evolution::dg::subcell::Actions {
  *
  * By default sets the element to `subcell::ActiveGrid::Subcell` unless it
  * is not allowed to use subcell either because it is at an external boundary
- * or because it or one of its neighbors has been marked as DG-only.
+ * or because it or one of its neighbors has been marked as DG-only (see
+ * `subcell::initial_active_grid`).
  *
  * GlobalCache:
  * - Uses:
@@ -167,28 +174,9 @@ struct SetSubcellGrid {
       }
     }
 
-    // Loop over block neighbors and if neighbor id is inside of
-    // subcell_options.only_dg_block_ids(), then bordering DG-only block
-    const bool bordering_dg_block = alg::any_of(
-        element.neighbors(),
-        [&subcell_options](const auto& direction_and_neighbor) {
-          const size_t first_block_id =
-              direction_and_neighbor.second.ids().begin()->block_id();
-          return alg::found(subcell_options.only_dg_block_ids(),
-                            first_block_id);
-        });
-
-    const bool subcell_allowed_in_element =
-        not alg::found(subcell_options.only_dg_block_ids(),
-                       element.id().block_id()) and
-        not bordering_dg_block;
-    const bool cell_is_not_on_external_boundary =
-        db::get<::domain::Tags::Element<Dim>>(box)
-            .external_boundaries()
-            .empty();
-
-    constexpr bool subcell_enabled_at_external_boundary =
-        Metavariables::SubcellOptions::subcell_enabled_at_external_boundary;
+    const ActiveGrid initial_grid = initial_active_grid(
+        element, subcell_options,
+        Metavariables::SubcellOptions::subcell_enabled_at_external_boundary);
 
     db::mutate<Tags::NeighborTciDecisions<Dim>>(
         [&element](const auto neighbor_decisions_ptr) {
@@ -218,8 +206,7 @@ struct SetSubcellGrid {
                    subcell::Tags::TciCallsSinceRollback,
                    subcell::Tags::StepsSinceTciCall>,
         tmpl::list<>>(
-        [&cell_is_not_on_external_boundary, &dg_mesh,
-         subcell_allowed_in_element, &subcell_mesh](
+        [&dg_mesh, initial_grid, &subcell_mesh](
             const gsl::not_null<ActiveGrid*> active_grid_ptr,
             const gsl::not_null<bool*> did_rollback_ptr,
             const auto active_vars_ptr,
@@ -231,13 +218,10 @@ struct SetSubcellGrid {
           // subcells as a normal solve.
           *did_rollback_ptr = false;
 
-          if ((cell_is_not_on_external_boundary or
-               subcell_enabled_at_external_boundary) and
-              subcell_allowed_in_element) {
-            *active_grid_ptr = ActiveGrid::Subcell;
+          *active_grid_ptr = initial_grid;
+          if (initial_grid == ActiveGrid::Subcell) {
             active_vars_ptr->initialize(subcell_mesh.number_of_grid_points());
           } else {
-            *active_grid_ptr = ActiveGrid::Dg;
             active_vars_ptr->initialize(dg_mesh.number_of_grid_points());
           }
 
@@ -272,6 +256,90 @@ struct SetSubcellGrid {
                 std::add_pointer_t<ParallelComponent>{nullptr});
       }
     }
+    return {Parallel::AlgorithmExecution::Continue, std::nullopt};
+  }
+};
+
+/*!
+ * \brief Sets `subcell::Tags::NeighborActiveGrids`, the active grid that
+ * `SetSubcellGrid` selects for every neighbor of the element.
+ *
+ * \details Must run after `SetSubcellGrid`. The `Element` of each neighbor is
+ * created from the initial domain topology (see
+ * `initial_neighbor_active_grids`), so the neighbor active grids are valid
+ * only while the topology and the active grids of all elements stay those of
+ * the initialization: no AMR, and no troubled-cell indicator or other change
+ * of the active grid. They are used only if
+ * `Metavariables::SubcellOptions::active_grids_fixed_at_initialization` is
+ * `true` (see `evolution::dg::active_grids_fixed_at_initialization`).
+ *
+ * It is an error if the element is not the initial element of its id or if
+ * its active grid is not the one selected by `SetSubcellGrid`.
+ *
+ * GlobalCache:
+ * - Uses:
+ *   - `domain::Tags::Domain<Dim>`
+ *   - `subcell::Tags::SubcellOptions<Dim>`
+ *
+ * DataBox:
+ * - Uses:
+ *   - `domain::Tags::Element<Dim>`
+ *   - `domain::Tags::InitialRefinementLevels<Dim>`
+ *   - `subcell::Tags::ActiveGrid`
+ * - Adds:
+ *   - `subcell::Tags::NeighborActiveGrids<Dim>`
+ * - Removes: nothing
+ * - Modifies: nothing
+ */
+template <size_t Dim>
+struct SetNeighborActiveGrids {
+  using const_global_cache_tags =
+      tmpl::list<::domain::Tags::Domain<Dim>, Tags::SubcellOptions<Dim>>;
+  using simple_tags = tmpl::list<Tags::NeighborActiveGrids<Dim>>;
+
+  template <typename DbTagsList, typename... InboxTags, typename ArrayIndex,
+            typename ActionList, typename ParallelComponent,
+            typename Metavariables>
+  static Parallel::iterable_action_return_t apply(
+      db::DataBox<DbTagsList>& box,
+      const tuples::TaggedTuple<InboxTags...>& /*inboxes*/,
+      const Parallel::GlobalCache<Metavariables>& /*cache*/,
+      const ArrayIndex& /*array_index*/, ActionList /*meta*/,
+      const ParallelComponent* const /*meta*/) {
+    constexpr bool subcell_enabled_at_external_boundary =
+        Metavariables::SubcellOptions::subcell_enabled_at_external_boundary;
+    const Element<Dim>& element = db::get<::domain::Tags::Element<Dim>>(box);
+    const auto& blocks = db::get<::domain::Tags::Domain<Dim>>(box).blocks();
+    const auto& initial_refinement_levels =
+        db::get<::domain::Tags::InitialRefinementLevels<Dim>>(box);
+    const SubcellOptions& subcell_options =
+        db::get<Tags::SubcellOptions<Dim>>(box);
+    if (::domain::create_initial_element(
+            element.id(), blocks, initial_refinement_levels) != element) {
+      ERROR(
+          "The neighbor active grids are computed from the initial domain "
+          "topology, but element "
+          << element.id() << " is not the initial element:\n"
+          << element);
+    }
+    if (const ActiveGrid active_grid = db::get<Tags::ActiveGrid>(box);
+        active_grid !=
+        initial_active_grid(element, subcell_options,
+                            subcell_enabled_at_external_boundary)) {
+      ERROR("Element " << element.id() << " uses the active grid "
+                       << active_grid
+                       << ", which is not the one selected at initialization "
+                          "by SetSubcellGrid.");
+    }
+    db::mutate<Tags::NeighborActiveGrids<Dim>>(
+        [&](const gsl::not_null<
+            std::unordered_map<DirectionalId<Dim>, ActiveGrid>*>
+                neighbor_active_grids) {
+          *neighbor_active_grids = initial_neighbor_active_grids(
+              element, blocks, initial_refinement_levels, subcell_options,
+              subcell_enabled_at_external_boundary);
+        },
+        make_not_null(&box));
     return {Parallel::AlgorithmExecution::Continue, std::nullopt};
   }
 };

@@ -22,6 +22,7 @@
 #include "Domain/InterfaceHelpers.hpp"
 #include "Domain/Structure/Direction.hpp"
 #include "Domain/Structure/DirectionMap.hpp"
+#include "Domain/Structure/DirectionalId.hpp"
 #include "Domain/Structure/OrientationMapHelpers.hpp"
 #include "Domain/Tags.hpp"
 #include "Domain/TagsTimeDependent.hpp"
@@ -90,6 +91,9 @@ void prepare_neighbor_data(
         tmpl::size_t<Dim>, Frame::Inertial>>& volume_fluxes);
 template <typename DbTagsList>
 int get_tci_decision(const db::DataBox<DbTagsList>& box);
+template <typename DbTagsList, size_t Dim>
+bool neighbor_uses_subcell(const db::DataBox<DbTagsList>& box,
+                           const DirectionalId<Dim>& neighbor_id);
 }  // namespace evolution::dg::subcell
 namespace tuples {
 template <typename...>
@@ -123,6 +127,27 @@ struct get_primitive_tags_for_face {
 }  // namespace detail
 
 namespace detail {
+// Whether the ghost data of elements using DG are sent only to the neighbors
+// using finite differences.
+template <typename Metavariables>
+constexpr bool omits_ghost_data_for_dg_neighbors =
+    using_subcell_v<Metavariables> and
+    active_grids_fixed_at_initialization_v<Metavariables>;
+
+// Whether the neighbor `neighbor_id` of an element using DG receives the
+// element's ghost data: always, unless the active grids are fixed at
+// initialization, in which case only if the neighbor uses finite differences.
+template <typename Metavariables, typename DbTagsList, size_t Dim>
+bool receives_ghost_data(
+    [[maybe_unused]] const db::DataBox<DbTagsList>& box,
+    [[maybe_unused]] const DirectionalId<Dim>& neighbor_id) {
+  if constexpr (omits_ghost_data_for_dg_neighbors<Metavariables>) {
+    return evolution::dg::subcell::neighbor_uses_subcell(box, neighbor_id);
+  } else {
+    return true;
+  }
+}
+
 /*!
  * \brief Send the boundary data of the element to all its neighbors: the
  * oriented volume mesh, the DG-subcell ghost data (with DG-subcell), the TCI
@@ -132,6 +157,12 @@ namespace detail {
  *
  * \details Without `SendMortarData` only ghost data are sent (the boundary
  * correction mesh and data are empty); this requires DG-subcell.
+ *
+ * If the active grids are fixed at initialization
+ * (`evolution::dg::active_grids_fixed_at_initialization_v<Metavariables>`),
+ * neighbors using DG receive no ghost data and no ghost-data mesh, see
+ * `evolution::dg::subcell::prepare_neighbor_data`. Every neighbor still
+ * receives one message.
  */
 template <size_t Dim, typename EvolutionSystem, bool UseNodegroupDgElements,
           bool IsAuxiliaryInbox, bool SendMortarData,
@@ -177,24 +208,49 @@ void send_boundary_and_ghost_data(
   }
 
   for (const auto& [direction, neighbors] : element.neighbors()) {
+    const size_t total_neighbors = neighbors.size();
+    size_t total_ghost_data_receivers = total_neighbors;
+    if constexpr (omits_ghost_data_for_dg_neighbors<Metavariables>) {
+      total_ghost_data_receivers = 0;
+      for (const auto& neighbor : neighbors) {
+        if (receives_ghost_data<Metavariables>(
+                *box, DirectionalId<Dim>{direction, neighbor})) {
+          ++total_ghost_data_receivers;
+        }
+      }
+    }
     std::optional<DataVector> ghost_and_subcell_data = std::nullopt;
     if constexpr (using_subcell_v<Metavariables>) {
       ASSERT(all_neighbor_data_for_reconstruction.has_value(),
              "Trying to do DG-subcell but the ghost and subcell data for the "
              "neighbor has not been set.");
-      ghost_and_subcell_data =
-          std::move(all_neighbor_data_for_reconstruction.value()[direction]);
+      if (total_ghost_data_receivers > 0) {
+        ghost_and_subcell_data =
+            std::move(all_neighbor_data_for_reconstruction->at(direction));
+      }
     }
 
-    const size_t total_neighbors = neighbors.size();
     // If there are multiple non-conforming neighbors, we only create a single
     // mortar labeled by the host ElementId.  This is done because the data
     // from all neighbors will be combined onto a single mortar as it makes no
     // sense to have multiple mortars between non-conforming Elements.
     const bool has_multiple_non_conforming_neighbors =
         total_neighbors > 1 and not neighbors.are_conforming();
-    size_t neighbor_count = 1;
+    size_t ghost_data_receiver_count = 0;
     for (const auto& neighbor : neighbors) {
+      std::optional<DataVector> ghost_data_for_neighbor = std::nullopt;
+      std::optional<Mesh<Dim>> ghost_data_mesh_for_neighbor = std::nullopt;
+      if (receives_ghost_data<Metavariables>(
+              *box, DirectionalId<Dim>{direction, neighbor})) {
+        ++ghost_data_receiver_count;
+        // Move instead of copy into the last receiver in this direction.
+        if (ghost_data_receiver_count == total_ghost_data_receivers) {
+          ghost_data_for_neighbor = std::move(ghost_and_subcell_data);
+        } else {
+          ghost_data_for_neighbor = ghost_and_subcell_data;
+        }
+        ghost_data_mesh_for_neighbor = ghost_data_mesh;
+      }
       const auto& orientation = neighbors.orientation(neighbor);
       const auto direction_from_neighbor = orientation(direction.opposite());
       const DirectionalId<Dim> mortar_id{
@@ -263,29 +319,15 @@ void send_boundary_and_ghost_data(
           db::get<::Tags::Next<::Tags::TimeStepId>>(*box);
 
       using SendData = evolution::dg::BoundaryData<Dim>;
-      SendData data{};
-
-      if (neighbor_count == total_neighbors) {
-        data = SendData{volume_mesh_for_neighbor,
-                        ghost_data_mesh,
-                        mortar_mesh_for_neighbor,
-                        std::move(ghost_and_subcell_data),
-                        {std::move(neighbor_boundary_data_on_mortar)},
-                        next_time_step_id,
-                        tci_decision,
-                        integration_order,
-                        interpolated_boundary_data};
-      } else {
-        data = SendData{volume_mesh_for_neighbor,
-                        ghost_data_mesh,
-                        mortar_mesh_for_neighbor,
-                        ghost_and_subcell_data,
-                        {std::move(neighbor_boundary_data_on_mortar)},
-                        next_time_step_id,
-                        tci_decision,
-                        integration_order,
-                        interpolated_boundary_data};
-      }
+      SendData data{volume_mesh_for_neighbor,
+                    std::move(ghost_data_mesh_for_neighbor),
+                    mortar_mesh_for_neighbor,
+                    std::move(ghost_data_for_neighbor),
+                    {std::move(neighbor_boundary_data_on_mortar)},
+                    next_time_step_id,
+                    tci_decision,
+                    integration_order,
+                    interpolated_boundary_data};
       if constexpr (not SendMortarData) {
         data.boundary_correction_mesh = std::nullopt;
         data.boundary_correction_data = std::nullopt;
@@ -309,7 +351,6 @@ void send_boundary_and_ghost_data(
             std::make_pair(DirectionalId{direction_from_neighbor, element.id()},
                            std::move(data)));
       }
-      ++neighbor_count;
     }
   }
 }

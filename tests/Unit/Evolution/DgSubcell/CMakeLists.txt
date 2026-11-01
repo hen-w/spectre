@@ -23,6 +23,7 @@ set(LIBRARY_SOURCES
   Test_GhostData.cpp
   Test_GhostZoneInverseJacobian.cpp
   Test_GhostZoneLogicalCoordinates.cpp
+  Test_InitialActiveGrid.cpp
   Test_InitialTciData.cpp
   Test_JacobianCompute.cpp
   Test_Matrices.cpp

@@ -23,6 +23,7 @@ spectre_target_headers(
   GhostData.hpp
   GhostZoneInverseJacobian.hpp
   GhostZoneLogicalCoordinates.hpp
+  InitialActiveGrid.hpp
   InitialTciData.hpp
   Matrices.hpp
   Mesh.hpp
@@ -56,6 +57,7 @@ spectre_target_sources(
   DisableLts.cpp
   GhostData.cpp
   GhostZoneLogicalCoordinates.cpp
+  InitialActiveGrid.cpp
   InitialTciData.cpp
   Matrices.cpp
   Mesh.cpp

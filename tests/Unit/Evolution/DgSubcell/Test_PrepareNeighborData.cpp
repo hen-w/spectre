@@ -4,10 +4,12 @@
 #include "Framework/TestingFramework.hpp"
 
 #include <cstddef>
+#include <cstring>
 #include <iterator>
 #include <optional>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "DataStructures/DataBox/DataBox.hpp"
 #include "DataStructures/DataVector.hpp"
@@ -19,6 +21,7 @@
 #include "Domain/Domain.hpp"
 #include "Domain/Structure/Direction.hpp"
 #include "Domain/Structure/DirectionMap.hpp"
+#include "Domain/Structure/DirectionalId.hpp"
 #include "Domain/Structure/DirectionalIdMap.hpp"
 #include "Domain/Structure/Element.hpp"
 #include "Domain/Structure/ElementId.hpp"
@@ -26,6 +29,7 @@
 #include "Domain/Structure/OrientationMapHelpers.hpp"
 #include "Domain/Tags.hpp"
 #include "Domain/Tags/NeighborMesh.hpp"
+#include "Evolution/DgSubcell/ActiveGrid.hpp"
 #include "Evolution/DgSubcell/Mesh.hpp"
 #include "Evolution/DgSubcell/PrepareNeighborData.hpp"
 #include "Evolution/DgSubcell/Projection.hpp"
@@ -33,6 +37,7 @@
 #include "Evolution/DgSubcell/SliceData.hpp"
 #include "Evolution/DgSubcell/SliceTensor.hpp"
 #include "Evolution/DgSubcell/SubcellOptions.hpp"
+#include "Evolution/DgSubcell/Tags/ActiveGrid.hpp"
 #include "Evolution/DgSubcell/Tags/DataForRdmpTci.hpp"
 #include "Evolution/DgSubcell/Tags/Mesh.hpp"
 #include "Evolution/DgSubcell/Tags/SubcellOptions.hpp"
@@ -42,6 +47,7 @@
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
 #include "NumericalAlgorithms/Spectral/Quadrature.hpp"
 #include "Utilities/CartesianProduct.hpp"
+#include "Utilities/ConstantExpressions.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/Literals.hpp"
 #include "Utilities/TMPL.hpp"
@@ -62,7 +68,11 @@ struct Var1 : db::SimpleTag {
   using type = Scalar<DataVector>;
 };
 
-template <size_t Dim>
+// The number of ghost-data computations.
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+size_t ghost_variables_calls = 0;
+
+template <size_t Dim, bool FixedActiveGrids>
 struct Metavariables {
   static constexpr size_t volume_dim = Dim;
 
@@ -72,6 +82,9 @@ struct Metavariables {
   };
 
   struct SubcellOptions {
+    static constexpr bool active_grids_fixed_at_initialization =
+        FixedActiveGrids;
+
     template <typename DbTagsList>
     static constexpr size_t ghost_zone_size(
         const db::DataBox<DbTagsList>& box) {
@@ -83,6 +96,7 @@ struct Metavariables {
       using argument_tags = tmpl::list<typename system::variables_tag>;
       template <typename T>
       static DataVector apply(const T& dg_vars, const size_t rdmp_size) {
+        ++ghost_variables_calls;
         DataVector buffer{dg_vars.size() + rdmp_size};
         Variables<tmpl::list<Var1>> subcell_vars_to_send{buffer.data(),
                                                          dg_vars.size()};
@@ -177,12 +191,19 @@ class TestCreator : public DomainCreator<Dim> {
   }
 };
 
-template <size_t Dim>
-void test(const bool all_neighbors_are_doing_dg,
-          const ::fd::DerivativeOrder fd_derivative_order) {
+// With `FixedActiveGrids`, the neighbors in `directions_with_fd_neighbors`
+// use finite differences and the others DG, and data are prepared only for
+// the former: the same data as for all directions without
+// `FixedActiveGrids`. Without any such direction, nothing is computed.
+template <size_t Dim, bool FixedActiveGrids>
+void test(
+    const bool all_neighbors_are_doing_dg,
+    const ::fd::DerivativeOrder fd_derivative_order,
+    const std::unordered_set<Direction<Dim>>& directions_with_fd_neighbors) {
   CAPTURE(all_neighbors_are_doing_dg);
   CAPTURE(fd_derivative_order);
   CAPTURE(Dim);
+  CAPTURE(FixedActiveGrids);
   using Interps = DirectionalIdMap<Dim, std::optional<intrp::Irregular<Dim>>>;
   using variables_tag = ::Tags::Variables<tmpl::list<Var1>>;
   const Mesh<Dim> dg_mesh{5, Spectral::Basis::Legendre,
@@ -246,6 +267,18 @@ void test(const bool all_neighbors_are_doing_dg,
         intrp::Irregular<Dim>{subcell_mesh, target_points};
   }
 
+  typename evolution::dg::subcell::Tags::NeighborActiveGrids<Dim>::type
+      neighbor_active_grids{};
+  for (const auto& [direction, neighbors] : element.neighbors()) {
+    for (const auto& neighbor : neighbors) {
+      neighbor_active_grids.emplace(
+          DirectionalId<Dim>{direction, neighbor},
+          directions_with_fd_neighbors.contains(direction)
+              ? evolution::dg::subcell::ActiveGrid::Subcell
+              : evolution::dg::subcell::ActiveGrid::Dg);
+    }
+  }
+
   auto box = db::create<tmpl::list<
       Tags::Reconstructor, domain::Tags::Mesh<Dim>,
       evolution::dg::subcell::Tags::Mesh<Dim>, domain::Tags::Element<Dim>,
@@ -253,22 +286,55 @@ void test(const bool all_neighbors_are_doing_dg,
       domain::Tags::NeighborMesh<Dim>,
       evolution::dg::subcell::Tags::SubcellOptions<Dim>,
       evolution::dg::subcell::Tags::InterpolatorsFromFdToNeighborFd<Dim>,
-      evolution::dg::subcell::Tags::InterpolatorsFromDgToNeighborFd<Dim>>>(
+      evolution::dg::subcell::Tags::InterpolatorsFromDgToNeighborFd<Dim>,
+      evolution::dg::subcell::Tags::NeighborActiveGrids<Dim>>>(
       std::make_unique<DummyReconstructor>(), dg_mesh, subcell_mesh, element,
       vars,
       // Set RDMP data since it would've been calculated before already.
       evolution::dg::subcell::RdmpTciData{{1.0}, {-1.0}}, neighbor_meshes,
       subcell_options, fd_to_fd_neighbor_interpolants,
-      dg_to_fd_neighbor_interpolants);
+      dg_to_fd_neighbor_interpolants, std::move(neighbor_active_grids));
 
   std::optional<Mesh<Dim>> ghost_data_mesh{std::nullopt};
   DirectionMap<Dim, DataVector> data_for_neighbors{};
-  evolution::dg::subcell::prepare_neighbor_data<Metavariables<Dim>>(
-      make_not_null(&data_for_neighbors), make_not_null(&ghost_data_mesh),
-      make_not_null(&box), volume_fluxes);
+  ghost_variables_calls = 0;
+  evolution::dg::subcell::prepare_neighbor_data<
+      Metavariables<Dim, FixedActiveGrids>>(make_not_null(&data_for_neighbors),
+                                            make_not_null(&ghost_data_mesh),
+                                            make_not_null(&box), volume_fluxes);
 
+  // The directions in which data are prepared.
+  std::vector<Direction<Dim>> prepared_directions{};
+  for (const auto& direction : expected_neighbor_directions<Dim>()) {
+    if (not FixedActiveGrids or
+        directions_with_fd_neighbors.contains(direction)) {
+      prepared_directions.push_back(direction);
+    }
+  }
+  CHECK(data_for_neighbors.size() == prepared_directions.size());
+  if (prepared_directions.empty()) {
+    CHECK(ghost_variables_calls == 0);
+    CHECK_FALSE(ghost_data_mesh.has_value());
+    return;
+  }
+  CHECK(ghost_variables_calls == 1);
   CHECK(ghost_data_mesh.value() ==
         (all_neighbors_are_doing_dg ? dg_mesh : subcell_mesh));
+
+  if constexpr (FixedActiveGrids) {
+    DirectionMap<Dim, DataVector> original_data{};
+    std::optional<Mesh<Dim>> original_mesh{};
+    evolution::dg::subcell::prepare_neighbor_data<Metavariables<Dim, false>>(
+        make_not_null(&original_data), make_not_null(&original_mesh),
+        make_not_null(&box), volume_fluxes);
+    CHECK(ghost_data_mesh == original_mesh);
+    for (const auto& [direction, data] : data_for_neighbors) {
+      const auto& original = original_data.at(direction);
+      REQUIRE(data.size() == original.size());
+      CHECK(std::memcmp(data.data(), original.data(),
+                        data.size() * sizeof(double)) == 0);
+    }
+  }
 
   const auto& rdmp_tci_data =
       db::get<evolution::dg::subcell::Tags::DataForRdmpTci>(box);
@@ -301,10 +367,9 @@ void test(const bool all_neighbors_are_doing_dg,
     // Set all directions to false, enable the desired ones below
     std::unordered_set<Direction<Dim>> directions_to_slice{};
 
-    REQUIRE(data_for_neighbors.size() == Dim);
     const size_t num_ghost_points =
         subcell_mesh.slice_away(0).number_of_grid_points() * ghost_zone_size;
-    for (const auto& direction : expected_neighbor_directions<Dim>()) {
+    for (const auto& direction : prepared_directions) {
       REQUIRE(data_for_neighbors.contains(direction));
       REQUIRE(data_for_neighbors.at(direction).size() ==
               num_ghost_points * (need_fluxes ? (Dim + 1) : 1) + 2);
@@ -335,17 +400,19 @@ void test(const bool all_neighbors_are_doing_dg,
     }();
     if constexpr (Dim == 3) {
       const auto direction = expected_neighbor_directions<Dim>()[1];
-      Index<Dim> slice_extents = subcell_mesh.extents();
-      slice_extents[direction.dimension()] = ghost_zone_size;
-      const auto& neighbor_element_id =
-          *element.neighbors().at(direction).begin();
-      expected_neighbor_data.at(direction) = orient_variables(
-          expected_neighbor_data.at(direction), slice_extents,
-          element.neighbors().at(direction).orientation(neighbor_element_id));
+      if (directions_to_slice.contains(direction)) {
+        Index<Dim> slice_extents = subcell_mesh.extents();
+        slice_extents[direction.dimension()] = ghost_zone_size;
+        const auto& neighbor_element_id =
+            *element.neighbors().at(direction).begin();
+        expected_neighbor_data.at(direction) = orient_variables(
+            expected_neighbor_data.at(direction), slice_extents,
+            element.neighbors().at(direction).orientation(neighbor_element_id));
+      }
     }
   }
 
-  for (const auto& direction : expected_neighbor_directions<Dim>()) {
+  for (const auto& direction : prepared_directions) {
     CAPTURE(direction);
     const auto& data_in_direction = data_for_neighbors.at(direction);
     CHECK_ITERABLE_APPROX(
@@ -354,6 +421,27 @@ void test(const bool all_neighbors_are_doing_dg,
                     data_in_direction.size() - 2}));
     CHECK(*std::prev(data_in_direction.end(), 2) == approx(1.0));
     CHECK(*std::prev(data_in_direction.end(), 1) == approx(-1.0));
+  }
+}
+
+// Without fixed active grids (all directions are prepared), and with fixed
+// active grids for every subset of the directions with neighbors using finite
+// differences.
+template <size_t Dim>
+void test_all_subsets(const bool all_neighbors_are_doing_dg,
+                      const ::fd::DerivativeOrder fd_derivative_order) {
+  const auto directions = expected_neighbor_directions<Dim>();
+  test<Dim, false>(all_neighbors_are_doing_dg, fd_derivative_order, {});
+  for (size_t subset = 0; subset < two_to_the(directions.size()); ++subset) {
+    std::unordered_set<Direction<Dim>> directions_with_fd_neighbors{};
+    for (size_t i = 0; i < directions.size(); ++i) {
+      if (((subset >> i) & 1_st) == 1) {
+        directions_with_fd_neighbors.insert(directions[i]);
+      }
+    }
+    CAPTURE(subset);
+    test<Dim, true>(all_neighbors_are_doing_dg, fd_derivative_order,
+                    directions_with_fd_neighbors);
   }
 }
 }  // namespace
@@ -365,8 +453,8 @@ SPECTRE_TEST_CASE("Unit.Evolution.Subcell.PrepareNeighborData",
        cartesian_product(std::array{true, false},
                          std::array{::fd::DerivativeOrder::Two,
                                     ::fd::DerivativeOrder::Four})) {
-    test<1>(all_neighbors_are_doing_dg, fd_deriv_order);
-    test<2>(all_neighbors_are_doing_dg, fd_deriv_order);
-    test<3>(all_neighbors_are_doing_dg, fd_deriv_order);
+    test_all_subsets<1>(all_neighbors_are_doing_dg, fd_deriv_order);
+    test_all_subsets<2>(all_neighbors_are_doing_dg, fd_deriv_order);
+    test_all_subsets<3>(all_neighbors_are_doing_dg, fd_deriv_order);
   }
 }

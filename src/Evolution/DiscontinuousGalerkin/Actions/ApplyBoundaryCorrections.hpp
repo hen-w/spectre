@@ -22,6 +22,7 @@
 #include "DataStructures/TaggedTuple.hpp"
 #include "DataStructures/Tensor/EagerMath/Magnitude.hpp"
 #include "Domain/FaceNormal.hpp"
+#include "Domain/Structure/DirectionalId.hpp"
 #include "Domain/Structure/DirectionalIdMap.hpp"
 #include "Domain/Structure/Element.hpp"
 #include "Domain/Structure/ElementId.hpp"
@@ -97,6 +98,9 @@ template <size_t VolumeDim>
 void receive_subcell_data_for_dg(
     gsl::not_null<db::Access*> box, const DirectionalId<VolumeDim>& mortar_id,
     const evolution::dg::BoundaryData<VolumeDim>& received_mortar_data);
+template <typename DbTagsList, size_t Dim>
+bool neighbor_uses_subcell(const db::DataBox<DbTagsList>& box,
+                           const DirectionalId<Dim>& neighbor_id);
 }  // namespace evolution::dg::subcell
 /// \endcond
 
@@ -117,6 +121,29 @@ struct TemporaryReference {
   using tag = Tag;
   using type = const Type&;
 };
+
+// Whether an element using DG stores the subcell ghost data received from the
+// neighbor `neighbor_id`: always, unless the active grids are fixed at
+// initialization, in which case only the ghost data of neighbors using finite
+// differences, as neighbors using DG send none.
+template <typename Metavariables, typename DbTagsList, size_t Dim>
+bool stores_ghost_data_of_neighbor(
+    [[maybe_unused]] const db::DataBox<DbTagsList>& box,
+    [[maybe_unused]] const DirectionalId<Dim>& neighbor_id,
+    [[maybe_unused]] const evolution::dg::BoundaryData<Dim>& received_data) {
+  if constexpr (active_grids_fixed_at_initialization_v<Metavariables>) {
+    if (evolution::dg::subcell::neighbor_uses_subcell(box, neighbor_id)) {
+      return true;
+    }
+    ASSERT(not received_data.ghost_cell_data.has_value(),
+           "The neighbor " << neighbor_id
+                           << " uses DG according to the neighbor active "
+                              "grids but sent ghost data.");
+    return false;
+  } else {
+    return true;
+  }
+}
 }  // namespace detail
 
 /// Move boundary data from the inbox to the DataBox.  Returns true if
@@ -260,7 +287,9 @@ bool receive_boundary_data(
         if (mortar_infos.at(mortar_id).time_stepping_policy() ==
                 TimeSteppingPolicy::EqualRate and
             mortar_infos.at(mortar_id).interface_data_policy() !=
-                InterfaceDataPolicy::NonconformingNeighborInterpolates) {
+                InterfaceDataPolicy::NonconformingNeighborInterpolates and
+            detail::stores_ghost_data_of_neighbor<Metavariables>(
+                *box, received_mortar_id, received_mortar_data)) {
           evolution::dg::subcell::receive_subcell_data_for_dg<volume_dim>(
               &db::as_access(*box), received_mortar_id, received_mortar_data);
         }
@@ -625,8 +654,11 @@ bool receive_boundary_data(
         if (time_stepping_policy == TimeSteppingPolicy::EqualRate and
             mortar_infos.at(mortar_id).interface_data_policy() !=
                 InterfaceDataPolicy::NonconformingNeighborInterpolates) {
-          evolution::dg::subcell::receive_subcell_data_for_dg<volume_dim>(
-              &db::as_access(*box), received_mortar_id, received_mortar_data);
+          if (detail::stores_ghost_data_of_neighbor<Metavariables>(
+                  *box, received_mortar_id, received_mortar_data)) {
+            evolution::dg::subcell::receive_subcell_data_for_dg<volume_dim>(
+                &db::as_access(*box), received_mortar_id, received_mortar_data);
+          }
           evolution::dg::subcell::neighbor_tci_decision<volume_dim>(
               make_not_null(&db::as_access(*box)), received_mortar_id,
               received_mortar_data);

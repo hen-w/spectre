@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <unordered_set>
 #include <utility>
 
 #include "DataStructures/DataBox/DataBox.hpp"
@@ -15,11 +16,13 @@
 #include "DataStructures/Index.hpp"
 #include "Domain/Structure/Direction.hpp"
 #include "Domain/Structure/DirectionMap.hpp"
+#include "Domain/Structure/DirectionalId.hpp"
 #include "Domain/Structure/Element.hpp"
 #include "Domain/Structure/ElementId.hpp"
 #include "Domain/Structure/OrientationMapHelpers.hpp"
 #include "Domain/Tags.hpp"
 #include "Domain/Tags/NeighborMesh.hpp"
+#include "Evolution/DgSubcell/InitialActiveGrid.hpp"
 #include "Evolution/DgSubcell/Projection.hpp"
 #include "Evolution/DgSubcell/RdmpTci.hpp"
 #include "Evolution/DgSubcell/RdmpTciData.hpp"
@@ -29,6 +32,7 @@
 #include "Evolution/DgSubcell/Tags/Interpolators.hpp"
 #include "Evolution/DgSubcell/Tags/Mesh.hpp"
 #include "Evolution/DgSubcell/Tags/SubcellOptions.hpp"
+#include "Evolution/DiscontinuousGalerkin/UsingSubcell.hpp"
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
 #include "Utilities/Algorithm.hpp"
 #include "Utilities/ErrorHandling/Assert.hpp"
@@ -57,6 +61,14 @@ namespace evolution::dg::subcell {
  * vs. just projecting to the ghost cells. Another optimization is to always
  * send DG volume data to neighbors that we think are doing DG, so that we can
  * elide any slicing or projection cost in that direction.
+ *
+ * If the active grids are fixed at initialization
+ * (`evolution::dg::active_grids_fixed_at_initialization_v<Metavariables>`),
+ * neighbors using DG need no ghost data: the data are prepared as above (the
+ * choice between volume data and sliced data still depends on all neighbor
+ * meshes), but only in the directions with a neighbor using finite
+ * differences (`subcell::Tags::NeighborActiveGrids`). If there is no such
+ * direction, nothing is computed and `ghost_data_mesh` is left unchanged.
  */
 template <typename Metavariables, typename DbTagsList, size_t Dim>
 void prepare_neighbor_data(
@@ -72,8 +84,27 @@ void prepare_neighbor_data(
       db::get<::evolution::dg::subcell::Tags::Mesh<Dim>>(*box);
   const auto& element = db::get<::domain::Tags::Element<Dim>>(*box);
 
+  std::unordered_set<Direction<Dim>> directions_with_subcell_neighbors{};
+  if constexpr (evolution::dg::active_grids_fixed_at_initialization_v<
+                    Metavariables>) {
+    for (const auto& direction_and_neighbors : element.neighbors()) {
+      const Direction<Dim>& direction = direction_and_neighbors.first;
+      if (alg::any_of(direction_and_neighbors.second,
+                      [&box, &direction](const ElementId<Dim>& neighbor) {
+                        return neighbor_uses_subcell(
+                            *box, DirectionalId<Dim>{direction, neighbor});
+                      })) {
+        directions_with_subcell_neighbors.insert(direction);
+      }
+    }
+    if (directions_with_subcell_neighbors.empty()) {
+      return;
+    }
+  }
   const std::unordered_set<Direction<Dim>>& directions_to_slice =
-      element.internal_boundaries();
+      evolution::dg::active_grids_fixed_at_initialization_v<Metavariables>
+          ? directions_with_subcell_neighbors
+          : element.internal_boundaries();
 
   const auto& neighbor_meshes = db::get<domain::Tags::NeighborMesh<Dim>>(*box);
   const subcell::RdmpTciData& rdmp_data =
@@ -157,6 +188,10 @@ void prepare_neighbor_data(
     for (const auto& [directional_element_id, interpolator] :
          db::get<evolution::dg::subcell::Tags::InterpolatorsFromDgToNeighborFd<
              Dim>>(*box)) {
+      if (not directions_to_slice.contains(
+              directional_element_id.direction())) {
+        continue;
+      }
       // NOTE: no orienting is needed, that's done by the interpolation.
       ASSERT(interpolator.has_value(),
              "All interpolators must have values. The std::optional is used "
@@ -174,7 +209,7 @@ void prepare_neighbor_data(
   // Note: The RDMP TCI data must be filled by the TCIs before getting to this
   // call. That means once in the initial data and then in both the DG and FD
   // TCIs.
-  for (const auto& [direction, neighbors] : element.neighbors()) {
+  for (const auto& direction : directions_to_slice) {
     // Add the RDMP TCI data to what we will be sending.
     // Note that this is added _after_ the reconstruction data has been
     // re-oriented (in the case where we have neighbors doing FD).

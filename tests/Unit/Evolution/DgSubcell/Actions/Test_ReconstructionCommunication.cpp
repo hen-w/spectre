@@ -130,7 +130,8 @@ struct component {
           ExtraTesting,
           tmpl::list<evolution::dg::subcell::Tags::
                          InterpolatorsFromDgToNeighborFd<Dim>,
-                     ::domain::Tags::ElementMap<Dim, Frame::Grid>>,
+                     ::domain::Tags::ElementMap<Dim, Frame::Grid>,
+                     evolution::dg::subcell::Tags::NeighborActiveGrids<Dim>>,
           tmpl::list<>>,
       evolution::dg::subcell::Tags::ExtensionDirections<Dim>,
       evolution::dg::subcell::Tags::SubcellOptions<Dim>>>;
@@ -157,9 +158,10 @@ struct component {
 };
 
 template <size_t Dim, bool UseNodegroupDgElements, bool ExtraTesting = false,
-          bool IsAuxiliary = false>
+          bool IsAuxiliary = false, bool FixedActiveGrids = false>
 struct Metavariables {
   static constexpr size_t volume_dim = Dim;
+  static constexpr bool is_auxiliary = IsAuxiliary;
   using component_list = tmpl::list<component<Dim, Metavariables,
                                               UseNodegroupDgElements,
                                               ExtraTesting, IsAuxiliary>>;
@@ -173,6 +175,9 @@ struct Metavariables {
   static bool ghost_data_mutator_invoked;
 
   struct SubcellOptions {
+    static constexpr bool active_grids_fixed_at_initialization =
+        FixedActiveGrids;
+
     template <typename DbTagsList>
     static constexpr size_t ghost_zone_size(
         const db::DataBox<DbTagsList>& box) {
@@ -201,16 +206,16 @@ struct Metavariables {
 };
 
 template <size_t Dim, bool UseNodegroupDgElements, bool ExtraTesting,
-          bool IsAuxiliary>
+          bool IsAuxiliary, bool FixedActiveGrids>
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
-bool Metavariables<Dim, UseNodegroupDgElements, ExtraTesting,
-                   IsAuxiliary>::ghost_zone_size_invoked = false;
+bool Metavariables<Dim, UseNodegroupDgElements, ExtraTesting, IsAuxiliary,
+                   FixedActiveGrids>::ghost_zone_size_invoked = false;
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 template <size_t Dim, bool UseNodegroupDgElements, bool ExtraTesting,
-          bool IsAuxiliary>
+          bool IsAuxiliary, bool FixedActiveGrids>
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
-bool Metavariables<Dim, UseNodegroupDgElements, ExtraTesting,
-                   IsAuxiliary>::ghost_data_mutator_invoked = false;
+bool Metavariables<Dim, UseNodegroupDgElements, ExtraTesting, IsAuxiliary,
+                   FixedActiveGrids>::ghost_data_mutator_invoked = false;
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 template <size_t Dim, bool UseNodegroupDgElements>
@@ -729,7 +734,7 @@ DataVector compute_expected_ghost_data(
     const Variables<tmpl::list<Var1>>& evolved_vars,
     const evolution::dg::subcell::RdmpTciData& rdmp_tci_data,
     const TimeStepId time_step_id, const size_t ghost_zone_size) {
-  using comp = component<Dim, MetaVars, UseNodegroupDgElements, true>;
+  using comp = tmpl::front<typename MetaVars::component_list>;
   using CellCenteredFluxTag =
       evolution::dg::subcell::Tags::CellCenteredFlux<tmpl::list<Var1>, Dim>;
   using ActionTesting::get_databox_tag;
@@ -753,7 +758,8 @@ DataVector compute_expected_ghost_data(
         alg::find_if(
             ActionTesting::get_inbox_tag<
                 comp, evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
-                          Dim, UseNodegroupDgElements>>(runner, element_id)
+                          Dim, UseNodegroupDgElements, MetaVars::is_auxiliary>>(
+                runner, element_id)
                 .messages.at(time_step_id),
             [&](const auto& entry) {
               return entry.first ==
@@ -866,12 +872,23 @@ DataVector compute_expected_ghost_data(
 
 // Test ReceiveAndSendDataForReconstruction action
 // for both EnableExtensionDirections options.
-template <size_t Dim, bool UseNodegroupDgElements>
+//
+// With `FixedActiveGrids` (in the auxiliary exchange), the sender treats the
+// receiver as an element using DG: the receiver gets a message without ghost
+// data from the sender, directly or (with extension directions) after the
+// sender has received the data of its neighbors, and the sender computes no
+// ghost data for its forwarding. All other messages are unchanged.
+template <size_t Dim, bool UseNodegroupDgElements, bool IsAuxiliary = false,
+          bool FixedActiveGrids = false>
 void test_receive_and_send_data(const bool enable_extension,
                                 const bool use_cell_centered_flux) {
   CAPTURE(Dim);
   CAPTURE(enable_extension);
   CAPTURE(use_cell_centered_flux);
+  CAPTURE(IsAuxiliary);
+  CAPTURE(FixedActiveGrids);
+  using Inbox = evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
+      Dim, UseNodegroupDgElements, IsAuxiliary>;
   // create Sphere domain, and 4 releveant elements.
   domain::creators::register_derived_with_charm();
 
@@ -892,10 +909,12 @@ void test_receive_and_send_data(const bool enable_extension,
                               std::nullopt};
   auto domain = domain_creator.create_domain();
 
-  using metavars = Metavariables<Dim, UseNodegroupDgElements, true>;
+  using metavars = Metavariables<Dim, UseNodegroupDgElements, true, IsAuxiliary,
+                                 FixedActiveGrids>;
   metavars::ghost_zone_size_invoked = false;
   metavars::ghost_data_mutator_invoked = false;
-  using comp = component<Dim, metavars, UseNodegroupDgElements, true>;
+  using comp =
+      component<Dim, metavars, UseNodegroupDgElements, true, IsAuxiliary>;
   using MockRuntimeSystem = ActionTesting::MockRuntimeSystem<metavars>;
   MockRuntimeSystem runner{{std::move(domain_creator.create_domain())}};
 
@@ -994,12 +1013,19 @@ void test_receive_and_send_data(const bool enable_extension,
     MortarData mortar_data{};
     MortarMesh mortar_mesh{};
     MortarNextId mortar_next_id{};
+    typename evolution::dg::subcell::Tags::NeighborActiveGrids<Dim>::type
+        neighbor_active_grids{};
 
     for (const auto& [direction, neighbors] : element->neighbors()) {
       for (const auto& neighbor_id : neighbors.ids()) {
         const DirectionalId<Dim> mortar_id{direction, neighbor_id};
         neighbor_data[mortar_id] = evolution::dg::subcell::GhostData{};
         neighbor_decision.insert(std::pair{mortar_id, 100});
+        neighbor_active_grids.emplace(
+            mortar_id,
+            (element_id == sender.id() and neighbor_id == receiver.id())
+                ? evolution::dg::subcell::ActiveGrid::Dg
+                : evolution::dg::subcell::ActiveGrid::Subcell);
 
         mortar_info[mortar_id] = evolution::dg::MortarInfo<Dim>{
             {.time_stepping_policy =
@@ -1028,7 +1054,7 @@ void test_receive_and_send_data(const bool enable_extension,
          cell_centered_flux, fd_to_neighbor_fd_interpolants,
          neighbor_dg_to_fd_interpolants, dg_to_neighbor_fd_interpolants,
          ElementMap<3, Frame::Grid>{element_id, blocks[element_id.block_id()]},
-         extension_directions, subcell_options});
+         neighbor_active_grids, extension_directions, subcell_options});
   }
 
   // SetInterpolator
@@ -1068,18 +1094,26 @@ void test_receive_and_send_data(const bool enable_extension,
             runner, element_id)
             .size();
     const size_t received_data_size =
-        ActionTesting::get_inbox_tag<
-            comp, evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
-                      Dim, UseNodegroupDgElements>>(runner, element_id)
+        ActionTesting::get_inbox_tag<comp, Inbox>(runner, element_id)
             .messages.at(time_step_id)
             .size();
     REQUIRE(received_data_size == (neighbor_size - extension_directions_size));
   }
 
-  // ReceiveAndSendDataForReconstruction
+  // ReceiveAndSendDataForReconstruction: the ghost data are computed by the
+  // elements with extension directions, except by the sender if its only
+  // problematic neighbor (the receiver) is treated as using DG.
   for (const auto* element : elements) {
     const auto& element_id = element->id();
+    metavars::ghost_data_mutator_invoked = false;
     ActionTesting::next_action<comp>(make_not_null(&runner), element_id);
+    const bool forwards =
+        not get_databox_tag<
+                comp, evolution::dg::subcell::Tags::ExtensionDirections<Dim>>(
+                runner, element_id)
+                .empty();
+    CHECK(metavars::ghost_data_mutator_invoked ==
+          (forwards and not(FixedActiveGrids and element_id == sender.id())));
   }
   // The inbox size should match the neighbor size at this point for
   // all elements, regardless of the enable_extension option.
@@ -1089,9 +1123,7 @@ void test_receive_and_send_data(const bool enable_extension,
     const auto& element_id = element->id();
     const size_t neighbor_size = element->neighbors().size();
     const size_t received_data_size =
-        ActionTesting::get_inbox_tag<
-            comp, evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
-                      Dim, UseNodegroupDgElements>>(runner, element_id)
+        ActionTesting::get_inbox_tag<comp, Inbox>(runner, element_id)
             .messages.at(time_step_id)
             .size();
     REQUIRE(received_data_size == neighbor_size);
@@ -1104,15 +1136,23 @@ void test_receive_and_send_data(const bool enable_extension,
       const Direction<Dim> direction_from_neighbor =
           orientation(direction.opposite());
       const auto& neighbor_element = *(id_to_element.at(*neighbor_id));
-      const auto& ghost_data =
+      const auto& received_data =
           alg::find_if(
-              ActionTesting::get_inbox_tag<
-                  comp,
-                  evolution::dg::Tags::BoundaryCorrectionAndGhostCellsInbox<
-                      Dim, UseNodegroupDgElements>>(runner, element_id)
+              ActionTesting::get_inbox_tag<comp, Inbox>(runner, element_id)
                   .messages.at(time_step_id),
               [&](const auto& entry) { return entry.first == directional_id; })
-              ->second.ghost_cell_data.value();
+              ->second;
+      CHECK(received_data.volume_mesh == dg_mesh);
+      CHECK(received_data.validity_range == next_time_step_id);
+      CHECK(received_data.tci_status == self_tci_decision);
+      if (FixedActiveGrids and element_id == receiver.id() and
+          *neighbor_id == sender.id()) {
+        CHECK_FALSE(received_data.ghost_cell_data.has_value());
+        CHECK_FALSE(received_data.volume_mesh_ghost_cell_data.has_value());
+        continue;
+      }
+      CHECK(received_data.volume_mesh_ghost_cell_data == subcell_mesh);
+      const DataVector& ghost_data = received_data.ghost_cell_data.value();
       const DataVector expected_ghost_data =
           compute_expected_ghost_data<Dim, UseNodegroupDgElements>(
               runner, neighbor_element, direction_from_neighbor, subcell_mesh,
@@ -1122,9 +1162,13 @@ void test_receive_and_send_data(const bool enable_extension,
     }
   }
 
-  // ReceiveDataForReconstruction
+  // ReceiveDataForReconstruction (not by the receiver treated as using DG,
+  // which would discard the data)
   for (const auto* element : elements) {
     const auto& element_id = element->id();
+    if (FixedActiveGrids and element_id == receiver.id()) {
+      continue;
+    }
     ActionTesting::next_action<comp>(make_not_null(&runner), element_id);
   }
 }
@@ -1268,6 +1312,9 @@ SPECTRE_TEST_CASE("Unit.Evolution.Subcell.Actions.ReconstructionCommunication",
     test<3, false>(use_cell_centered_flux);
     test_receive_and_send_data<3, false>(false, use_cell_centered_flux);
     test_receive_and_send_data<3, false>(true, use_cell_centered_flux);
+  }
+  for (const bool enable_extension : {false, true}) {
+    test_receive_and_send_data<3, false, true, true>(enable_extension, false);
   }
   test_inbox_routing<1, false, true>();
   test_inbox_routing<1, false, false>();

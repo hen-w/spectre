@@ -41,7 +41,10 @@ namespace Ccz4::GradientProjection {
  *   `Ccz4::fd::SoTimeDerivative` and same-time Kreiss-Oliger dissipation.
  *
  * Every element sends both exchanges to all its neighbors; how they are
- * consumed depends only on the receiver's method. Each exchange replaces all
+ * consumed depends only on the receiver's method. With the active grids fixed
+ * at initialization (`evolution::dg::active_grids_fixed_at_initialization`),
+ * the messages to elements using DG carry no ghost data in the first exchange,
+ * nor from DG elements in the second. Each exchange replaces all
  * ghost data of a finite-difference element, so after each exchange the
  * element adds the ghost data of its external boundaries from the boundary
  * conditions (`Ccz4::fd::Actions::SetBoundaryConditionGhostData`), at the

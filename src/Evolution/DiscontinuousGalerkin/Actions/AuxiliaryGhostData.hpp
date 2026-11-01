@@ -48,8 +48,11 @@ namespace evolution::dg::Actions {
  * The data sent are those of the `ComputeTimeDerivative` send (the ghost data
  * from `Metavariables::SubcellOptions::GhostVariables`, the oriented volume
  * mesh, the ghost-data mesh, the TCI decision, the integration order and the
- * validity range), with empty boundary-correction mesh and data. The system
- * must have no fluxes, and only global time stepping is supported.
+ * validity range), with empty boundary-correction mesh and data. If the
+ * active grids are fixed at initialization
+ * (`evolution::dg::active_grids_fixed_at_initialization`), neighbors using DG
+ * receive no ghost data and no ghost-data mesh. The system must have no
+ * fluxes, and only global time stepping is supported.
  */
 template <size_t Dim, typename EvolutionSystem, bool UseNodegroupDgElements>
 struct SendAuxiliaryGhostData {

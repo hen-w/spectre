@@ -291,14 +291,14 @@ struct SetActiveGridForTest {
 };
 
 // As in EvolveCcz4 (with the active grid of the periodic brick fixed after
-// SetSubcellGrid, and the time-stepping, filter and dense-trigger items given
-// directly).
+// SetSubcellGrid, the neighbor active grids set only with fixed active grids,
+// and the time-stepping, filter and dense-trigger items given directly).
 template <typename Metavariables>
 using initialization_actions = tmpl::flatten<tmpl::list<
     Initialization::Actions::InitializeItems<
         evolution::dg::Initialization::Domain<Metavariables>>,
     evolution::dg::subcell::Actions::SetSubcellGrid<3, system, true>,
-    typename Metavariables::set_active_grid,
+    typename Metavariables::after_set_subcell_grid,
     gp::Actions::CheckFiniteDifferenceOptions,
     ::Actions::MutateApply<evolution::dg::subcell::SetInterpolators<
         3, Ccz4::fd::Tags::Reconstructor>>,
@@ -342,14 +342,24 @@ struct Component {
 };
 
 // The periodic brick, or (`OnLattice`) the lattice with external boundaries.
-template <bool OnLattice>
+// With `FixedActiveGrids` (only on the lattice, where SetSubcellGrid selects
+// the active grids), ghost data are sent only to the neighbors that use them.
+template <bool OnLattice, bool FixedActiveGrids = false>
 struct MetavariablesImpl {
+  static_assert(OnLattice or not FixedActiveGrids,
+                "The active grids of the brick are set by the test, not by "
+                "SetSubcellGrid.");
   static constexpr size_t volume_dim = 3;
   static constexpr bool local_time_stepping = false;
   using system = gp::System;
   using component_list = tmpl::list<Component<MetavariablesImpl>>;
-  using set_active_grid =
-      tmpl::conditional_t<OnLattice, tmpl::list<>, SetActiveGridForTest>;
+  using after_set_subcell_grid = tmpl::conditional_t<
+      OnLattice,
+      tmpl::conditional_t<
+          FixedActiveGrids,
+          evolution::dg::subcell::Actions::SetNeighborActiveGrids<3>,
+          tmpl::list<>>,
+      SetActiveGridForTest>;
   static std::vector<ElementId<3>> element_ids() {
     return OnLattice ? lattice_ids() : all_ids();
   }
@@ -363,6 +373,8 @@ struct MetavariablesImpl {
   struct SubcellOptions {
     static constexpr bool subcell_enabled = true;
     static constexpr bool subcell_enabled_at_external_boundary = OnLattice;
+    static constexpr bool active_grids_fixed_at_initialization =
+        FixedActiveGrids;
     template <typename DbTagsList>
     static constexpr size_t ghost_zone_size(
         const db::DataBox<DbTagsList>& box) {
@@ -396,6 +408,9 @@ using lattice_component = Component<LatticeMetavariables>;
 using MockRuntimeSystem = ActionTesting::MockRuntimeSystem<Metavariables>;
 using LatticeRuntimeSystem =
     ActionTesting::MockRuntimeSystem<LatticeMetavariables>;
+using FixedLatticeMetavariables = MetavariablesImpl<true, true>;
+using FixedLatticeRuntimeSystem =
+    ActionTesting::MockRuntimeSystem<FixedLatticeMetavariables>;
 
 template <typename Tag, typename Metavars>
 const auto& get_tag(const ActionTesting::MockRuntimeSystem<Metavars>& runner,
@@ -1091,18 +1106,131 @@ void test_external_boundaries() {
   }
 }
 
-// [[TimeOut, 10]]
-SPECTRE_TEST_CASE(
-    "Unit.Evolution.Systems.Ccz4.GradientProjection.HybridStepActions",
-    "[Unit][Evolution]") {
+template <typename T>
+bool bitwise_equal(const T& lhs, const T& rhs) {
+  for (size_t i = 0; i < lhs.size(); ++i) {
+    REQUIRE(std::isfinite(lhs.data()[i]));
+  }
+  return lhs.size() == rhs.size() and
+         (lhs.size() == 0 or std::memcmp(lhs.data(), rhs.data(),
+                                         lhs.size() * sizeof(double)) == 0);
+}
+
+// On the lattice, through the self-start and two steps: with the active
+// grids fixed at initialization, the neighbor active grids of every element
+// hold the active grids that SetSubcellGrid selected for its neighbors, the
+// elements using DG store the ghost data of their finite-difference neighbors
+// only, every exchange is consumed, and the evolution is bitwise that of the
+// default sends of all ghost data. The lattice has FD-FD, FD-DG and DG-DG
+// interfaces, and the elements next to the DG-only block use DG.
+void test_fixed_active_grids() {
+  const auto make_cache_for =
+      []<typename Metavars>(tmpl::type_<Metavars> /*meta*/) {
+        return make_cache<Metavars>(
+            lattice(), std::make_unique<KerrSchild>(kerr_schild()),
+            std::vector<std::string>{lattice().block_names()[3]});
+      };
+  LatticeRuntimeSystem default_runner{
+      make_cache_for(tmpl::type_<LatticeMetavariables>{}),
+      tuples::TaggedTuple<domain::Tags::FunctionsOfTimeInitialize>{}};
+  FixedLatticeRuntimeSystem fixed_runner{
+      make_cache_for(tmpl::type_<FixedLatticeMetavariables>{}),
+      tuples::TaggedTuple<domain::Tags::FunctionsOfTimeInitialize>{}};
+  initialize_elements(make_not_null(&default_runner), lattice(),
+                      uses_dg_in_lattice);
+  initialize_elements(make_not_null(&fixed_runner), lattice(),
+                      uses_dg_in_lattice);
+
+  for (const auto& id : lattice_ids()) {
+    CAPTURE(id);
+    const auto& element = get_tag<domain::Tags::Element<3>>(fixed_runner, id);
+    const auto& neighbor_active_grids =
+        get_tag<evolution::dg::subcell::Tags::NeighborActiveGrids<3>>(
+            fixed_runner, id);
+    CHECK(neighbor_active_grids.size() == element.number_of_neighbors());
+    for (const auto& [direction, neighbors] : element.neighbors()) {
+      for (const auto& neighbor : neighbors) {
+        CHECK(neighbor_active_grids.at(DirectionalId<3>{direction, neighbor}) ==
+              get_tag<evolution::dg::subcell::Tags::ActiveGrid>(fixed_runner,
+                                                                neighbor));
+      }
+    }
+  }
+
+  const size_t schedule = 2;
+  self_start(make_not_null(&default_runner), schedule);
+  self_start(make_not_null(&fixed_runner), schedule);
+  for (size_t steps = 1; steps <= 2; ++steps) {
+    run_until(make_not_null(&default_runner), schedule,
+              completed(default_runner, steps));
+    run_until(make_not_null(&fixed_runner), schedule,
+              completed(fixed_runner, steps));
+    check_inboxes_empty(fixed_runner);
+    for (const auto& id : lattice_ids()) {
+      CAPTURE(steps);
+      CAPTURE(id);
+      CHECK(bitwise_equal(get_tag<variables_tag>(fixed_runner, id),
+                          get_tag<variables_tag>(default_runner, id)));
+      CHECK(bitwise_equal(get_tag<dt_variables_tag>(fixed_runner, id),
+                          get_tag<dt_variables_tag>(default_runner, id)));
+      // The ghost data of the neighbors (the external entries of the
+      // finite-difference elements hold uninitialized gradients).
+      const auto& ghost_data =
+          get_tag<evolution::dg::subcell::Tags::GhostDataForReconstruction<3>>(
+              fixed_runner, id);
+      const auto& default_ghost_data =
+          get_tag<evolution::dg::subcell::Tags::GhostDataForReconstruction<3>>(
+              default_runner, id);
+      const auto& element = get_tag<domain::Tags::Element<3>>(fixed_runner, id);
+      size_t number_of_entries =
+          uses_dg_in_lattice(id) ? 0 : element.external_boundaries().size();
+      for (const auto& [direction, neighbors] : element.neighbors()) {
+        for (const auto& neighbor : neighbors) {
+          CAPTURE(neighbor);
+          const DirectionalId<3> key{direction, neighbor};
+          REQUIRE(default_ghost_data.contains(key));
+          if (uses_dg_in_lattice(id) and uses_dg_in_lattice(neighbor)) {
+            CHECK_FALSE(ghost_data.contains(key));
+            continue;
+          }
+          ++number_of_entries;
+          REQUIRE(ghost_data.contains(key));
+          CHECK(bitwise_equal(
+              ghost_data.at(key).neighbor_ghost_data_for_reconstruction(),
+              default_ghost_data.at(key)
+                  .neighbor_ghost_data_for_reconstruction()));
+        }
+      }
+      CHECK(ghost_data.size() == number_of_entries);
+    }
+  }
+}
+
+void register_classes() {
   domain::creators::register_derived_with_charm();
   register_factory_classes_with_charm<Metavariables>();
   register_classes_with_charm<TimeSteppers::AdamsBashforth>();
   register_classes_with_charm<Filters::runtime::None<3, variables_tags>>();
   Ccz4::fd::register_derived_with_charm();
   ConstraintDamping::register_derived_with_charm();
+}
+
+// [[TimeOut, 10]]
+SPECTRE_TEST_CASE(
+    "Unit.Evolution.Systems.Ccz4.GradientProjection.HybridStepActions",
+    "[Unit][Evolution]") {
+  register_classes();
   test_minkowski(1);
   test_smooth_state();
   test_external_boundaries();
+}
+
+// [[TimeOut, 10]]
+SPECTRE_TEST_CASE(
+    "Unit.Evolution.Systems.Ccz4.GradientProjection.HybridStepActions."
+    "FixedActiveGrids",
+    "[Unit][Evolution]") {
+  register_classes();
+  test_fixed_active_grids();
 }
 }  // namespace

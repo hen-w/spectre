@@ -268,6 +268,12 @@ struct EvolutionMetavars {
     // of these boundaries from the boundary conditions
     // (Ccz4::fd::BoundaryConditionGhostData).
     static constexpr bool subcell_enabled_at_external_boundary = true;
+    // The numerical method of every element is the one selected at
+    // initialization (there is no troubled-cell indicator and no AMR), so
+    // ghost data are sent only where they are used: elements using DG
+    // receive none from their DG neighbors and none in the first exchange
+    // (see evolution::dg::active_grids_fixed_at_initialization).
+    static constexpr bool active_grids_fixed_at_initialization = use_dg_subcell;
 
     // We send `ghost_zone_size` cell-centered grid points for variable
     // reconstruction, of which we need `ghost_zone_size-1` for reconstruction
@@ -313,6 +319,8 @@ struct EvolutionMetavars {
           tmpl::list<
               evolution::dg::subcell::Actions::SetSubcellGrid<volume_dim,
                                                               system, true>,
+              evolution::dg::subcell::Actions::SetNeighborActiveGrids<
+                  volume_dim>,
               Ccz4::GradientProjection::Actions::CheckFiniteDifferenceOptions,
               Actions::MutateApply<evolution::dg::subcell::SetInterpolators<
                   volume_dim, Ccz4::fd::Tags::Reconstructor>>,

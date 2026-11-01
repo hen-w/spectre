@@ -77,6 +77,8 @@ void test(const bool moving_mesh) {
       subcell::Tags::GhostZoneInverseJacobian<Dim>>("GhostZoneInverseJacobian");
   TestHelpers::db::test_simple_tag<subcell::Tags::NeighborTciDecisions<Dim>>(
       "NeighborTciDecisions");
+  TestHelpers::db::test_simple_tag<subcell::Tags::NeighborActiveGrids<Dim>>(
+      "NeighborActiveGrids");
   TestHelpers::db::test_simple_tag<subcell::Tags::DataForRdmpTci>(
       "DataForRdmpTci");
   TestHelpers::db::test_simple_tag<

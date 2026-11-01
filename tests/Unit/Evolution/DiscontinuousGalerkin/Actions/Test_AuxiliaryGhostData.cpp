@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -74,6 +75,7 @@
 #include "Time/Tags/TimeStepId.hpp"
 #include "Time/Time.hpp"
 #include "Time/TimeStepId.hpp"
+#include "Utilities/Algorithm.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/Literals.hpp"
 #include "Utilities/TMPL.hpp"
@@ -117,12 +119,16 @@ struct SendPhysicalFirst : db::SimpleTag {
 struct StepsCompleted : db::SimpleTag {
   using type = size_t;
 };
-// {step, pass, neighbor segment index, max |Var2| of the neighbor's data,
-// whether the message carried boundary-correction data}
+// {step, pass, neighbor segment index, max |Var2| of the neighbor's data (-1
+// without ghost data), whether the message carried boundary-correction data}
 struct Records : db::SimpleTag {
   using type = std::vector<std::array<double, 5>>;
 };
 }  // namespace TestTags
+
+// The number of ghost-data computations of all elements.
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+size_t ghost_variables_calls = 0;
 
 template <bool SendGradients>
 struct GhostVariablesImpl {
@@ -130,6 +136,7 @@ struct GhostVariablesImpl {
   using argument_tags = tmpl::list<VariablesTag>;
   static DataVector apply(const Variables<evolved_tags>& vars,
                           const size_t rdmp_size) {
+    ++ghost_variables_calls;
     DataVector buffer{vars.size() + rdmp_size, 0.0};
     Variables<evolved_tags> view{buffer.data(), vars.size()};
     get<Var1>(view) = get<Var1>(vars);
@@ -191,7 +198,8 @@ struct SendPhysicalIf {
 };
 
 // Stand-in for the receive of ApplyBoundaryCorrections (tested elsewhere):
-// wait for one physical message per neighbor, record and consume it.
+// wait for one physical message per neighbor, record and consume it. A
+// message has a ghost-data mesh if and only if it has ghost data.
 struct ReceivePhysical {
   template <typename DbTags, typename... InboxTags, typename ArrayIndex,
             typename ActionList, typename ParallelComponent,
@@ -218,11 +226,14 @@ struct ReceivePhysical {
     db::mutate<TestTags::Records>(
         [&received, &step](const auto records) {
           for (const auto& [sender, data] : received->second) {
-            REQUIRE(data.ghost_cell_data.has_value());
+            CHECK(data.volume_mesh_ghost_cell_data.has_value() ==
+                  data.ghost_cell_data.has_value());
             records->push_back(
                 {{static_cast<double>(step), 2.0,
                   static_cast<double>(sender.id().segment_id(0).index()),
-                  max_gradient(*data.ghost_cell_data, 2),
+                  data.ghost_cell_data.has_value()
+                      ? max_gradient(*data.ghost_cell_data, 2)
+                      : -1.0,
                   data.boundary_correction_data.has_value() ? 1.0 : 0.0}});
           }
         },
@@ -315,6 +326,7 @@ using initial_tags = tmpl::list<
     evolution::dg::subcell::Tags::InterpolatorsFromNeighborDgToFd<Dim>,
     evolution::dg::subcell::Tags::ExtensionDirections<Dim>,
     evolution::dg::subcell::Tags::SubcellOptions<Dim>,
+    evolution::dg::subcell::Tags::NeighborActiveGrids<Dim>,
     TestTags::SendPhysicalFirst, TestTags::StepsCompleted, TestTags::Records>;
 
 template <typename Metavariables>
@@ -377,7 +389,9 @@ using send_and_drain_actions = tmpl::list<
     evolution::dg::Actions::DrainAuxiliaryGhostData<Dim, false>,
     DeclarePhysicalInbox>;
 
-template <typename TestingActions>
+// With `FixedActiveGrids`, ghost data are sent only to the neighbors that use
+// them, according to `evolution::dg::subcell::Tags::NeighborActiveGrids`.
+template <typename TestingActions, bool FixedActiveGrids = false>
 struct Metavariables {
   static constexpr size_t volume_dim = Dim;
   using testing_actions = TestingActions;
@@ -388,6 +402,8 @@ struct Metavariables {
   struct SubcellOptions {
     static constexpr bool subcell_enabled = true;
     static constexpr bool subcell_enabled_at_external_boundary = false;
+    static constexpr bool active_grids_fixed_at_initialization =
+        FixedActiveGrids;
     template <typename DbTagsList>
     static constexpr size_t ghost_zone_size(
         const db::DataBox<DbTagsList>& box) {
@@ -416,13 +432,15 @@ evolution::dg::subcell::SubcellOptions subcell_options() {
 
 // Emplace an element with the given neighbors (and mortars on its DG faces).
 template <typename Comp, typename Runner>
-void emplace_element(const gsl::not_null<Runner*> runner,
-                     const ElementId<Dim>& id,
-                     const DirectionMap<Dim, Neighbors<Dim>>& neighbors,
-                     const Mesh<Dim>& dg_mesh,
-                     const evolution::dg::subcell::ActiveGrid active_grid,
-                     const bool send_physical_first, const double var1,
-                     const double var2, const int tci_decision) {
+void emplace_element(
+    const gsl::not_null<Runner*> runner, const ElementId<Dim>& id,
+    const DirectionMap<Dim, Neighbors<Dim>>& neighbors,
+    const Mesh<Dim>& dg_mesh,
+    const evolution::dg::subcell::ActiveGrid active_grid,
+    const bool send_physical_first, const double var1, const double var2,
+    const int tci_decision,
+    const evolution::dg::subcell::Tags::NeighborActiveGrids<Dim>::type&
+        neighbor_active_grids = {}) {
   const Element<Dim> element{id, neighbors};
   const Mesh<Dim> subcell_mesh = evolution::dg::subcell::fd::mesh(dg_mesh);
   const size_t number_of_points =
@@ -495,6 +513,7 @@ void emplace_element(const gsl::not_null<Runner*> runner,
            Dim>::type{},
        typename evolution::dg::subcell::Tags::ExtensionDirections<Dim>::type{},
        subcell_options(),
+       neighbor_active_grids,
        send_physical_first,
        0_st,
        typename TestTags::Records::type{}});
@@ -768,10 +787,14 @@ void test_drain_multiple_neighbors() {
 // elements exchange twice. Checks that nothing deadlocks, that the gradients
 // are zero in all first-exchange data and in all data sent by DG elements and
 // are the actual FD gradients in the second exchange, and that all inboxes
-// are empty at the end.
+// are empty at the end. With `FixedActiveGrids`, the DG elements receive no
+// ghost data from their DG neighbors, all other data are the same, and the
+// first DG element, whose only neighbor uses DG, computes no ghost data.
+template <bool FixedActiveGrids>
 void test_chain(const size_t schedule) {
   CAPTURE(schedule);
-  using metavars = Metavariables<chain_actions>;
+  CAPTURE(FixedActiveGrids);
+  using metavars = Metavariables<chain_actions, FixedActiveGrids>;
   using comp = Component<metavars>;
   ActionTesting::MockRuntimeSystem<metavars> runner{{}};
   const Mesh<Dim> dg_mesh{4, Spectral::Basis::Legendre,
@@ -783,24 +806,35 @@ void test_chain(const size_t schedule) {
     ids.emplace_back(
         0, std::array{SegmentId{3, i}, SegmentId{0, 0}, SegmentId{0, 0}});
   }
+  const auto active_grid = [&is_fd](const size_t i) {
+    return gsl::at(is_fd, i) ? evolution::dg::subcell::ActiveGrid::Subcell
+                             : evolution::dg::subcell::ActiveGrid::Dg;
+  };
   for (size_t i = 0; i < number_of_elements; ++i) {
     DirectionMap<Dim, Neighbors<Dim>> neighbors{};
+    evolution::dg::subcell::Tags::NeighborActiveGrids<Dim>::type
+        neighbor_active_grids{};
     if (i > 0) {
       neighbors[Direction<Dim>::lower_xi()] =
           Neighbors<Dim>{{ids[i - 1]}, OrientationMap<Dim>::create_aligned()};
+      neighbor_active_grids.emplace(
+          DirectionalId<Dim>{Direction<Dim>::lower_xi(), ids[i - 1]},
+          active_grid(i - 1));
     }
     if (i + 1 < number_of_elements) {
       neighbors[Direction<Dim>::upper_xi()] =
           Neighbors<Dim>{{ids[i + 1]}, OrientationMap<Dim>::create_aligned()};
+      neighbor_active_grids.emplace(
+          DirectionalId<Dim>{Direction<Dim>::upper_xi(), ids[i + 1]},
+          active_grid(i + 1));
     }
     emplace_element<comp>(make_not_null(&runner), ids[i], neighbors, dg_mesh,
-                          gsl::at(is_fd, i)
-                              ? evolution::dg::subcell::ActiveGrid::Subcell
-                              : evolution::dg::subcell::ActiveGrid::Dg,
-                          i == 0, 1.0 + static_cast<double>(i),
-                          gsl::at(is_fd, i) ? -5.0 : 7.0, 0);
+                          active_grid(i), i == 0, 1.0 + static_cast<double>(i),
+                          gsl::at(is_fd, i) ? -5.0 : 7.0, 0,
+                          neighbor_active_grids);
   }
   ActionTesting::set_phase(make_not_null(&runner), Parallel::Phase::Testing);
+  ghost_variables_calls = 0;
 
   const size_t number_of_steps = 2;
   const auto steps = [&runner](const ElementId<Dim>& id) {
@@ -858,6 +892,10 @@ void test_chain(const size_t schedule) {
       if (pass == 1.0) {
         // First exchange: no gradients.
         CHECK(max_var2 == 0.0);
+      } else if (not neighbor_is_fd and FixedActiveGrids and
+                 not gsl::at(is_fd, i)) {
+        // Second exchange between DG elements: no ghost data.
+        CHECK(max_var2 == -1.0);
       } else {
         // Second exchange (FD receive, or DG physical receive): the FD
         // neighbor's gradients of this step, or zero from DG.
@@ -871,14 +909,331 @@ void test_chain(const size_t schedule) {
       }
     }
   }
+  // Per step, each of the five elements computes its ghost data for each of
+  // its two sends, except, with fixed active grids, the first DG element.
+  CHECK(ghost_variables_calls ==
+        number_of_steps * (FixedActiveGrids ? 8_st : 10_st));
+}
+
+// Both sends of an element using DG: that of ComputeTimeDerivative and the
+// auxiliary one.
+using dg_send_actions = tmpl::list<
+    SendPhysicalIf<true>,
+    evolution::dg::Actions::SendAuxiliaryGhostData<Dim, System, false>>;
+// Both sends of an element using finite differences: the auxiliary one and
+// the physical one.
+using fd_send_actions =
+    tmpl::list<evolution::dg::subcell::Actions::SendDataForReconstruction<
+                   Dim, GhostVariablesImpl<false>, false, true>,
+               evolution::dg::subcell::Actions::SendDataForReconstruction<
+                   Dim, GhostVariablesImpl<true>, false>>;
+
+struct ElementSetup {
+  ElementId<Dim> id;
+  DirectionMap<Dim, Neighbors<Dim>> neighbors;
+  evolution::dg::subcell::ActiveGrid active_grid;
+};
+
+using Message = std::pair<DirectionalId<Dim>, evolution::dg::BoundaryData<Dim>>;
+
+struct SendResult {
+  // The messages at the first time step received by each element in the
+  // auxiliary (first) and physical (second) inboxes.
+  std::unordered_map<ElementId<Dim>, std::array<std::vector<Message>, 2>>
+      messages{};
+  // The number of ghost-data computations of each sender.
+  std::unordered_map<ElementId<Dim>, size_t> ghost_variables_calls{};
+};
+
+// Emplaces the elements (each with the neighbor active grids given by the
+// active grids of its neighbors) and runs both sends of each of the
+// `senders`.
+template <typename SendActions, bool FixedActiveGrids>
+SendResult run_sends(const std::vector<ElementSetup>& elements,
+                     const std::vector<ElementId<Dim>>& senders) {
+  using metavars = Metavariables<SendActions, FixedActiveGrids>;
+  using comp = Component<metavars>;
+  ActionTesting::MockRuntimeSystem<metavars> runner{{}};
+  const Mesh<Dim> dg_mesh{{{4, 5, 6}},
+                          Spectral::Basis::Legendre,
+                          Spectral::Quadrature::GaussLobatto};
+  std::unordered_map<ElementId<Dim>, evolution::dg::subcell::ActiveGrid>
+      active_grids{};
+  for (const auto& element : elements) {
+    active_grids.emplace(element.id, element.active_grid);
+  }
+  for (const auto& element : elements) {
+    evolution::dg::subcell::Tags::NeighborActiveGrids<Dim>::type
+        neighbor_active_grids{};
+    for (const auto& [direction, neighbors] : element.neighbors) {
+      for (const auto& neighbor : neighbors) {
+        neighbor_active_grids.emplace(DirectionalId<Dim>{direction, neighbor},
+                                      active_grids.at(neighbor));
+      }
+    }
+    const bool uses_subcell =
+        element.active_grid == evolution::dg::subcell::ActiveGrid::Subcell;
+    emplace_element<comp>(make_not_null(&runner), element.id, element.neighbors,
+                          dg_mesh, element.active_grid, true,
+                          1.5 + static_cast<double>(element.id.block_id()),
+                          uses_subcell ? -5.0 : 7.0, 3, neighbor_active_grids);
+  }
+  ActionTesting::set_phase(make_not_null(&runner), Parallel::Phase::Testing);
+
+  SendResult result{};
+  for (const auto& sender : senders) {
+    const size_t calls_before = ghost_variables_calls;
+    for (size_t i = 0; i < tmpl::size<SendActions>::value; ++i) {
+      ActionTesting::next_action<comp>(make_not_null(&runner), sender);
+    }
+    result.ghost_variables_calls[sender] = ghost_variables_calls - calls_before;
+  }
+  const auto copy_messages =
+      [](const auto& inbox,
+         const gsl::not_null<std::vector<Message>*> received) {
+        if (not inbox.messages.empty()) {
+          REQUIRE(inbox.messages.size() == 1);
+          const auto& messages = inbox.messages.at(time_step_id(0));
+          received->assign(messages.begin(), messages.end());
+        }
+      };
+  for (const auto& element : elements) {
+    auto& received = result.messages[element.id];
+    copy_messages(
+        ActionTesting::get_inbox_tag<comp, AuxInbox>(runner, element.id),
+        make_not_null(&received[0]));
+    copy_messages(
+        ActionTesting::get_inbox_tag<comp, PhysicalInbox>(runner, element.id),
+        make_not_null(&received[1]));
+  }
+  return result;
+}
+
+// Every element receives with fixed active grids the messages of the default
+// run (which sends ghost data to all neighbors) from the same senders,
+// except that in the inboxes (auxiliary, physical) with `omitted_for_dg` the
+// messages to elements using DG have no ghost data and no ghost-data mesh.
+void check_fixed_messages(const std::vector<ElementSetup>& elements,
+                          const SendResult& default_result,
+                          const SendResult& fixed_result,
+                          const std::array<bool, 2>& omitted_for_dg) {
+  for (const auto& element : elements) {
+    CAPTURE(element.id);
+    for (size_t inbox = 0; inbox < 2; ++inbox) {
+      CAPTURE(inbox);
+      const std::vector<Message>& default_messages =
+          gsl::at(default_result.messages.at(element.id), inbox);
+      const std::vector<Message>& fixed_messages =
+          gsl::at(fixed_result.messages.at(element.id), inbox);
+      REQUIRE(fixed_messages.size() == default_messages.size());
+      for (const Message& message : fixed_messages) {
+        CAPTURE(message.first);
+        const auto default_message = alg::find_if(
+            default_messages, [&message](const Message& other_message) {
+              return other_message.first == message.first;
+            });
+        REQUIRE(default_message != default_messages.end());
+        REQUIRE(default_message->second.ghost_cell_data.has_value());
+        REQUIRE(
+            default_message->second.volume_mesh_ghost_cell_data.has_value());
+        evolution::dg::BoundaryData<Dim> expected = default_message->second;
+        if (element.active_grid == evolution::dg::subcell::ActiveGrid::Dg and
+            gsl::at(omitted_for_dg, inbox)) {
+          expected.volume_mesh_ghost_cell_data = std::nullopt;
+          expected.ghost_cell_data = std::nullopt;
+        }
+        CHECK(message.second == expected);
+      }
+    }
+  }
+}
+
+// The sends of an element using DG to neighbors of both methods, across
+// aligned and rotated interfaces, and in directions with two nonconforming
+// neighbors, both using finite differences or one of each (`swap_mixed`
+// swaps their methods, so that the ghost data are moved into the last
+// receiver of the direction for both iteration orders). With fixed active
+// grids, the messages are those of the default run except that neighbors
+// using DG receive no ghost data, in both sends. The western neighbor, whose
+// only neighbor is the element, computes its ghost data only in the default
+// run.
+void test_dg_sends(const bool swap_mixed) {
+  CAPTURE(swap_mixed);
+  using evolution::dg::subcell::ActiveGrid;
+  const auto aligned = OrientationMap<Dim>::create_aligned();
+  const OrientationMap<Dim> rotated{std::array{Direction<Dim>::upper_eta(),
+                                               Direction<Dim>::lower_xi(),
+                                               Direction<Dim>::upper_zeta()}};
+  const ElementId<Dim> self_id{0};
+  const ElementId<Dim> fd_east{1};
+  const ElementId<Dim> dg_west{2};
+  const ElementId<Dim> mixed_first{3};
+  const ElementId<Dim> mixed_second{4};
+  const ElementId<Dim> fd_first{5};
+  const ElementId<Dim> fd_second{6};
+  const ElementId<Dim> fd_rotated{7};
+  const ElementId<Dim> dg_rotated{8};
+  DirectionMap<Dim, Neighbors<Dim>> neighbors{};
+  neighbors[Direction<Dim>::upper_xi()] = Neighbors<Dim>{{fd_east}, aligned};
+  neighbors[Direction<Dim>::lower_xi()] = Neighbors<Dim>{{dg_west}, aligned};
+  neighbors[Direction<Dim>::upper_eta()] = Neighbors<Dim>{
+      {mixed_first, mixed_second},
+      {{mixed_first.block_id(), aligned}, {mixed_second.block_id(), aligned}},
+      false};
+  neighbors[Direction<Dim>::lower_eta()] = Neighbors<Dim>{
+      {fd_first, fd_second},
+      {{fd_first.block_id(), aligned}, {fd_second.block_id(), aligned}},
+      false};
+  neighbors[Direction<Dim>::upper_zeta()] =
+      Neighbors<Dim>{{fd_rotated}, rotated};
+  neighbors[Direction<Dim>::lower_zeta()] =
+      Neighbors<Dim>{{dg_rotated}, rotated};
+  DirectionMap<Dim, Neighbors<Dim>> neighbors_of_west{};
+  neighbors_of_west[Direction<Dim>::upper_xi()] =
+      Neighbors<Dim>{{self_id}, aligned};
+  const std::vector<ElementSetup> elements{
+      {self_id, neighbors, ActiveGrid::Dg},
+      {fd_east, {}, ActiveGrid::Subcell},
+      {dg_west, neighbors_of_west, ActiveGrid::Dg},
+      {mixed_first, {}, swap_mixed ? ActiveGrid::Dg : ActiveGrid::Subcell},
+      {mixed_second, {}, swap_mixed ? ActiveGrid::Subcell : ActiveGrid::Dg},
+      {fd_first, {}, ActiveGrid::Subcell},
+      {fd_second, {}, ActiveGrid::Subcell},
+      {fd_rotated, {}, ActiveGrid::Subcell},
+      {dg_rotated, {}, ActiveGrid::Dg}};
+  const std::vector<ElementId<Dim>> senders{self_id, dg_west};
+
+  const SendResult default_result =
+      run_sends<dg_send_actions, false>(elements, senders);
+  const SendResult fixed_result =
+      run_sends<dg_send_actions, true>(elements, senders);
+  check_fixed_messages(elements, default_result, fixed_result, {{true, true}});
+
+  CHECK(default_result.ghost_variables_calls.at(self_id) == 2);
+  CHECK(fixed_result.ghost_variables_calls.at(self_id) == 2);
+  CHECK(default_result.ghost_variables_calls.at(dg_west) == 2);
+  CHECK(fixed_result.ghost_variables_calls.at(dg_west) == 0);
+
+  // The data themselves (all neighbor meshes are unknown, so the volume data
+  // are sent): Var1, zero Var2 and the RDMP data; and the mortar data.
+  const Mesh<Dim> dg_mesh{{{4, 5, 6}},
+                          Spectral::Basis::Legendre,
+                          Spectral::Quadrature::GaussLobatto};
+  const double var1 = 1.5;
+  DataVector expected_ghost_data{2 * dg_mesh.number_of_grid_points() + 2, 0.0};
+  for (size_t i = 0; i < dg_mesh.number_of_grid_points(); ++i) {
+    expected_ghost_data[i] = var1;
+  }
+  expected_ghost_data[expected_ghost_data.size() - 2] = var1;
+  expected_ghost_data[expected_ghost_data.size() - 1] = var1 - 1.0;
+  for (const auto& element : elements) {
+    if (element.id == self_id) {
+      continue;
+    }
+    CAPTURE(element.id);
+    const bool receiver_uses_subcell =
+        element.active_grid == ActiveGrid::Subcell;
+    for (size_t inbox = 0; inbox < 2; ++inbox) {
+      CAPTURE(inbox);
+      const std::vector<Message>& messages =
+          gsl::at(fixed_result.messages.at(element.id), inbox);
+      REQUIRE(messages.size() == 1);
+      const auto& [key, data] = messages.front();
+      CHECK(key.id() == self_id);
+      CHECK(data.ghost_cell_data == (receiver_uses_subcell
+                                         ? std::optional{expected_ghost_data}
+                                         : std::nullopt));
+      CHECK(data.volume_mesh_ghost_cell_data ==
+            (receiver_uses_subcell ? std::optional{dg_mesh} : std::nullopt));
+      CHECK(data.boundary_correction_data.has_value() == (inbox == 1));
+      CHECK(data.validity_range == time_step_id(1));
+      CHECK(data.tci_status == 3);
+      CHECK(data.integration_order == 3);
+    }
+  }
+}
+
+// The sends of an element using finite differences to neighbors of both
+// methods. With fixed active grids, the messages are those of the default
+// run except that neighbors using DG receive no ghost data in the auxiliary
+// send; in the physical send they receive the ghost data with the nonzero
+// gradients. A second element using finite differences, whose only neighbor
+// uses DG, computes no ghost data for its auxiliary send.
+void test_fd_sends() {
+  using evolution::dg::subcell::ActiveGrid;
+  const auto aligned = OrientationMap<Dim>::create_aligned();
+  const ElementId<Dim> self_id{0};
+  const ElementId<Dim> fd_east{1};
+  const ElementId<Dim> dg_west{2};
+  const ElementId<Dim> dg_north{3};
+  const ElementId<Dim> fd_south{4};
+  const ElementId<Dim> lonely_fd{5};
+  const ElementId<Dim> dg_neighbor_of_lonely{6};
+  DirectionMap<Dim, Neighbors<Dim>> neighbors{};
+  neighbors[Direction<Dim>::upper_xi()] = Neighbors<Dim>{{fd_east}, aligned};
+  neighbors[Direction<Dim>::lower_xi()] = Neighbors<Dim>{{dg_west}, aligned};
+  neighbors[Direction<Dim>::upper_eta()] = Neighbors<Dim>{{dg_north}, aligned};
+  neighbors[Direction<Dim>::lower_eta()] = Neighbors<Dim>{{fd_south}, aligned};
+  DirectionMap<Dim, Neighbors<Dim>> neighbors_of_lonely{};
+  neighbors_of_lonely[Direction<Dim>::upper_zeta()] =
+      Neighbors<Dim>{{dg_neighbor_of_lonely}, aligned};
+  const std::vector<ElementSetup> elements{
+      {self_id, neighbors, ActiveGrid::Subcell},
+      {fd_east, {}, ActiveGrid::Subcell},
+      {dg_west, {}, ActiveGrid::Dg},
+      {dg_north, {}, ActiveGrid::Dg},
+      {fd_south, {}, ActiveGrid::Subcell},
+      {lonely_fd, neighbors_of_lonely, ActiveGrid::Subcell},
+      {dg_neighbor_of_lonely, {}, ActiveGrid::Dg}};
+  const std::vector<ElementId<Dim>> senders{self_id, lonely_fd};
+
+  const SendResult default_result =
+      run_sends<fd_send_actions, false>(elements, senders);
+  const SendResult fixed_result =
+      run_sends<fd_send_actions, true>(elements, senders);
+  check_fixed_messages(elements, default_result, fixed_result, {{true, false}});
+
+  CHECK(default_result.ghost_variables_calls.at(self_id) == 2);
+  CHECK(fixed_result.ghost_variables_calls.at(self_id) == 2);
+  CHECK(default_result.ghost_variables_calls.at(lonely_fd) == 2);
+  CHECK(fixed_result.ghost_variables_calls.at(lonely_fd) == 1);
+
+  // The physical ghost data sent to the DG neighbors carry the gradients
+  // (Var2 = -5); the auxiliary ones to the FD neighbors do not.
+  for (const auto& id : {dg_west, dg_north}) {
+    CAPTURE(id);
+    const std::vector<Message>& messages = fixed_result.messages.at(id)[1];
+    REQUIRE(messages.size() == 1);
+    const auto& [key, data] = messages.front();
+    CHECK(key.id() == self_id);
+    REQUIRE(data.ghost_cell_data.has_value());
+    CHECK(max_gradient(*data.ghost_cell_data, 2) == 5.0);
+    CHECK(data.volume_mesh_ghost_cell_data.has_value());
+    CHECK_FALSE(data.boundary_correction_data.has_value());
+    CHECK(data.validity_range == time_step_id(1));
+    CHECK(data.tci_status == 3);
+    CHECK(data.integration_order == 3);
+  }
+  for (const auto& id : {fd_east, fd_south}) {
+    CAPTURE(id);
+    const std::vector<Message>& messages = fixed_result.messages.at(id)[0];
+    REQUIRE(messages.size() == 1);
+    const auto& data = messages.front().second;
+    REQUIRE(data.ghost_cell_data.has_value());
+    CHECK(max_gradient(*data.ghost_cell_data, 2) == 0.0);
+  }
 }
 
 SPECTRE_TEST_CASE("Unit.Evolution.DG.Actions.AuxiliaryGhostData",
                   "[Unit][Evolution][Actions]") {
   test_send_and_drain();
   test_drain_multiple_neighbors();
+  test_dg_sends(false);
+  test_dg_sends(true);
+  test_fd_sends();
   for (size_t schedule = 0; schedule < 3; ++schedule) {
-    test_chain(schedule);
+    test_chain<false>(schedule);
+    test_chain<true>(schedule);
   }
 }
 }  // namespace

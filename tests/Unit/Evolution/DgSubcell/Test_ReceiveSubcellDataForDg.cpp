@@ -123,6 +123,26 @@ void test() {
   CHECK(ghost_meshes.at(dg_id) == dg_volume_mesh);
   REQUIRE(ghost_meshes.contains(fd_id));
   CHECK(ghost_meshes.at(fd_id) == fd_volume_mesh);
+
+  // A message without ghost data (as sent between elements using DG when the
+  // active grids are fixed at initialization) cannot be stored.
+  const BoundaryData<Dim> missing_ghost_data{dg_volume_mesh,
+                                             std::nullopt,
+                                             std::nullopt,
+                                             std::nullopt,
+                                             std::nullopt,
+                                             {},
+                                             2};
+#ifdef SPECTRE_DEBUG
+  CHECK_THROWS_WITH(evolution::dg::subcell::receive_subcell_data_for_dg<Dim>(
+                        make_not_null(&box), fd_id, missing_ghost_data),
+                    Catch::Matchers::ContainsSubstring(
+                        "The subcell mortar data was not sent with mortar id"));
+#else
+  CHECK_THROWS_AS(evolution::dg::subcell::receive_subcell_data_for_dg<Dim>(
+                      make_not_null(&box), fd_id, missing_ghost_data),
+                  std::bad_optional_access);
+#endif  // SPECTRE_DEBUG
 }
 }  // namespace
 
