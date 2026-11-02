@@ -40,15 +40,24 @@ namespace Ccz4::GradientProjection {
  *   fields and the gradients, and take the finite-difference step with
  *   `Ccz4::fd::SoTimeDerivative` and same-time Kreiss-Oliger dissipation.
  *
- * Every element sends both exchanges to all its neighbors; how they are
- * consumed depends only on the receiver's method. With the active grids fixed
- * at initialization (`evolution::dg::active_grids_fixed_at_initialization`),
- * the messages to elements using DG carry no ghost data in the first exchange,
- * nor from DG elements in the second. Each exchange replaces all
- * ghost data of a finite-difference element, so after each exchange the
- * element adds the ghost data of its external boundaries from the boundary
- * conditions (`Ccz4::fd::Actions::SetBoundaryConditionGhostData`), at the
- * current time.
+ * By default, every element sends both exchanges to all its neighbors; how
+ * they are consumed depends only on the receiver's method. With the active
+ * grids fixed at initialization
+ * (`evolution::dg::active_grids_fixed_at_initialization`), the messages to
+ * elements using DG carry no ghost data in the first exchange, nor from DG
+ * elements in the second. If in addition the finite-difference elements reuse
+ * the ghost data of the first exchange
+ * (`evolution::dg::reuse_auxiliary_finite_difference_ghost_data`, with donor
+ * extension disabled), they
+ * send each other only the physical fields (with zero gradients) in the first
+ * exchange and nothing in the second, in which they keep the ghost data of
+ * their finite-difference neighbors from the first exchange: the physical
+ * fields do not change between the exchanges, and the finite-difference
+ * derivatives and dissipation read only the physical fields of the ghost data.
+ * Each exchange replaces all other ghost data of a finite-difference element,
+ * so after each exchange the element adds the ghost data of its external
+ * boundaries from the boundary conditions
+ * (`Ccz4::fd::Actions::SetBoundaryConditionGhostData`), at the current time.
  */
 using subcell_step_actions = tmpl::flatten<tmpl::list<
     evolution::dg::subcell::Actions::SelectNumericalMethod,

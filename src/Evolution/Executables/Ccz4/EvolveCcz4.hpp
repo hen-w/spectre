@@ -44,6 +44,7 @@
 #include "Evolution/Systems/Ccz4/FiniteDifference/SetInitialEta.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/SetK0.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/SoTimeDerivative.hpp"
+#include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/TraceATildeCompute.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/UnlimitedDeg4Prim.hpp"
@@ -274,6 +275,15 @@ struct EvolutionMetavars {
     // receive none from their DG neighbors and none in the first exchange
     // (see evolution::dg::active_grids_fixed_at_initialization).
     static constexpr bool active_grids_fixed_at_initialization = use_dg_subcell;
+    // The finite-difference elements use only the physical fields of the
+    // ghost data of their finite-difference neighbors, and only the gradients
+    // change between the two exchanges, so these neighbors exchange the
+    // physical fields only in the first exchange (see
+    // evolution::dg::reuse_auxiliary_finite_difference_ghost_data).
+    static constexpr bool reuse_auxiliary_finite_difference_ghost_data =
+        use_dg_subcell;
+    using finite_difference_neighbor_ghost_tags =
+        Ccz4::fd::System::original_evolved_variables_tags;
 
     // We send `ghost_zone_size` cell-centered grid points for variable
     // reconstruction, of which we need `ghost_zone_size-1` for reconstruction

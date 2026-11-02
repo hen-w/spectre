@@ -188,10 +188,10 @@ namespace Actions {
  * \brief On elements using finite differences, insert the ghost data of the
  * external boundaries (see `Ccz4::fd::BoundaryConditionGhostData`).
  *
- * \details `evolution::dg::subcell::Actions::SendDataForReconstruction` clears
- * all ghost data, so this action must follow each
- * `evolution::dg::subcell::Actions::ReceiveDataForReconstruction` whose ghost
- * data are used.
+ * \details `evolution::dg::subcell::Actions::SendDataForReconstruction`
+ * removes the ghost data of the external boundaries, so this action must
+ * follow each `evolution::dg::subcell::Actions::ReceiveDataForReconstruction`
+ * whose ghost data are used.
  */
 struct SetBoundaryConditionGhostData {
   template <typename DbTags, typename... InboxTags, typename ArrayIndex,

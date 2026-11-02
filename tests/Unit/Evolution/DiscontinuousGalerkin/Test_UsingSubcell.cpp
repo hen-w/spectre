@@ -14,6 +14,14 @@ struct MetavarsSubcell {
 };
 
 struct MetavarsNoSubcell {};
+
+template <bool ReuseAuxiliaryGhostData>
+struct MetavarsReuse {
+  struct SubcellOptions {
+    static constexpr bool reuse_auxiliary_finite_difference_ghost_data =
+        ReuseAuxiliaryGhostData;
+  };
+};
 }  // namespace
 
 SPECTRE_TEST_CASE("Unit.Evolution.DG.UsingSubcell", "[Unit][Evolution]") {
@@ -24,4 +32,25 @@ SPECTRE_TEST_CASE("Unit.Evolution.DG.UsingSubcell", "[Unit][Evolution]") {
   CHECK(not evolution::dg::using_subcell_v<MetavarsNoSubcell>);
   CHECK(not evolution::dg::using_subcell_v<MetavarsSubcell<false>>);
   CHECK(evolution::dg::using_subcell_v<MetavarsSubcell<true>>);
+
+  static_assert(
+      not evolution::dg::reuse_auxiliary_finite_difference_ghost_data_v<
+          MetavarsNoSubcell>);
+  static_assert(
+      not evolution::dg::reuse_auxiliary_finite_difference_ghost_data_v<
+          MetavarsSubcell<true>>);
+  static_assert(
+      not evolution::dg::reuse_auxiliary_finite_difference_ghost_data_v<
+          MetavarsReuse<false>>);
+  static_assert(evolution::dg::reuse_auxiliary_finite_difference_ghost_data_v<
+                MetavarsReuse<true>>);
+
+  CHECK(not evolution::dg::reuse_auxiliary_finite_difference_ghost_data_v<
+        MetavarsNoSubcell>);
+  CHECK(not evolution::dg::reuse_auxiliary_finite_difference_ghost_data_v<
+        MetavarsSubcell<true>>);
+  CHECK(not evolution::dg::reuse_auxiliary_finite_difference_ghost_data_v<
+        MetavarsReuse<false>>);
+  CHECK(evolution::dg::reuse_auxiliary_finite_difference_ghost_data_v<
+        MetavarsReuse<true>>);
 }

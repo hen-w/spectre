@@ -13,6 +13,7 @@
 #include <tuple>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "DataStructures/DataBox/DataBox.hpp"
 #include "DataStructures/DataBox/Prefixes.hpp"
@@ -65,6 +66,7 @@
 #include "Time/TimeStepId.hpp"
 #include "Utilities/Algorithm.hpp"
 #include "Utilities/ErrorHandling/Assert.hpp"
+#include "Utilities/ErrorHandling/Error.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/Literals.hpp"
 #include "Utilities/MakeArray.hpp"
@@ -99,6 +101,106 @@ bool receives_ghost_data(
     return true;
   }
 }
+
+// Whether the elements using finite differences exchange ghost data with their
+// neighbors using finite differences only in the first exchange, see
+// `evolution::dg::reuse_auxiliary_finite_difference_ghost_data`. The subcell
+// options are the same on all elements, so all elements agree.
+template <typename Metavariables, size_t Dim, typename DbTagsList>
+bool reuses_auxiliary_ghost_data(
+    [[maybe_unused]] const db::DataBox<DbTagsList>& box) {
+  if constexpr (evolution::dg::reuse_auxiliary_finite_difference_ghost_data_v<
+                    Metavariables>) {
+    static_assert(
+        evolution::dg::active_grids_fixed_at_initialization_v<Metavariables>,
+        "Reusing the auxiliary finite-difference ghost data requires the "
+        "active grids to be fixed at initialization.");
+    static_assert(
+        tmpl::size<typename Metavariables::system::flux_variables>::value == 0,
+        "Reusing the auxiliary finite-difference ghost data requires a system "
+        "without fluxes, whose cell-centered fluxes are in the ghost data.");
+    if (db::get<Tags::SubcellOptions<Dim>>(box).enable_extension_directions()) {
+      ERROR(
+          "Reusing auxiliary finite-difference ghost data is incompatible "
+          "with EnableExtensionDirections. Donor extension requires the "
+          "original two exchanges and is not supported by this optimization.");
+    }
+    return true;
+  } else {
+    return false;
+  }
+}
+
+// The neighbors using finite differences that send no ghost data in the
+// second (not `IsAuxiliary`) exchange, as the element keeps those they sent
+// in the first exchange: all of them if the element reuses the auxiliary ghost
+// data, otherwise none.
+template <bool IsAuxiliary, typename Metavariables, typename DbTagsList,
+          size_t Dim>
+std::vector<DirectionalId<Dim>> neighbors_with_kept_ghost_data(
+    [[maybe_unused]] const db::DataBox<DbTagsList>& box,
+    [[maybe_unused]] const Element<Dim>& element) {
+  std::vector<DirectionalId<Dim>> result{};
+  if constexpr (not IsAuxiliary and
+                evolution::dg::reuse_auxiliary_finite_difference_ghost_data_v<
+                    Metavariables>) {
+    if (reuses_auxiliary_ghost_data<Metavariables, Dim>(box)) {
+      for (const auto& [direction, neighbors_in_direction] :
+           element.neighbors()) {
+        for (const ElementId<Dim>& neighbor : neighbors_in_direction) {
+          if (DirectionalId<Dim> neighbor_id{direction, neighbor};
+              neighbor_uses_subcell(box, neighbor_id)) {
+            result.push_back(std::move(neighbor_id));
+          }
+        }
+      }
+    }
+  }
+  return result;
+}
+
+// The number of trailing components of the ghost data that are neither sliced
+// nor interpolated but sent as zero: in the first exchange of an element that
+// reuses the auxiliary ghost data, those not used by its neighbors using
+// finite differences; otherwise none.
+template <bool IsAuxiliary, typename Metavariables>
+size_t number_of_unsliced_components(
+    [[maybe_unused]] const size_t number_of_values,
+    [[maybe_unused]] const size_t number_of_points,
+    [[maybe_unused]] const bool reuses_auxiliary_ghost_data) {
+  if constexpr (IsAuxiliary and
+                evolution::dg::reuse_auxiliary_finite_difference_ghost_data_v<
+                    Metavariables>) {
+    if (reuses_auxiliary_ghost_data) {
+      constexpr size_t number_of_used_components =
+          Variables<typename Metavariables::SubcellOptions::
+                        finite_difference_neighbor_ghost_tags>::
+              number_of_independent_components;
+      ASSERT(
+          number_of_values % number_of_points == 0 and
+              number_of_used_components * number_of_points <= number_of_values,
+          "The ghost data (" << number_of_values << " values on "
+                             << number_of_points << " points) do not hold the "
+                             << number_of_used_components
+                             << " components of SubcellOptions::"
+                                "finite_difference_neighbor_ghost_tags.");
+      return number_of_values / number_of_points - number_of_used_components;
+    }
+  }
+  return 0;
+}
+
+// Whether `ghost_data` holds the entries of exactly the neighbors
+// `neighbor_ids`.
+template <size_t Dim>
+bool holds_exactly(const DirectionalIdMap<Dim, GhostData>& ghost_data,
+                   const std::vector<DirectionalId<Dim>>& neighbor_ids) {
+  return ghost_data.size() == neighbor_ids.size() and
+         alg::all_of(neighbor_ids,
+                     [&ghost_data](const DirectionalId<Dim>& neighbor_id) {
+                       return ghost_data.contains(neighbor_id);
+                     });
+}
 }  // namespace ReconstructionCommunication_detail
 
 /*!
@@ -125,6 +227,18 @@ bool receives_ghost_data(
  *   neighbors using DG (`subcell::Tags::NeighborActiveGrids`) receive a
  *   message without ghost data or ghost-data mesh, and data are sliced only in
  *   the directions with a neighbor using finite differences.
+ * - If the element reuses the auxiliary ghost data of its neighbors using
+ *   finite differences
+ *   (`evolution::dg::reuse_auxiliary_finite_difference_ghost_data_v<
+ *   Metavariables>` and no extension directions), then with `IsAuxiliary`
+ *   only the leading components
+ *   `Metavariables::SubcellOptions::finite_difference_neighbor_ghost_tags` of
+ *   the ghost data are sliced or interpolated, and the trailing components
+ *   are sent as zero. Without `IsAuxiliary`, the neighbors using finite
+ *   differences receive no message, data are sliced only in the directions
+ *   with a neighbor using DG, and the ghost data that the neighbors using
+ *   finite differences sent in the first exchange are kept instead of
+ *   cleared.
  *
  * GlobalCache:
  * - Uses:
@@ -185,10 +299,31 @@ struct SendDataForReconstruction {
 
     using flux_variables = typename Metavariables::system::flux_variables;
 
+    const bool reuses_auxiliary_ghost_data =
+        ReconstructionCommunication_detail::reuses_auxiliary_ghost_data<
+            Metavariables, Dim>(box);
+    // The neighbors using finite differences that receive no message, see the
+    // notes above.
+    const std::vector<DirectionalId<Dim>> neighbors_with_kept_ghost_data =
+        ReconstructionCommunication_detail::neighbors_with_kept_ghost_data<
+            IsAuxiliary, Metavariables>(box, element);
+
     db::mutate<Tags::GhostDataForReconstruction<Dim>>(
-        [](const auto ghost_data_ptr) {
-          // Clear the previous neighbor data and add current local data
-          ghost_data_ptr->clear();
+        [&neighbors_with_kept_ghost_data](const auto ghost_data_ptr) {
+          if (neighbors_with_kept_ghost_data.empty()) {
+            ghost_data_ptr->clear();
+            return;
+          }
+          // Keep the first exchange's FD buffers in place. Remove the DG and
+          // external-boundary entries, which will be replaced below.
+          for (auto entry = ghost_data_ptr->begin();
+               entry != ghost_data_ptr->end();) {
+            if (alg::found(neighbors_with_kept_ghost_data, entry->first)) {
+              ++entry;
+            } else {
+              ghost_data_ptr->erase(entry++);
+            }
+          }
         },
         make_not_null(&box));
 
@@ -196,11 +331,18 @@ struct SendDataForReconstruction {
     const Mesh<Dim>& subcell_mesh = db::get<Tags::Mesh<Dim>>(box);
     const size_t ghost_zone_size =
         Metavariables::SubcellOptions::ghost_zone_size(box);
+    // Whether the neighbor receives a message, see the notes above.
+    const auto receives_message =
+        [&neighbors_with_kept_ghost_data](const DirectionalId<Dim>& id) {
+          return not alg::found(neighbors_with_kept_ghost_data, id);
+        };
     // Whether the neighbor receives ghost data, see the notes above.
-    const auto receives_ghost_data = [&box](const DirectionalId<Dim>& id) {
-      return ReconstructionCommunication_detail::receives_ghost_data<
-          IsAuxiliary, Metavariables>(box, id);
-    };
+    const auto receives_ghost_data =
+        [&box, &receives_message](const DirectionalId<Dim>& id) {
+          return receives_message(id) and
+                 ReconstructionCommunication_detail::receives_ghost_data<
+                     IsAuxiliary, Metavariables>(box, id);
+        };
 
     // When using enable_extension_directions, we send the ghost data
     // for problematic directions separately with the new action
@@ -224,12 +366,17 @@ struct SendDataForReconstruction {
       }
     }
 
-    // If the first exchange omits the ghost data for neighbors using DG, they
-    // are not computed when no neighbor receives them.
-    constexpr bool omits_ghost_data =
-        IsAuxiliary and
-        evolution::dg::active_grids_fixed_at_initialization_v<Metavariables>;
+    // If the exchange omits the ghost data for some neighbors (with the active
+    // grids fixed at initialization, the first exchange for neighbors using
+    // DG, and with reused auxiliary ghost data, the second exchange for
+    // neighbors using finite differences), they are not computed when no
+    // neighbor receives them.
+    const bool omits_ghost_data =
+        evolution::dg::active_grids_fixed_at_initialization_v<Metavariables> and
+        (IsAuxiliary or reuses_auxiliary_ghost_data);
     DirectionMap<Dim, DataVector> all_sliced_data{};
+    // The number of trailing components sent as zero, see the notes above.
+    size_t number_of_unsliced_components = 0;
     if (not(omits_ghost_data and directions_to_work.empty())) {
       // Optimization note: could save a copy+allocation if we moved
       // all_sliced_data when possible before sending.
@@ -253,8 +400,19 @@ struct SendDataForReconstruction {
                                 cell_centered_flux.value().size())));
       }
 
+      const size_t number_of_points = subcell_mesh.number_of_grid_points();
+      number_of_unsliced_components =
+          ReconstructionCommunication_detail::number_of_unsliced_components<
+              IsAuxiliary, Metavariables>(volume_data_to_slice.size(),
+                                          number_of_points,
+                                          reuses_auxiliary_ghost_data);
+      // The leading components, all unless some are sent as zero.
+      const DataVector components_to_slice{
+          volume_data_to_slice.data(),
+          volume_data_to_slice.size() -
+              number_of_unsliced_components * number_of_points};
       all_sliced_data = slice_data(
-          volume_data_to_slice, subcell_mesh.extents(), ghost_zone_size,
+          components_to_slice, subcell_mesh.extents(), ghost_zone_size,
           directions_to_work, 0,
           db::get<evolution::dg::subcell::Tags::InterpolatorsFromFdToNeighborFd<
               Dim>>(box));
@@ -285,6 +443,9 @@ struct SendDataForReconstruction {
                "evolution is using DG without any changes to subcell.");
 
         for (const ElementId<Dim>& neighbor : neighbors_in_direction) {
+          if (not receives_message(DirectionalId<Dim>{direction, neighbor})) {
+            continue;
+          }
           const auto& orientation =
               neighbors_in_direction.orientation(neighbor);
           const auto direction_from_neighbor =
@@ -297,10 +458,17 @@ struct SendDataForReconstruction {
                                      rdmp_tci_data.min_variables_values.size();
             const auto& sliced_data_in_direction =
                 all_sliced_data.at(direction);
+            // The size of the ghost data, of which the trailing unsliced
+            // components are zero.
+            const size_t ghost_data_size =
+                sliced_data_in_direction.size() +
+                number_of_unsliced_components * ghost_zone_size *
+                    subcell_mesh.extents()
+                        .slice_away(direction.dimension())
+                        .product();
 
             // Allocate with subcell data and rdmp data
-            DataVector subcell_data_to_send{sliced_data_in_direction.size() +
-                                            rdmp_size};
+            DataVector subcell_data_to_send{ghost_data_size + rdmp_size};
             // Note: Currently we interpolate our solution to our neighbor FD
             // grid even when grid points align but are oriented differently.
             // There's a possible optimization for the rare (almost never?)
@@ -328,9 +496,13 @@ struct SendDataForReconstruction {
             //
 
             // Copy over data since it's already oriented from interpolation
-            std::copy(sliced_data_in_direction.begin(),
-                      sliced_data_in_direction.end(),
-                      subcell_data_to_send.begin());
+            const auto end_of_sliced_data = std::copy(
+                sliced_data_in_direction.begin(),
+                sliced_data_in_direction.end(), subcell_data_to_send.begin());
+            std::fill(end_of_sliced_data,
+                      std::next(subcell_data_to_send.begin(),
+                                static_cast<std::ptrdiff_t>(ghost_data_size)),
+                      0.0);
             // Copy rdmp data to end of subcell_data_to_send
             std::copy(rdmp_tci_data.max_variables_values.cbegin(),
                       rdmp_tci_data.max_variables_values.cend(),
@@ -722,6 +894,14 @@ struct ReceiveAndSendDataForReconstruction {
  * Note:
  * - Since we only care about the min/max over all neighbors and ourself at the
  *   past time, we accumulate all data immediately into the `RdmpTciData`.
+ * - If the element reuses the auxiliary ghost data of its neighbors using
+ *   finite differences
+ *   (`evolution::dg::reuse_auxiliary_finite_difference_ghost_data_v<
+ *   Metavariables>` and no extension directions), then without `IsAuxiliary`
+ *   only the neighbors using DG send data. The ghost data, meshes, mortar
+ *   time step ids and TCI decisions of the neighbors using finite differences
+ *   are those of the first (`IsAuxiliary`) exchange, which
+ *   `SendDataForReconstruction` keeps.
  * - If the neighbor is using DG and therefore sends boundary correction data
  *   then that is added into the `evolution::dg::Tags::MortarData` tag
  * - The next `TimeStepId` is recorded, but we do not yet support local time
@@ -762,9 +942,23 @@ struct ReceiveDataForReconstruction {
       const ArrayIndex& /*array_index*/, const ActionList /*meta*/,
       const ParallelComponent* const /*meta*/) {
     const Element<Dim>& element = db::get<::domain::Tags::Element<Dim>>(box);
-    const auto number_of_expected_messages = element.neighbors().size();
+    // The neighbors using finite differences that send no message, whose ghost
+    // data from the first exchange are kept, see the notes above.
+    const std::vector<DirectionalId<Dim>> neighbors_with_kept_ghost_data =
+        ReconstructionCommunication_detail::neighbors_with_kept_ghost_data<
+            IsAuxiliary, Metavariables>(box, element);
+    const auto number_of_expected_messages =
+        element.neighbors().size() - neighbors_with_kept_ghost_data.size();
     if (UNLIKELY(number_of_expected_messages == 0)) {
-      // We have no neighbors, so just continue without doing any work
+      ASSERT(neighbors_with_kept_ghost_data.empty() or
+                 ReconstructionCommunication_detail::holds_exactly(
+                     db::get<Tags::GhostDataForReconstruction<Dim>>(box),
+                     neighbors_with_kept_ghost_data),
+             "Element " << element.id()
+                        << " should hold only the ghost data of its neighbors "
+                           "using finite differences from the first exchange");
+      // We have no neighbors that send data, so just continue without doing
+      // any work
       return {Parallel::AlgorithmExecution::Continue, std::nullopt};
     }
 
@@ -792,6 +986,12 @@ struct ReceiveDataForReconstruction {
     // Now that we have received all the data, copy it over as needed.
     auto received_data = std::move(received->second);
     inbox.messages.erase(received);
+    ASSERT(ReconstructionCommunication_detail::holds_exactly(
+               db::get<Tags::GhostDataForReconstruction<Dim>>(box),
+               neighbors_with_kept_ghost_data),
+           "Should have no elements in the neighbor data when receiving "
+           "neighbor data, except those of the neighbors using finite "
+           "differences kept from the first exchange");
 
     const Mesh<Dim>& subcell_mesh = db::get<Tags::Mesh<Dim>>(box);
     const auto& mortar_meshes = get<evolution::dg::Tags::MortarMesh<Dim>>(box);
@@ -858,9 +1058,6 @@ struct ReceiveDataForReconstruction {
                                .volume_mesh_ghost_cell_data.value());
           }
 
-          ASSERT(ghost_data_ptr->empty(),
-                 "Should have no elements in the neighbor data when "
-                 "receiving neighbor data");
           const size_t number_of_rdmp_vars =
               rdmp_tci_data_ptr->max_variables_values.size();
           ASSERT(rdmp_tci_data_ptr->min_variables_values.size() ==
