@@ -33,7 +33,10 @@ struct ElementDistribution {
       "TestInteriorCubeGridPoints is a test weighting valid only for a 3D "
       "filled sphere in which every block except InnerCube is DG-only: it "
       "weights the InnerCube elements not touching the cube's boundary by "
-      "their FD point count and all other elements by their DG point count."};
+      "their FD point count and all other elements by their DG point count. "
+      "TestCcz4InteriorCubeWork uses the same layout restrictions, with "
+      "temporary CCZ4 work weights: FD weight P, DG weight "
+      "P*(1.824+0.000519*P), where P is the active point count."};
   using group = Parallel::OptionTags::Parallelization;
 };
 }  // namespace OptionTags

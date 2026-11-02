@@ -183,18 +183,19 @@ bool is_static_fd_element(const ElementId<Dim>& element_id,
 }
 
 // \brief The id of the InnerCube block for
-// `ElementWeight::TestInteriorCubeGridPoints`, after checking the domain
-// structure that weighting is specialized to.
+// the test interior-cube weightings, after checking the domain structure
+// those weightings are specialized to.
 template <size_t Dim>
 size_t inner_cube_for_test_interior_cube_weighting(
     const std::vector<Block<Dim>>& blocks,
     const std::vector<std::array<size_t, Dim>>& initial_refinement_levels,
-    const std::vector<std::array<size_t, Dim>>& initial_extents) {
+    const std::vector<std::array<size_t, Dim>>& initial_extents,
+    const domain::ElementWeight element_weight) {
   if constexpr (Dim != 3) {
-    ERROR(
-        "ElementWeight::TestInteriorCubeGridPoints requires a 3D domain, but "
-        "the domain has dimension "
-        << Dim << ".");
+    ERROR("ElementWeight::" << element_weight
+                            << " requires a 3D domain, but "
+                               "the domain has dimension "
+                            << Dim << ".");
   }
   size_t inner_cube_block_number = 0;
   size_t number_of_inner_cubes = 0;
@@ -205,10 +206,10 @@ size_t inner_cube_for_test_interior_cube_weighting(
     }
   }
   if (number_of_inner_cubes != 1) {
-    ERROR(
-        "ElementWeight::TestInteriorCubeGridPoints requires exactly one block "
-        "named 'InnerCube', but found "
-        << number_of_inner_cubes << ".");
+    ERROR("ElementWeight::" << element_weight
+                            << " requires exactly one block "
+                               "named 'InnerCube', but found "
+                            << number_of_inner_cubes << ".");
   }
   const Block<Dim>& inner_cube = blocks[inner_cube_block_number];
   if (inner_cube.neighbors().size() != 2 * Dim or
@@ -217,12 +218,13 @@ size_t inner_cube_for_test_interior_cube_weighting(
                     return direction_and_neighbors.second.ids().contains(
                         inner_cube.id());
                   })) {
-    ERROR(
-        "ElementWeight::TestInteriorCubeGridPoints requires the InnerCube "
-        "block to be connected to other blocks on all "
-        << 2 * Dim << " faces, but it has neighbors " << inner_cube.neighbors()
-        << " and external boundaries " << inner_cube.external_boundaries()
-        << ".");
+    ERROR("ElementWeight::" << element_weight
+                            << " requires the InnerCube "
+                               "block to be connected to other blocks on all "
+                            << 2 * Dim << " faces, but it has neighbors "
+                            << inner_cube.neighbors()
+                            << " and external boundaries "
+                            << inner_cube.external_boundaries() << ".");
   }
   const auto& refinement = initial_refinement_levels[inner_cube_block_number];
   if (refinement[0] < 2 or alg::any_of(
@@ -230,20 +232,21 @@ size_t inner_cube_for_test_interior_cube_weighting(
                                [&refinement](const size_t refinement_level) {
                                  return refinement_level != refinement[0];
                                })) {
-    ERROR(
-        "ElementWeight::TestInteriorCubeGridPoints requires isotropic initial "
-        "refinement of at least 2 in the InnerCube block, so that it has "
-        "elements not touching its boundary, but got "
-        << refinement << ".");
+    ERROR("ElementWeight::"
+          << element_weight
+          << " requires isotropic initial "
+             "refinement of at least 2 in the InnerCube block, so that it has "
+             "elements not touching its boundary, but got "
+          << refinement << ".");
   }
   const auto& extents = initial_extents[inner_cube_block_number];
   if (alg::any_of(extents, [&extents](const size_t num_points) {
         return num_points != extents[0];
       })) {
-    ERROR(
-        "ElementWeight::TestInteriorCubeGridPoints requires isotropic initial "
-        "extents in the InnerCube block, but got "
-        << extents << ".");
+    ERROR("ElementWeight::" << element_weight
+                            << " requires isotropic initial "
+                               "extents in the InnerCube block, but got "
+                            << extents << ".");
   }
   return inner_cube.id();
 }
@@ -272,6 +275,8 @@ std::ostream& operator<<(std::ostream& os, ElementWeight weight) {
       return os << "NumGridPointsAndGridSpacing";
     case ElementWeight::TestInteriorCubeGridPoints:
       return os << "TestInteriorCubeGridPoints";
+    case ElementWeight::TestCcz4InteriorCubeWork:
+      return os << "TestCcz4InteriorCubeWork";
     default:
       ERROR("Unknown ElementWeight type");
   }
@@ -292,9 +297,11 @@ std::unordered_map<ElementId<Dim>, double> get_element_costs(
                                        blocks, initial_refinement_levels)
                                  : std::nullopt;
   const auto test_inner_cube_id =
-      element_weight == ElementWeight::TestInteriorCubeGridPoints
+      (element_weight == ElementWeight::TestInteriorCubeGridPoints or
+       element_weight == ElementWeight::TestCcz4InteriorCubeWork)
           ? std::optional{inner_cube_for_test_interior_cube_weighting(
-                blocks, initial_refinement_levels, initial_extents)}
+                blocks, initial_refinement_levels, initial_extents,
+                element_weight)}
           : std::nullopt;
 
   for (size_t block_number = 0; block_number < blocks.size(); block_number++) {
@@ -328,6 +335,13 @@ std::unordered_map<ElementId<Dim>, double> get_element_costs(
              is_interior_cube_element(element_id, test_inner_cube_id.value())
                  ? subcell_grid_points_per_element
                  : grid_points_per_element});
+      } else if (element_weight == ElementWeight::TestCcz4InteriorCubeWork) {
+        const double dg_points = static_cast<double>(grid_points_per_element);
+        element_costs.insert(
+            {element_id,
+             is_interior_cube_element(element_id, test_inner_cube_id.value())
+                 ? static_cast<double>(subcell_grid_points_per_element)
+                 : dg_points * (1.824 + 0.000519 * dg_points)});
       } else {
         ASSERT(element_weight == ElementWeight::NumGridPointsAndGridSpacing,
                "Unknown element_weight");

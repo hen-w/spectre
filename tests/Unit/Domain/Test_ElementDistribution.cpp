@@ -653,7 +653,8 @@ void test_element_weight_options() {
   for (const auto weight :
        {ElementWeight::Uniform, ElementWeight::NumGridPoints,
         ElementWeight::NumGridPointsAndGridSpacing,
-        ElementWeight::TestInteriorCubeGridPoints}) {
+        ElementWeight::TestInteriorCubeGridPoints,
+        ElementWeight::TestCcz4InteriorCubeWork}) {
     CHECK(
         TestHelpers::test_creation<ElementWeight, ElementWeightMetavars<true>>(
             get_output(weight)) == weight);
@@ -666,12 +667,18 @@ void test_element_weight_options() {
   CHECK(TestHelpers::test_creation<ElementWeight, ElementWeightMetavars<false>>(
             "TestInteriorCubeGridPoints") ==
         ElementWeight::TestInteriorCubeGridPoints);
+  CHECK(get_output(ElementWeight::TestCcz4InteriorCubeWork) ==
+        "TestCcz4InteriorCubeWork");
+  CHECK(TestHelpers::test_creation<ElementWeight, ElementWeightMetavars<false>>(
+            "TestCcz4InteriorCubeWork") ==
+        ElementWeight::TestCcz4InteriorCubeWork);
   CHECK_THROWS_WITH(
       (TestHelpers::test_creation<ElementWeight, ElementWeightMetavars<true>>(
           "InteriorCube")),
       Catch::Matchers::ContainsSubstring(
           "ElementWeight must be 'Uniform', 'NumGridPoints', "
-          "'NumGridPointsAndGridSpacing', or 'TestInteriorCubeGridPoints'"));
+          "'NumGridPointsAndGridSpacing', 'TestInteriorCubeGridPoints', or "
+          "'TestCcz4InteriorCubeWork'"));
 }
 
 // A filled sphere with the structure of the all-wedges-DG layout: a cube with
@@ -782,13 +789,14 @@ void test_interior_cube_costs(const domain::creators::Sphere& sphere,
   CHECK(dg_wedge_blocks.size() == 18);
 }
 
-void test_interior_cube_errors(const domain::creators::Sphere& sphere) {
-  const auto test_weight_costs = [](const auto& blocks, const auto& refinements,
-                                    const auto& extents) {
-    return domain::get_element_costs(
-        blocks, refinements, extents,
-        domain::ElementWeight::TestInteriorCubeGridPoints, std::nullopt,
-        std::nullopt);
+void test_interior_cube_errors(const domain::creators::Sphere& sphere,
+                               const domain::ElementWeight weight) {
+  CAPTURE(weight);
+  const auto test_weight_costs = [weight](const auto& blocks,
+                                          const auto& refinements,
+                                          const auto& extents) {
+    return domain::get_element_costs(blocks, refinements, extents, weight,
+                                     std::nullopt, std::nullopt);
   };
   const auto domain = sphere.create_domain();
   const auto& blocks = domain.blocks();
@@ -880,6 +888,40 @@ void test_interior_cube_errors(const domain::creators::Sphere& sphere) {
           "requires a 3D domain, but the domain has dimension 2"));
 }
 
+void test_interior_cube_work_costs(const domain::creators::Sphere& sphere) {
+  const auto domain = sphere.create_domain();
+  const auto& blocks = domain.blocks();
+  const auto refinements = sphere.initial_refinement_levels();
+  const auto extents = sphere.initial_extents();
+  const auto point_costs = domain::get_element_costs(
+      blocks, refinements, extents,
+      domain::ElementWeight::TestInteriorCubeGridPoints, std::nullopt,
+      std::nullopt);
+  const auto work_costs =
+      domain::get_element_costs(blocks, refinements, extents,
+                                domain::ElementWeight::TestCcz4InteriorCubeWork,
+                                std::nullopt, std::nullopt);
+  const auto fd_elements =
+      fd_elements_with_dg_only_exterior(blocks, refinements);
+  REQUIRE(work_costs.size() == point_costs.size());
+  // Pin the temporary calibration at several isotropic and anisotropic meshes.
+  const std::unordered_map<size_t, double> expected_dg_costs{
+      {27, 49.626351},    {216, 418.198464},  {512, 1069.940736},
+      {704, 1541.320704}, {576, 1222.815744}, {490, 1018.3719}};
+  for (const auto& [id, cost] : work_costs) {
+    CAPTURE(id);
+    const auto& n = extents[id.block_id()];
+    if (fd_elements.contains(id)) {
+      CHECK(cost == point_costs.at(id));
+      CHECK(cost == static_cast<double>((2 * n[0] - 1) * (2 * n[1] - 1) *
+                                        (2 * n[2] - 1)));
+    } else {
+      CHECK(cost == approx(expected_dg_costs.at(n[0] * n[1] * n[2])));
+      CHECK(cost > point_costs.at(id));
+    }
+  }
+}
+
 void test_interior_cube_weighting() {
   test_element_weight_options();
   // The production layout: cube refinement 3 with 4^3 DG points, inside
@@ -899,7 +941,25 @@ void test_interior_cube_weighting() {
     test_proc_retrieval(domain::ElementWeight::TestInteriorCubeGridPoints,
                         production_sphere, num_procs);
   }
-  test_interior_cube_errors(production_sphere);
+  test_interior_cube_errors(production_sphere,
+                            domain::ElementWeight::TestInteriorCubeGridPoints);
+
+  const auto work_sphere = interior_cube_sphere(3, 6, {{2, 1}});
+  test_interior_cube_work_costs(work_sphere);
+  test_interior_cube_work_costs(interior_cube_sphere(2, 8, {{2, 1}}));
+  test_interior_cube_work_costs(interior_cube_sphere(4, 3, {{3, 2}}));
+  for (const size_t num_procs : {186_st, 372_st}) {
+    // Exercise the unchanged allocator with the nonintegral work weights,
+    // including reserved processors that must receive no elements.
+    const std::unordered_set<size_t> ignored_procs{0, 31};
+    test_weighted_element_distribution_construction(
+        domain::ElementWeight::TestCcz4InteriorCubeWork, work_sphere, num_procs,
+        ignored_procs);
+    test_proc_retrieval(domain::ElementWeight::TestCcz4InteriorCubeWork,
+                        work_sphere, num_procs, ignored_procs);
+  }
+  test_interior_cube_errors(work_sphere,
+                            domain::ElementWeight::TestCcz4InteriorCubeWork);
 }
 }  // namespace
 

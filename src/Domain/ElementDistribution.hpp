@@ -67,7 +67,18 @@ enum class ElementWeight {
   /// with exactly one block named `InnerCube`, connected to other blocks on all
   /// six faces, with isotropic initial refinement \f$L \geq 2\f$ and isotropic
   /// initial extents. Any other structure is an error.
-  TestInteriorCubeGridPoints
+  TestInteriorCubeGridPoints,
+  /// Temporary CCZ4 work estimate for the same static FD layout and with the
+  /// same restrictions as TestInteriorCubeGridPoints. An FD element has weight
+  /// equal to its active point count. A DG element with P points has weight
+  /// P * (1.824 + 0.000519 * P). The coefficients are an empirical fit to the
+  /// gradient-projection executable's FD11/DG6 puncture-domain profiles, not a
+  /// general DG cost model. They may need recalibration after changing the
+  /// numerical algorithms or substantially changing the meshes.
+  ///
+  /// This changes only the weights passed to BlockZCurveProcDistribution.
+  /// It does not change the placement algorithm or detect the TCI options.
+  TestCcz4InteriorCubeWork
 };
 
 std::ostream& operator<<(std::ostream& os, ElementWeight weight);
@@ -227,10 +238,12 @@ struct Options::create_from_yaml<domain::ElementWeight> {
       return domain::ElementWeight::NumGridPointsAndGridSpacing;
     } else if (ordering == "TestInteriorCubeGridPoints") {
       return domain::ElementWeight::TestInteriorCubeGridPoints;
+    } else if (ordering == "TestCcz4InteriorCubeWork") {
+      return domain::ElementWeight::TestCcz4InteriorCubeWork;
     }
     PARSE_ERROR(options.context(),
                 "ElementWeight must be 'Uniform', 'NumGridPoints', "
-                "'NumGridPointsAndGridSpacing', or "
-                "'TestInteriorCubeGridPoints'");
+                "'NumGridPointsAndGridSpacing', 'TestInteriorCubeGridPoints', "
+                "or 'TestCcz4InteriorCubeWork'");
   }
 };
