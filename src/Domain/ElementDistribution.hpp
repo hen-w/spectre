@@ -10,8 +10,11 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include "Domain/ExplicitElementPlacement.hpp"
+#include "Options/Auto.hpp"
 #include "Options/Options.hpp"
 #include "Options/ParseError.hpp"
 #include "Utilities/TypeTraits/CreateGetStaticMemberVariableOrDefault.hpp"
@@ -22,6 +25,10 @@ class Block;
 
 template <size_t Dim>
 class ElementId;
+
+namespace PUP {
+class er;
+}  // namespace PUP
 
 namespace Spectral {
 enum class Basis : uint8_t;
@@ -82,6 +89,61 @@ enum class ElementWeight {
 };
 
 std::ostream& operator<<(std::ostream& os, ElementWeight weight);
+
+/*!
+ * \brief How to distribute the initial elements on processors
+ *
+ * \details Holds one of
+ * - `std::nullopt`: place each element on the next processor (round robin),
+ * - an `ElementWeight`: place the elements with the
+ *   `BlockZCurveProcDistribution` using costs from `get_element_costs()`,
+ * - an `ExplicitElementPlacement`: place each initial element on the
+ *   processor given for it.
+ *
+ * In an input file the first two are given as `RoundRobin` or the name of
+ * the `ElementWeight`, and the third as a map under the key `Explicit` (see
+ * `ExplicitElementPlacement`).
+ */
+class ElementDistribution {
+ public:
+  /// Option label for round robin
+  struct RoundRobin {};
+
+  /// Round robin
+  ElementDistribution() = default;
+  /// Z-curve distribution with the given weight, or round robin for
+  /// `std::nullopt`
+  explicit ElementDistribution(std::optional<ElementWeight> element_weight);
+  explicit ElementDistribution(ExplicitElementPlacement explicit_placement);
+
+  /// Whether the elements are placed by an `ExplicitElementPlacement`
+  bool is_explicit() const {
+    return std::holds_alternative<ExplicitElementPlacement>(distribution_);
+  }
+
+  /// The weight of the Z-curve distribution, or `std::nullopt` for round
+  /// robin. Throws `std::bad_variant_access` if `is_explicit()`.
+  const std::optional<ElementWeight>& element_weight() const {
+    return std::get<std::optional<ElementWeight>>(distribution_);
+  }
+
+  /// Throws `std::bad_variant_access` unless `is_explicit()`.
+  const ExplicitElementPlacement& explicit_placement() const {
+    return std::get<ExplicitElementPlacement>(distribution_);
+  }
+
+  // NOLINTNEXTLINE(google-runtime-references)
+  void pup(PUP::er& p);
+
+ private:
+  friend bool operator==(const ElementDistribution& lhs,
+                         const ElementDistribution& rhs);
+
+  std::variant<std::optional<ElementWeight>, ExplicitElementPlacement>
+      distribution_;
+};
+
+bool operator!=(const ElementDistribution& lhs, const ElementDistribution& rhs);
 
 /// \brief Get the cost of each `Element` in a list of `Block`s where
 /// `element_weight` specifies which weight distribution scheme to use
@@ -245,5 +307,31 @@ struct Options::create_from_yaml<domain::ElementWeight> {
                 "ElementWeight must be 'Uniform', 'NumGridPoints', "
                 "'NumGridPointsAndGridSpacing', 'TestInteriorCubeGridPoints', "
                 "or 'TestCcz4InteriorCubeWork'");
+  }
+};
+
+namespace domain::ElementDistribution_detail {
+// The placement given under the key `Explicit` if the option is a map, else
+// `std::nullopt`
+std::optional<ExplicitElementPlacement> parse_explicit_placement(
+    const Options::Option& options);
+}  // namespace domain::ElementDistribution_detail
+
+template <>
+struct Options::create_from_yaml<domain::ElementDistribution> {
+  template <typename Metavariables>
+  static domain::ElementDistribution create(const Options::Option& options) {
+    std::optional<domain::ExplicitElementPlacement> explicit_placement =
+        domain::ElementDistribution_detail::parse_explicit_placement(options);
+    if (explicit_placement.has_value()) {
+      return domain::ElementDistribution{std::move(*explicit_placement)};
+    }
+    const auto element_weight =
+        options.parse_as<Options::Auto<domain::ElementWeight,
+                                       domain::ElementDistribution::RoundRobin>,
+                         Metavariables>();
+    return domain::ElementDistribution{
+        static_cast<const std::optional<domain::ElementWeight>&>(
+            element_weight)};
   }
 };

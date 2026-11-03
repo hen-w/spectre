@@ -6,13 +6,13 @@
 #include <array>
 #include <cstddef>
 #include <functional>
-#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include "Domain/Block.hpp"
 #include "Domain/ElementDistribution.hpp"
+#include "Domain/ExplicitElementPlacement.hpp"
 #include "Domain/Structure/ElementId.hpp"
 #include "Parallel/DomainDiagnosticInfo.hpp"
 #include "Parallel/GlobalCache.hpp"
@@ -32,10 +32,14 @@ namespace Parallel {
  * The `func` is called with `(element_id, target_proc, target_node)` allowing
  * the `func` to insert the element with `element_id` on the target processor
  * and node.
+ *
+ * An explicit placement is checked against the initial elements and the
+ * processors (see `domain::ExplicitElementPlacement`) before `func` is called
+ * for any element.
  */
 template <typename F, size_t Dim, typename Metavariables>
 void create_elements_using_distribution(
-    const F& func, const std::optional<domain::ElementWeight>& element_weight,
+    const F& func, const domain::ElementDistribution& distribution,
     const std::vector<Block<Dim>>& blocks,
     const std::vector<std::array<size_t, Dim>>& initial_extents,
     const std::vector<std::array<size_t, Dim>>& initial_refinement_levels,
@@ -46,15 +50,20 @@ void create_elements_using_distribution(
     const size_t num_of_procs_to_use,
     const Parallel::GlobalCache<Metavariables>& local_cache,
     const bool print_diagnostics) {
-  // Only need the element distribution if the element weight has a value
-  // because then we have to use the space filling curve and not just use round
-  // robin.
+  // An explicit placement gives the proc of each element. Otherwise, we only
+  // need the element distribution if the element weight has a value because
+  // then we have to use the space filling curve and not just use round robin.
+  std::unordered_map<ElementId<Dim>, size_t> explicit_procs{};
   domain::BlockZCurveProcDistribution<Dim> element_distribution{};
-  if (element_weight.has_value()) {
+  if (distribution.is_explicit()) {
+    explicit_procs =
+        distribution.explicit_placement().procs_for_initial_elements(
+            initial_refinement_levels, number_of_procs, procs_to_ignore);
+  } else if (distribution.element_weight().has_value()) {
     const std::unordered_map<ElementId<Dim>, double> element_costs =
-        domain::get_element_costs(blocks, initial_refinement_levels,
-                                  initial_extents, element_weight.value(),
-                                  i1_basis, i1_quadrature);
+        domain::get_element_costs(
+            blocks, initial_refinement_levels, initial_extents,
+            distribution.element_weight().value(), i1_basis, i1_quadrature);
     element_distribution = domain::BlockZCurveProcDistribution<Dim>{
         element_costs,   num_of_procs_to_use, blocks, initial_refinement_levels,
         initial_extents, procs_to_ignore};
@@ -75,11 +84,15 @@ void create_elements_using_distribution(
     const std::vector<ElementId<Dim>> element_ids =
         initial_element_ids(block.id(), initial_ref_levs);
 
-    // Value means ZCurve. nullopt means round robin
-    if (element_weight.has_value()) {
+    // Explicit placement and ZCurve (weight has a value) give each element a
+    // fixed proc. nullopt means round robin
+    if (distribution.is_explicit() or
+        distribution.element_weight().has_value()) {
       for (const auto& element_id : element_ids) {
         const size_t target_proc =
-            element_distribution.get_proc_for_element(element_id);
+            distribution.is_explicit()
+                ? explicit_procs.at(element_id)
+                : element_distribution.get_proc_for_element(element_id);
         const size_t target_node =
             Parallel::node_of<size_t>(target_proc, local_cache);
         func(element_id, target_proc, target_node);

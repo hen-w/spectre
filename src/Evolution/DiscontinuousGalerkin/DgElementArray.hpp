@@ -106,7 +106,7 @@ void DgElementArray<Metavariables, PhaseDepActionList>::allocate_array(
   const auto i1_basis = Spectral::Basis::Legendre;
   const auto& i1_quadrature =
       get<evolution::dg::Tags::Quadrature>(initialization_items);
-  const std::optional<domain::ElementWeight>& element_weight =
+  const domain::ElementDistribution& distribution =
       Parallel::get<domain::Tags::ElementDistribution>(local_cache);
 
   const size_t number_of_procs = Parallel::number_of_procs<size_t>(local_cache);
@@ -122,7 +122,7 @@ void DgElementArray<Metavariables, PhaseDepActionList>::allocate_array(
         dg_element_array(element_id)
             .insert(global_cache, initialization_items, target_proc);
       },
-      element_weight, blocks, initial_extents, initial_refinement_levels,
+      distribution, blocks, initial_extents, initial_refinement_levels,
       i1_basis, i1_quadrature,
 
       procs_to_ignore, number_of_procs, number_of_nodes, num_of_procs_to_use,

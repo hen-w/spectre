@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "Domain/Block.hpp"
@@ -25,6 +26,7 @@
 #include "Domain/Creators/Sphere.hpp"
 #include "Domain/Domain.hpp"
 #include "Domain/ElementDistribution.hpp"
+#include "Domain/ExplicitElementPlacement.hpp"
 #include "Domain/Structure/Element.hpp"
 #include "Domain/Structure/ElementId.hpp"
 #include "Domain/Structure/InitialElementIds.hpp"
@@ -681,6 +683,45 @@ void test_element_weight_options() {
           "'TestCcz4InteriorCubeWork'"));
 }
 
+void test_element_distribution() {
+  using domain::ElementDistribution;
+  using domain::ElementWeight;
+  using domain::ExplicitElementPlacement;
+  const ElementDistribution round_robin{};
+  CHECK(not round_robin.is_explicit());
+  CHECK(round_robin.element_weight() == std::nullopt);
+  CHECK(round_robin == ElementDistribution{std::nullopt});
+  CHECK_THROWS_AS(round_robin.explicit_placement(), std::bad_variant_access);
+
+  const ElementDistribution uniform{std::optional{ElementWeight::Uniform}};
+  CHECK(not uniform.is_explicit());
+  CHECK(uniform.element_weight() == std::optional{ElementWeight::Uniform});
+  CHECK(uniform != round_robin);
+  CHECK(uniform !=
+        ElementDistribution{std::optional{ElementWeight::NumGridPoints}});
+
+  const ExplicitElementPlacement placement{{{"[B0,(L0I0)]", 2}}};
+  const ElementDistribution explicit_distribution{placement};
+  CHECK(explicit_distribution.is_explicit());
+  CHECK(explicit_distribution.explicit_placement() == placement);
+  CHECK_THROWS_AS(explicit_distribution.element_weight(),
+                  std::bad_variant_access);
+  CHECK(explicit_distribution != round_robin);
+  CHECK(explicit_distribution != uniform);
+  CHECK(explicit_distribution !=
+        ElementDistribution{ExplicitElementPlacement{{{"[B0,(L0I0)]", 1}}}});
+  // An empty explicit placement is not round robin
+  CHECK(ElementDistribution{ExplicitElementPlacement{}} != round_robin);
+
+  for (const auto& distribution :
+       {round_robin, uniform, explicit_distribution}) {
+    test_copy_semantics(distribution);
+    auto distribution_to_move = distribution;
+    test_move_semantics(std::move(distribution_to_move), distribution);
+    test_serialization(distribution);
+  }
+}
+
 // A filled sphere with the structure of the all-wedges-DG layout: a cube with
 // isotropic refinement and extents inside three shells of wedges with
 // anisotropic extents. The angular refinements of the inner two shells are
@@ -964,6 +1005,7 @@ void test_interior_cube_weighting() {
 }  // namespace
 
 SPECTRE_TEST_CASE("Unit.Domain.ElementDistribution", "[Domain][Unit]") {
+  test_element_distribution();
   // Test cost functions
   test_filled_sphere_costs();
   test_uniform_cost_function();

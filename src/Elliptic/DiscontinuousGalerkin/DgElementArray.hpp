@@ -37,6 +37,7 @@
 #include "Parallel/Printf/Printf.hpp"
 #include "Parallel/Protocols/ArrayElementsAllocator.hpp"
 #include "Parallel/Tags/Parallelization.hpp"
+#include "Utilities/ErrorHandling/Error.hpp"
 #include "Utilities/Literals.hpp"
 #include "Utilities/Numeric.hpp"
 #include "Utilities/ProtocolHelpers.hpp"
@@ -57,6 +58,9 @@ namespace elliptic {
  * which represents physical processors to avoid placing elements on. `Element`s
  * are distributed to processors according to their computational costs
  * determined by the number of grid points.
+ *
+ * Explicit element placement (`domain::ExplicitElementPlacement`) is not
+ * supported and is an error.
  */
 template <size_t Dim>
 struct DefaultElementsAllocator
@@ -95,8 +99,16 @@ struct DefaultElementsAllocator
 
     const auto& blocks = domain.blocks();
 
-    const std::optional<domain::ElementWeight>& element_weight =
+    const domain::ElementDistribution& distribution =
         get<domain::Tags::ElementDistribution>(local_cache);
+    if (distribution.is_explicit()) {
+      ERROR(
+          "Explicit element placement is not supported by "
+          "elliptic::DefaultElementsAllocator. Choose RoundRobin or an element "
+          "weight for the ElementDistribution option.");
+    }
+    const std::optional<domain::ElementWeight>& element_weight =
+        distribution.element_weight();
 
     domain::BlockZCurveProcDistribution<Dim> element_distribution{};
     if (element_weight.has_value()) {

@@ -5,12 +5,10 @@
 
 #include <cstddef>
 #include <memory>
-#include <optional>
 
 #include "DataStructures/DataBox/Tag.hpp"
 #include "Domain/Domain.hpp"
 #include "Domain/ElementDistribution.hpp"
-#include "Options/Auto.hpp"
 #include "Options/String.hpp"
 #include "Utilities/TMPL.hpp"
 
@@ -25,8 +23,7 @@ namespace OptionTags {
 /// \ingroup OptionTagsGroup
 /// \ingroup ComputationalDomainGroup
 struct ElementDistribution {
-  struct RoundRobin {};
-  using type = Options::Auto<ElementWeight, RoundRobin>;
+  using type = ::domain::ElementDistribution;
   static constexpr Options::String help = {
       "Weighting pattern to use for ZCurve element distribution. Specify "
       "RoundRobin to just place each element on the next core. "
@@ -36,7 +33,14 @@ struct ElementDistribution {
       "their FD point count and all other elements by their DG point count. "
       "TestCcz4InteriorCubeWork uses the same layout restrictions, with "
       "temporary CCZ4 work weights: FD weight P, DG weight "
-      "P*(1.824+0.000519*P), where P is the active point count."};
+      "P*(1.824+0.000519*P), where P is the active point count. "
+      "Alternatively, specify 'Explicit:' followed by a map from the quoted "
+      "name of every initial element, e.g. \"[B0,(L1I0,L1I0,L0I0)]\", to the "
+      "global processor (Charm++ PE) number on which it is created. This "
+      "chooses only the initial placement; binding processors to cores "
+      "remains the launcher's task, and the map must be regenerated when the "
+      "domain or the processors change. Explicit placement is supported only "
+      "by the evolution element array and element collection."};
   using group = Parallel::OptionTags::Parallelization;
 };
 }  // namespace OptionTags
@@ -52,7 +56,7 @@ namespace Tags {
 /// not affect the computational cost at all. Therefore, if a user does choose
 /// NumGridPointsAndGridSpacing when not using LTS, an error will occur.
 struct ElementDistribution : db::SimpleTag {
-  using type = std::optional<ElementWeight>;
+  using type = ::domain::ElementDistribution;
   using option_tags = tmpl::list<OptionTags::ElementDistribution>;
 
   static constexpr bool pass_metavariables = false;

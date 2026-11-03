@@ -98,7 +98,7 @@ struct CreateElementCollection {
     const auto& initial_extents = get<domain::Tags::InitialExtents<Dim>>(box);
     const auto i1_basis = Spectral::Basis::Legendre;
     const auto& i1_quadrature = get<evolution::dg::Tags::Quadrature>(box);
-    const std::optional<domain::ElementWeight>& element_weight =
+    const domain::ElementDistribution& distribution =
         Parallel::get<domain::Tags::ElementDistribution>(local_cache);
 
     const size_t number_of_procs =
@@ -133,7 +133,7 @@ struct CreateElementCollection {
             my_elements_and_cores.push_back(std::pair{element_id, target_proc});
           }
         },
-        element_weight, blocks, initial_extents, initial_refinement_levels,
+        distribution, blocks, initial_extents, initial_refinement_levels,
         i1_basis, i1_quadrature,
         // The below arguments control how the elements are mapped to the
         // hardware.

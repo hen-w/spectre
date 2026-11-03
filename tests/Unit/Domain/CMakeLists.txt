@@ -22,6 +22,7 @@ set(LIBRARY_SOURCES
   Test_ElementToBlockLogicalMap.cpp
   Test_ElementSearchTree.cpp
   Test_ExcisionSphere.cpp
+  Test_ExplicitElementPlacement.cpp
   Test_FaceNormal.cpp
   Test_FlatLogicalMetric.cpp
   Test_InterfaceHelpers.cpp

@@ -71,7 +71,9 @@ namespace LinearSolver::multigrid {
  * The elements are distributed on processors using the
  * `domain::BlockZCurveProcDistribution` for every grid independently. An
  * unordered set of `size_t`s can be passed to the `apply` function which
- * represents physical processors to avoid placing elements on.
+ * represents physical processors to avoid placing elements on. Explicit element
+ * placement (`domain::ExplicitElementPlacement`) is not supported and is an
+ * error.
  */
 template <size_t Dim, typename OptionsGroup>
 struct ElementsAllocator
@@ -109,8 +111,16 @@ struct ElementsAllocator
     const auto basis = Spectral::Basis::Legendre;
     const auto& quadrature =
         Parallel::get<elliptic::dg::Tags::Quadrature>(local_cache);
-    const std::optional<domain::ElementWeight>& element_weight =
+    const domain::ElementDistribution& distribution =
         get<domain::Tags::ElementDistribution>(local_cache);
+    if (distribution.is_explicit()) {
+      ERROR(
+          "Explicit element placement is not supported by "
+          "LinearSolver::multigrid::ElementsAllocator. Choose RoundRobin or an "
+          "element weight for the ElementDistribution option.");
+    }
+    const std::optional<domain::ElementWeight>& element_weight =
+        distribution.element_weight();
     std::optional<size_t> max_coarse_levels =
         get<Tags::InitialCoarseLevels<OptionsGroup>>(local_cache);
     const size_t number_of_procs =

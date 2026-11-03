@@ -13,6 +13,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <yaml-cpp/yaml.h>
 
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/IndexType.hpp"
@@ -41,7 +42,9 @@
 #include "Utilities/Gsl.hpp"
 #include "Utilities/Literals.hpp"
 #include "Utilities/Numeric.hpp"
+#include "Utilities/Serialization/PupStlCpp17.hpp"
 #include "Utilities/StdHelpers.hpp"
+#include "Utilities/TMPL.hpp"
 
 namespace domain {
 namespace {
@@ -281,6 +284,49 @@ std::ostream& operator<<(std::ostream& os, ElementWeight weight) {
       ERROR("Unknown ElementWeight type");
   }
 }
+
+ElementDistribution::ElementDistribution(
+    const std::optional<ElementWeight> element_weight)
+    : distribution_(element_weight) {}
+
+ElementDistribution::ElementDistribution(
+    ExplicitElementPlacement explicit_placement)
+    : distribution_(std::move(explicit_placement)) {}
+
+void ElementDistribution::pup(PUP::er& p) { p | distribution_; }
+
+bool operator==(const ElementDistribution& lhs,
+                const ElementDistribution& rhs) {
+  return lhs.distribution_ == rhs.distribution_;
+}
+
+bool operator!=(const ElementDistribution& lhs,
+                const ElementDistribution& rhs) {
+  return not(lhs == rhs);
+}
+
+namespace ElementDistribution_detail {
+namespace {
+struct Explicit {
+  using type = ExplicitElementPlacement;
+  static constexpr Options::String help = {
+      "Map from the name of each initial element, e.g. "
+      "\"[B0,(L1I0,L1I0,L0I0)]\" (quoted), to the global processor number on "
+      "which it is created."};
+};
+}  // namespace
+
+std::optional<ExplicitElementPlacement> parse_explicit_placement(
+    const Options::Option& options) {
+  if (not options.node().IsMap()) {
+    return std::nullopt;
+  }
+  Options::Parser<tmpl::list<Explicit>> parser(
+      "Place each initial element on a given processor.");
+  parser.parse(options);
+  return parser.get<Explicit>();
+}
+}  // namespace ElementDistribution_detail
 
 template <size_t Dim>
 std::unordered_map<ElementId<Dim>, double> get_element_costs(
