@@ -6,6 +6,8 @@
 #include <array>
 #include <climits>
 #include <cstddef>
+#include <limits>
+#include <random>
 #include <string>
 
 #include "DataStructures/DataBox/Prefixes.hpp"
@@ -24,6 +26,8 @@
 #include "Evolution/Systems/Ccz4/Tags.hpp"
 #include "Framework/Pypp.hpp"
 #include "Framework/SetupLocalPythonEnvironment.hpp"
+#include "Framework/TestHelpers.hpp"
+#include "Helpers/DataStructures/MakeWithRandomValues.hpp"
 #include "NumericalAlgorithms/LinearOperators/PartialDerivatives.hpp"
 #include "NumericalAlgorithms/Spectral/Basis.hpp"
 #include "NumericalAlgorithms/Spectral/LogicalCoordinates.hpp"
@@ -36,6 +40,7 @@
 #include "PointwiseFunctions/GeneralRelativity/Tags.hpp"
 #include "Utilities/ConstantExpressions.hpp"
 #include "Utilities/Gsl.hpp"
+#include "Utilities/MakeWithValue.hpp"
 #include "Utilities/TMPL.hpp"
 
 namespace {
@@ -125,9 +130,6 @@ void test_compute_spatial_ricci_tensor(
     }
   }
 
-  const auto contracted_field_d_up =
-      ::tenex::evaluate<ti::L>(field_d_up(ti::m, ti::M, ti::L));
-
   const auto d_field_d =
       partial_derivative(field_d, mesh, coord_map.inv_jacobian(x_logical));
   const auto d_conformal_christoffel_second_kind =
@@ -158,8 +160,6 @@ void test_compute_spatial_ricci_tensor(
       conformal_spatial_metric, inverse_conformal_spatial_metric, field_p,
       conformal_christoffel_second_kind);
 
-  const auto contracted_christoffel_second_kind =
-      tenex::evaluate<ti::l>(christoffel_second_kind(ti::M, ti::l, ti::m));
   const auto d_christoffel_second_kind = partial_derivative(
       christoffel_second_kind, mesh, coord_map.inv_jacobian(x_logical));
   const auto contracted_d_conformal_christoffel_difference =
@@ -185,16 +185,15 @@ void test_compute_spatial_ricci_tensor(
       gr::ricci_tensor(christoffel_second_kind, d_christoffel_second_kind);
 
   const auto actual_cpp_ricci_tensor = Ccz4::spatial_ricci_tensor(
-      christoffel_second_kind, contracted_christoffel_second_kind,
+      conformal_christoffel_second_kind,
       contracted_d_conformal_christoffel_difference, conformal_spatial_metric,
-      inverse_conformal_spatial_metric, field_d, field_d_up,
-      contracted_field_d_up, field_p, d_field_p);
-  const auto actual_cpp_ricci_tensor_with_symmetric_d_field_p
-    = Ccz4::spatial_ricci_tensor(
-        christoffel_second_kind, contracted_christoffel_second_kind,
-        contracted_d_conformal_christoffel_difference, conformal_spatial_metric,
-        inverse_conformal_spatial_metric, field_d, field_d_up,
-        contracted_field_d_up, field_p, d_field_p_symm);
+      inverse_conformal_spatial_metric, field_p, d_field_p);
+  const auto actual_cpp_ricci_tensor_with_symmetric_d_field_p =
+      Ccz4::spatial_ricci_tensor(conformal_christoffel_second_kind,
+                                 contracted_d_conformal_christoffel_difference,
+                                 conformal_spatial_metric,
+                                 inverse_conformal_spatial_metric, field_p,
+                                 d_field_p_symm);
 
   CHECK_ITERABLE_APPROX(expected_py_ricci_tensor, actual_cpp_ricci_tensor);
   CHECK_ITERABLE_APPROX(expected_py_ricci_tensor_with_symmetric_d_field_p,
@@ -208,6 +207,99 @@ void test_compute_spatial_ricci_tensor(
   CHECK_ITERABLE_CUSTOM_APPROX(expected_cpp_ricci_tensor,
                                actual_cpp_ricci_tensor_with_symmetric_d_field_p,
                                approx);
+}
+
+// Random data against the unchanged Python expansion in the spatial
+// christoffel symbols: dense non-flat conformal metrics
+// \tilde{\gamma}_{ij} = \delta_{ij} + a_{ik} a_{jk}, whose determinant is at
+// least 1 + a_{ij} a_{ij}, and D_{kij}, P_i, \partial_j P_i and
+// \partial_l \tilde{\Gamma}^k_{ij}, independent of the metric and of each
+// other, with only the symmetries of their types. The inverse metric,
+// D_k^{ij}, and the conformal and physical christoffel symbols are computed
+// from them as in the evolution systems. P_i is zero or random, and
+// \partial_j P_i symmetric or not.
+template <size_t Dim, typename DataType>
+void test_random_data(const gsl::not_null<std::mt19937*> generator,
+                      const DataType& used_for_size) {
+  CAPTURE(Dim);
+  std::uniform_real_distribution<> distribution(-1.0, 1.0);
+  const auto a = make_with_random_values<tnsr::ij<DataType, Dim>>(
+      generator, make_not_null(&distribution), used_for_size);
+  auto conformal_spatial_metric =
+      make_with_value<tnsr::ii<DataType, Dim>>(used_for_size, 0.0);
+  for (size_t i = 0; i < Dim; ++i) {
+    conformal_spatial_metric.get(i, i) = 1.0;
+    for (size_t j = i; j < Dim; ++j) {
+      for (size_t k = 0; k < Dim; ++k) {
+        conformal_spatial_metric.get(i, j) += a.get(i, k) * a.get(j, k);
+      }
+    }
+  }
+  const auto inverse_conformal_spatial_metric =
+      determinant_and_inverse(conformal_spatial_metric).second;
+  const auto field_d = make_with_random_values<tnsr::ijj<DataType, Dim>>(
+      generator, make_not_null(&distribution), used_for_size);
+  tnsr::iJJ<DataType, Dim> field_d_up{};
+  tenex::evaluate<ti::k, ti::I, ti::J>(
+      make_not_null(&field_d_up),
+      inverse_conformal_spatial_metric(ti::I, ti::N) *
+          inverse_conformal_spatial_metric(ti::M, ti::J) *
+          field_d(ti::k, ti::n, ti::m));
+  const auto conformal_christoffel_second_kind =
+      Ccz4::conformal_christoffel_second_kind(inverse_conformal_spatial_metric,
+                                              field_d);
+  const auto d_conformal_christoffel_second_kind =
+      make_with_random_values<tnsr::iJkk<DataType, Dim>>(
+          generator, make_not_null(&distribution), used_for_size);
+  tnsr::ij<DataType, Dim> contracted_d_conformal_christoffel_difference{};
+  tenex::evaluate<ti::i, ti::j>(
+      make_not_null(&contracted_d_conformal_christoffel_difference),
+      d_conformal_christoffel_second_kind(ti::m, ti::M, ti::i, ti::j) -
+          d_conformal_christoffel_second_kind(ti::j, ti::M, ti::i, ti::m));
+
+  for (const bool zero_field_p : {true, false}) {
+    CAPTURE(zero_field_p);
+    const auto field_p =
+        zero_field_p
+            ? make_with_value<tnsr::i<DataType, Dim>>(used_for_size, 0.0)
+            : make_with_random_values<tnsr::i<DataType, Dim>>(
+                  generator, make_not_null(&distribution), used_for_size);
+    const auto christoffel_second_kind = Ccz4::christoffel_second_kind(
+        conformal_spatial_metric, inverse_conformal_spatial_metric, field_p,
+        conformal_christoffel_second_kind);
+    const auto d_field_p = make_with_random_values<tnsr::ij<DataType, Dim>>(
+        generator, make_not_null(&distribution), used_for_size);
+    tnsr::ii<DataType, Dim> symmetric_d_field_p{};
+    tenex::evaluate<ti::i, ti::j>(
+        make_not_null(&symmetric_d_field_p),
+        0.5 * (d_field_p(ti::i, ti::j) + d_field_p(ti::j, ti::i)));
+
+    const auto check = [&](const auto& d_field_p_to_use) {
+      const auto expected = pypp::call<tnsr::ij<DataType, Dim>>(
+          "Ricci", "spatial_ricci_tensor", christoffel_second_kind,
+          d_conformal_christoffel_second_kind, conformal_spatial_metric,
+          inverse_conformal_spatial_metric, field_d, field_d_up, field_p,
+          d_field_p_to_use);
+      const auto ricci = Ccz4::spatial_ricci_tensor(
+          conformal_christoffel_second_kind,
+          contracted_d_conformal_christoffel_difference,
+          conformal_spatial_metric, inverse_conformal_spatial_metric, field_p,
+          d_field_p_to_use);
+      // The difference of the derivatives of the conformal christoffel
+      // symbols is not symmetric, so neither is the expected tensor: tenex
+      // evaluates the symmetric result at the canonical index of each
+      // stored component.
+      for (size_t storage_index = 0; storage_index < ricci.size();
+           ++storage_index) {
+        const auto index = ricci.get_tensor_index(storage_index);
+        CAPTURE(index);
+        CHECK_ITERABLE_APPROX(ricci[storage_index],
+                              expected.get(index[0], index[1]));
+      }
+    };
+    check(d_field_p);
+    check(symmetric_d_field_p);
+  }
 }
 }  // namespace
 
@@ -225,4 +317,16 @@ SPECTRE_TEST_CASE("Unit.Evolution.Systems.Ccz4.Ricci", "[Unit][Evolution]") {
 
   test_compute_spatial_ricci_tensor(solution, grid_size, lower_bound,
                                     upper_bound);
+
+  MAKE_GENERATOR(generator);
+  const double used_for_size_double =
+      std::numeric_limits<double>::signaling_NaN();
+  const DataVector used_for_size_data_vector(
+      5, std::numeric_limits<double>::signaling_NaN());
+  test_random_data<1>(make_not_null(&generator), used_for_size_double);
+  test_random_data<2>(make_not_null(&generator), used_for_size_double);
+  test_random_data<3>(make_not_null(&generator), used_for_size_double);
+  test_random_data<1>(make_not_null(&generator), used_for_size_data_vector);
+  test_random_data<2>(make_not_null(&generator), used_for_size_data_vector);
+  test_random_data<3>(make_not_null(&generator), used_for_size_data_vector);
 }

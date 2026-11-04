@@ -87,8 +87,6 @@ static void apply(
     const gsl::not_null<tnsr::i<DataVector, Dim>*>
         contracted_symmetrized_d_field_b,
     const gsl::not_null<tnsr::i<DataVector, Dim>*> field_d_up_times_a_tilde,
-    const gsl::not_null<tnsr::I<DataVector, Dim>*>
-        contracted_field_d_up,  // temp for eq 18 -20
     const gsl::not_null<Scalar<DataVector>*>
         half_conformal_factor_squared,  // temp for eq 25
     const gsl::not_null<tnsr::ij<DataVector, Dim>*>
@@ -101,8 +99,6 @@ static void apply(
         gamma_hat_minus_contracted_conformal_christoffel,
     const gsl::not_null<tnsr::iJ<DataVector, Dim>*>
         d_gamma_hat_minus_contracted_conformal_christoffel,
-    const gsl::not_null<tnsr::i<DataVector, Dim>*>
-        contracted_christoffel_second_kind,  // temp for eq 18 -20
     const gsl::not_null<tnsr::ij<DataVector, Dim>*>
         contracted_d_conformal_christoffel_difference,  // temp for eq 18 -20
     const gsl::not_null<Scalar<DataVector>*> k_minus_2_theta_c,
@@ -238,9 +234,6 @@ static void apply(
                                   *conformal_christoffel_second_kind);
 
   // temporary expressions needed for eq 18 - 20
-  ::tenex::evaluate<ti::l>(contracted_christoffel_second_kind,
-                           (*christoffel_second_kind)(ti::M, ti::l, ti::m));
-
   // comment for the future: we should probably ensure the traces are taken
   // before computing the differences as the off-diagonal terms are not
   // needed
@@ -249,16 +242,11 @@ static void apply(
       (*d_conformal_christoffel_second_kind)(ti::m, ti::M, ti::i, ti::j) -
           (*d_conformal_christoffel_second_kind)(ti::j, ti::M, ti::i, ti::m));
 
-  ::tenex::evaluate<ti::L>(contracted_field_d_up,
-                           (*field_d_up)(ti::m, ti::M, ti::L));
-
   // eq 18 - 20
   ::Ccz4::spatial_ricci_tensor(
-      spatial_ricci_tensor, *christoffel_second_kind,
-      *contracted_christoffel_second_kind,
+      spatial_ricci_tensor, *conformal_christoffel_second_kind,
       *contracted_d_conformal_christoffel_difference, conformal_spatial_metric,
-      *inv_conformal_spatial_metric, field_d, *field_d_up,
-      *contracted_field_d_up, field_p, d_field_p);
+      *inv_conformal_spatial_metric, field_p, d_field_p);
 
   // eq 21
   ::Ccz4::grad_grad_lapse(grad_grad_lapse, lapse, *christoffel_second_kind,
@@ -674,7 +662,6 @@ struct SoTimeDerivative {
         ::Ccz4::Tags::SymmetrizedDerivFieldB<DataVector, Dim>,
         ::Ccz4::Tags::ContractedSymmetrizedDerivFieldB<DataVector, Dim>,
         ::Ccz4::Tags::FieldDUpTimesATilde<DataVector, Dim>,
-        ::Ccz4::Tags::ContractedFieldDUp<DataVector, Dim>,
         ::Ccz4::Tags::HalfConformalFactorSquared<DataVector>,
         ::Ccz4::Tags::ConformalMetricTimesFieldB<DataVector, Dim>,
         ::Ccz4::Tags::ConformalMetricTimesTraceATilde<DataVector, Dim>,
@@ -683,7 +670,6 @@ struct SoTimeDerivative {
                                                                   Dim>,
         ::Ccz4::Tags::DerivGammaHatMinusContractedConformalChristoffel<
             DataVector, Dim>,
-        ::Ccz4::Tags::ContractedChristoffelSecondKind<DataVector, Dim>,
         ::Ccz4::Tags::ContractedDerivConformalChristoffelDifference<DataVector,
                                                                     Dim>,
         ::Ccz4::Tags::KMinus2ThetaC<DataVector>,
@@ -752,16 +738,14 @@ struct SoTimeDerivative {
           auto& [conformal_factor_squared, det_conformal_spatial_metric,
                  inv_conformal_spatial_metric, inv_spatial_metric, inv_a_tilde,
                  a_tilde_times_field_b,
-                 a_tilde_minus_one_third_conformal_metric_times_trace_a_tilde,
+                 trace_free_a_tilde,
                  contracted_field_b, symmetrized_d_field_b,
                  contracted_symmetrized_d_field_b, field_d_up_times_a_tilde,
-                 contracted_field_d_up, half_conformal_factor_squared,
-                 conformal_metric_times_field_b,
+                 half_conformal_factor_squared, conformal_metric_times_field_b,
                  conformal_metric_times_trace_a_tilde,
                  inv_conformal_metric_times_d_a_tilde,
                  gamma_hat_minus_contracted_conformal_christoffel,
                  d_gamma_hat_minus_contracted_conformal_christoffel,
-                 contracted_christoffel_second_kind,
                  contracted_d_conformal_christoffel_difference,
                  k_minus_2_theta_c, k_minus_k0_minus_2_theta_c,
                  lapse_times_a_tilde, lapse_times_d_a_tilde,
@@ -813,12 +797,11 @@ struct SoTimeDerivative {
               // temporary expressions
               make_not_null(&a_tilde_times_field_b),
               make_not_null(
-                &a_tilde_minus_one_third_conformal_metric_times_trace_a_tilde),
+                  &trace_free_a_tilde),
               make_not_null(&contracted_field_b),
               make_not_null(&symmetrized_d_field_b),
               make_not_null(&contracted_symmetrized_d_field_b),
               make_not_null(&field_d_up_times_a_tilde),
-              make_not_null(&contracted_field_d_up),  // temp for eq 18 -20
               make_not_null(&half_conformal_factor_squared),  // temp for eq 25
               make_not_null(&conformal_metric_times_field_b),
               make_not_null(&conformal_metric_times_trace_a_tilde),
@@ -826,8 +809,6 @@ struct SoTimeDerivative {
               make_not_null(&gamma_hat_minus_contracted_conformal_christoffel),
               make_not_null(
                   &d_gamma_hat_minus_contracted_conformal_christoffel),
-              make_not_null(
-                  &contracted_christoffel_second_kind),  // temp for eq 18 -20
               make_not_null(
                   &contracted_d_conformal_christoffel_difference),  // temp for
                                                                     // eq 18 -20

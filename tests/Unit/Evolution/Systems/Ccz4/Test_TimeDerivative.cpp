@@ -433,7 +433,6 @@ void test_minkowski(const Ccz4::EvolveShift evolve_shift,
   tnsr::ijk<DataVector, SpatialDim> field_b_times_field_d_actual(used_for_size);
   tnsr::i<DataVector, SpatialDim> field_d_up_times_a_tilde_actual(
       used_for_size);
-  tnsr::I<DataVector, SpatialDim> contracted_field_d_up_actual(used_for_size);
   Scalar<DataVector> half_conformal_factor_squared_actual(used_for_size);
   tnsr::ij<DataVector, SpatialDim> conformal_metric_times_field_b_actual(
       used_for_size);
@@ -447,8 +446,6 @@ void test_minkowski(const Ccz4::EvolveShift evolve_shift,
       gamma_hat_minus_contracted_conformal_christoffel_actual(used_for_size);
   tnsr::iJ<DataVector, SpatialDim>
       d_gamma_hat_minus_contracted_conformal_christoffel_actual(used_for_size);
-  tnsr::i<DataVector, SpatialDim> contracted_christoffel_second_kind_actual(
-      used_for_size);
   tnsr::ij<DataVector, SpatialDim>
       contracted_d_conformal_christoffel_difference_actual(used_for_size);
   Scalar<DataVector> k_minus_2_theta_c_actual(used_for_size);
@@ -515,7 +512,6 @@ void test_minkowski(const Ccz4::EvolveShift evolve_shift,
       make_not_null(&contracted_symmetrized_d_field_b_actual),
       make_not_null(&field_b_times_field_d_actual),
       make_not_null(&field_d_up_times_a_tilde_actual),
-      make_not_null(&contracted_field_d_up_actual),
       make_not_null(&half_conformal_factor_squared_actual),
       make_not_null(&conformal_metric_times_field_b_actual),
       make_not_null(&conformal_metric_times_symmetrized_d_field_b_actual),
@@ -523,7 +519,6 @@ void test_minkowski(const Ccz4::EvolveShift evolve_shift,
       make_not_null(&inv_conformal_metric_times_d_a_tilde_actual),
       make_not_null(&gamma_hat_minus_contracted_conformal_christoffel_actual),
       make_not_null(&d_gamma_hat_minus_contracted_conformal_christoffel_actual),
-      make_not_null(&contracted_christoffel_second_kind_actual),
       make_not_null(&contracted_d_conformal_christoffel_difference_actual),
       make_not_null(&k_minus_2_theta_c_actual),
       make_not_null(&k_minus_k0_minus_2_theta_c_actual),
@@ -1046,7 +1041,6 @@ void test_kerrschild(const Ccz4::EvolveShift evolve_shift,
   tnsr::ijk<DataVector, SpatialDim> field_b_times_field_d_actual(used_for_size);
   tnsr::i<DataVector, SpatialDim> field_d_up_times_a_tilde_actual(
       used_for_size);
-  tnsr::I<DataVector, SpatialDim> contracted_field_d_up_actual(used_for_size);
   Scalar<DataVector> half_conformal_factor_squared_actual(used_for_size);
   tnsr::ij<DataVector, SpatialDim> conformal_metric_times_field_b_actual(
       used_for_size);
@@ -1060,8 +1054,6 @@ void test_kerrschild(const Ccz4::EvolveShift evolve_shift,
       gamma_hat_minus_contracted_conformal_christoffel_actual(used_for_size);
   tnsr::iJ<DataVector, SpatialDim>
       d_gamma_hat_minus_contracted_conformal_christoffel_actual(used_for_size);
-  tnsr::i<DataVector, SpatialDim> contracted_christoffel_second_kind_actual(
-      used_for_size);
   tnsr::ij<DataVector, SpatialDim>
       contracted_d_conformal_christoffel_difference_actual(used_for_size);
   Scalar<DataVector> k_minus_2_theta_c_actual(used_for_size);
@@ -1128,7 +1120,6 @@ void test_kerrschild(const Ccz4::EvolveShift evolve_shift,
       make_not_null(&contracted_symmetrized_d_field_b_actual),
       make_not_null(&field_b_times_field_d_actual),
       make_not_null(&field_d_up_times_a_tilde_actual),
-      make_not_null(&contracted_field_d_up_actual),
       make_not_null(&half_conformal_factor_squared_actual),
       make_not_null(&conformal_metric_times_field_b_actual),
       make_not_null(&conformal_metric_times_symmetrized_d_field_b_actual),
@@ -1136,7 +1127,6 @@ void test_kerrschild(const Ccz4::EvolveShift evolve_shift,
       make_not_null(&inv_conformal_metric_times_d_a_tilde_actual),
       make_not_null(&gamma_hat_minus_contracted_conformal_christoffel_actual),
       make_not_null(&d_gamma_hat_minus_contracted_conformal_christoffel_actual),
-      make_not_null(&contracted_christoffel_second_kind_actual),
       make_not_null(&contracted_d_conformal_christoffel_difference_actual),
       make_not_null(&k_minus_2_theta_c_actual),
       make_not_null(&k_minus_k0_minus_2_theta_c_actual),

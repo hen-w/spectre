@@ -95,7 +95,7 @@ struct ConstraintEnergyCompute
         make_not_null(&contracted_conformal_christoffel), inv_conformal_metric,
         conformal_christoffel);
 
-    // Physical Christoffel (needed for Ricci and momentum)
+    // Physical Christoffel (needed for the momentum constraint)
     tnsr::Ijj<DataVector, 3> christoffel(num_pts);
     ::Ccz4::christoffel_second_kind(make_not_null(&christoffel),
                                     conformal_metric, inv_conformal_metric,
@@ -148,22 +148,12 @@ struct ConstraintEnergyCompute
         make_not_null(&d_conformal_christoffel), inv_conformal_metric, field_d,
         d_field_d, field_d_up);
 
-    // Contracted physical Christoffel: Gamma^m_{lm}
-    tnsr::i<DataVector, 3> contracted_christoffel(num_pts);
-    ::tenex::evaluate<ti::l>(make_not_null(&contracted_christoffel),
-                             christoffel(ti::M, ti::l, ti::m));
-
     // Contracted d_conformal_christoffel difference
     tnsr::ij<DataVector, 3> contracted_d_conformal_christoffel_diff(num_pts);
     ::tenex::evaluate<ti::i, ti::j>(
         make_not_null(&contracted_d_conformal_christoffel_diff),
         d_conformal_christoffel(ti::m, ti::M, ti::i, ti::j) -
             d_conformal_christoffel(ti::j, ti::M, ti::i, ti::m));
-
-    // Contracted field_d_up: D_m^{ml}
-    tnsr::I<DataVector, 3> contracted_field_d_up(num_pts);
-    ::tenex::evaluate<ti::L>(make_not_null(&contracted_field_d_up),
-                             field_d_up(ti::m, ti::M, ti::L));
 
     // Spectral derivative of field_p, symmetrized
     const auto d_field_p_raw =
@@ -176,11 +166,10 @@ struct ConstraintEnergyCompute
 
     // Physical Ricci tensor
     tnsr::ii<DataVector, 3> ricci(num_pts);
-    ::Ccz4::spatial_ricci_tensor(
-        make_not_null(&ricci), christoffel, contracted_christoffel,
-        contracted_d_conformal_christoffel_diff, conformal_metric,
-        inv_conformal_metric, field_d, field_d_up, contracted_field_d_up,
-        field_p, d_field_p);
+    ::Ccz4::spatial_ricci_tensor(make_not_null(&ricci), conformal_christoffel,
+                                 contracted_d_conformal_christoffel_diff,
+                                 conformal_metric, inv_conformal_metric,
+                                 field_p, d_field_p);
 
     // Ricci scalar: R = phi^2 gamma_tilde^{ij} R_ij
     Scalar<DataVector> ricci_scalar(num_pts);

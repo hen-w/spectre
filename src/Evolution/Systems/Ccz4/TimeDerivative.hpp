@@ -108,7 +108,6 @@ struct TimeDerivative {
           contracted_symmetrized_d_field_b,
       const gsl::not_null<tnsr::ijk<DataVector, Dim>*> field_b_times_field_d,
       const gsl::not_null<tnsr::i<DataVector, Dim>*> field_d_up_times_a_tilde,
-      const gsl::not_null<tnsr::I<DataVector, Dim>*> contracted_field_d_up,
       const gsl::not_null<Scalar<DataVector>*> half_conformal_factor_squared,
       const gsl::not_null<tnsr::ij<DataVector, Dim>*>
           conformal_metric_times_field_b,
@@ -122,8 +121,6 @@ struct TimeDerivative {
           gamma_hat_minus_contracted_conformal_christoffel,
       const gsl::not_null<tnsr::iJ<DataVector, Dim>*>
           d_gamma_hat_minus_contracted_conformal_christoffel,
-      const gsl::not_null<tnsr::i<DataVector, Dim>*>
-          contracted_christoffel_second_kind,
       const gsl::not_null<tnsr::ij<DataVector, Dim>*>
           contracted_d_conformal_christoffel_difference,
       const gsl::not_null<Scalar<DataVector>*> k_minus_2_theta_c,
@@ -165,9 +162,8 @@ struct TimeDerivative {
       const Scalar<DataVector>& eta, const double f,
       const Scalar<DataVector>& k_0, const tnsr::i<DataVector, Dim>& d_k_0,
       const Scalar<DataVector>& kappa_1, const Scalar<DataVector>& kappa_2,
-      const double kappa_3,
-      const double mu, const double one_over_relaxation_time,
-      const EvolveShift evolve_shift,
+      const double kappa_3, const double mu,
+      const double one_over_relaxation_time, const EvolveShift evolve_shift,
       const SlicingConditionType slicing_condition_type,
       const tnsr::ii<DataVector, Dim>& conformal_spatial_metric,
       const Scalar<DataVector>& ln_lapse, const tnsr::I<DataVector, Dim>& shift,

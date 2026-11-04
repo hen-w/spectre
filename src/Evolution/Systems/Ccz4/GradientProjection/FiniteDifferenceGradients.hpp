@@ -13,9 +13,15 @@
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/Tensor/TypeAliases.hpp"
 #include "DataStructures/Variables.hpp"
+#include "Domain/Structure/DirectionalId.hpp"
+#include "Domain/Structure/Element.hpp"
+#include "Domain/Structure/ElementId.hpp"
+#include "Domain/Tags.hpp"
+#include "Evolution/DgSubcell/InitialActiveGrid.hpp"
 #include "Evolution/DgSubcell/Tags/GhostDataForReconstruction.hpp"
 #include "Evolution/DgSubcell/Tags/Jacobians.hpp"
 #include "Evolution/DgSubcell/Tags/Mesh.hpp"
+#include "Evolution/DiscontinuousGalerkin/UsingSubcell.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Derivatives.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/System.hpp"
 #include "Evolution/Systems/Ccz4/FiniteDifference/Tags.hpp"
@@ -81,6 +87,23 @@ namespace Actions {
  *
  * \details It is an `ERROR` if the lapse and shift are not evolved, since the
  * DG elements always evolve them.
+ *
+ * If the active grids are fixed at initialization
+ * (`evolution::dg::active_grids_fixed_at_initialization`) and the auxiliary
+ * finite-difference ghost data are reused
+ * (`evolution::dg::reuse_auxiliary_finite_difference_ghost_data`), as in
+ * `EvolveCcz4`, an element none of whose neighbors uses DG (according to
+ * `evolution::dg::subcell::Tags::NeighborActiveGrids`) leaves the stored
+ * gradients unchanged: only the DG neighbors use them, the finite-difference
+ * neighbors using only the physical fields of the ghost data. The active grid
+ * of every neighbor is checked, so it is an `ERROR` if a neighbor has none
+ * (`evolution::dg::subcell::neighbor_uses_subcell`), even if another neighbor
+ * uses DG. Reusing the auxiliary ghost data rules out donor extension
+ * (`evolution::dg::subcell::SubcellOptions::enable_extension_directions`),
+ * with which an element can interpolate the ghost data that it sends to a
+ * neighbor from the ghost data of another neighbor, so that the gradients of
+ * a finite-difference element could reach a DG element that is not its
+ * neighbor. Otherwise the gradients are always computed.
  */
 struct ComputeFiniteDifferenceGradients {
   template <typename DbTags, typename... InboxTags, typename ArrayIndex,
@@ -96,6 +119,26 @@ struct ComputeFiniteDifferenceGradients {
           "The CCZ4 gradient-projection DG elements always evolve the lapse "
           "and shift, so the finite-difference elements must too "
           "(EvolveLapseAndShift).");
+    }
+    if constexpr (evolution::dg::active_grids_fixed_at_initialization_v<
+                      Metavariables> and
+                  evolution::dg::reuse_auxiliary_finite_difference_ghost_data_v<
+                      Metavariables>) {
+      // Every neighbor is checked (without stopping at the first one using
+      // DG), so that a neighbor without an active grid is an error.
+      bool has_dg_neighbor = false;
+      for (const auto& [direction, neighbors_in_direction] :
+           db::get<::domain::Tags::Element<3>>(box).neighbors()) {
+        for (const ElementId<3>& neighbor : neighbors_in_direction) {
+          if (not evolution::dg::subcell::neighbor_uses_subcell(
+                  box, DirectionalId<3>{direction, neighbor})) {
+            has_dg_neighbor = true;
+          }
+        }
+      }
+      if (not has_dg_neighbor) {
+        return {Parallel::AlgorithmExecution::Continue, std::nullopt};
+      }
     }
     using deriv_tags =
         db::wrap_tags_in<::Tags::deriv,

@@ -1141,9 +1141,12 @@ bool bitwise_equal(const T& lhs, const T& rhs) {
 }
 
 // Through the self-start and two steps, the evolution with the active grids
-// fixed at initialization (`Metavars`) is bitwise that with `DefaultMetavars`
+// fixed at initialization (`Metavars`) has bitwise identical physical fields
+// and time derivatives to that with `DefaultMetavars`
 // (the default sends of all ghost data or, to test reused auxiliary ghost
-// data, the active grids fixed without them), and every exchange is consumed:
+// data, the active grids fixed without them). Unused scratch gradients remain
+// unchanged on FD elements with no DG neighbors; all other stored fields are
+// bitwise identical. Every exchange is consumed:
 // - the neighbor active grids of every element hold the active grids that
 //   SetSubcellGrid selected for its neighbors;
 // - the elements using DG store the ghost data of their finite-difference
@@ -1184,6 +1187,8 @@ void test_against_default(
   }
 
   const auto ids = Metavars::element_ids();
+  using GradientVars = Variables<tmpl::list<gp::Tags::PotentialGradients>>;
+  std::unordered_map<ElementId<3>, GradientVars> initial_unused_gradients{};
   for (const auto& id : ids) {
     CAPTURE(id);
     const auto& element = get_tag<domain::Tags::Element<3>>(runner, id);
@@ -1191,12 +1196,22 @@ void test_against_default(
         get_tag<evolution::dg::subcell::Tags::NeighborActiveGrids<3>>(runner,
                                                                       id);
     CHECK(neighbor_active_grids.size() == element.number_of_neighbors());
+    bool has_dg_neighbor = false;
     for (const auto& [direction, neighbors] : element.neighbors()) {
       for (const auto& neighbor : neighbors) {
+        has_dg_neighbor = has_dg_neighbor or expect_dg(neighbor);
         CHECK(neighbor_active_grids.at(DirectionalId<3>{direction, neighbor}) ==
               get_tag<evolution::dg::subcell::Tags::ActiveGrid>(runner,
                                                                 neighbor));
       }
+    }
+    if (reuses_auxiliary_ghost_data and not expect_dg(id) and
+        not has_dg_neighbor) {
+      GradientVars gradients{
+          get_tag<variables_tag>(runner, id).number_of_grid_points()};
+      get<gp::Tags::PotentialGradients>(gradients) =
+          get<gp::Tags::PotentialGradients>(get_tag<variables_tag>(runner, id));
+      initial_unused_gradients.emplace(id, std::move(gradients));
     }
   }
 
@@ -1255,8 +1270,18 @@ void test_against_default(
     check_inboxes_empty(runner);
     for (const auto& id : ids) {
       CAPTURE(id);
-      CHECK(bitwise_equal(get_tag<variables_tag>(runner, id),
-                          get_tag<variables_tag>(default_runner, id)));
+      const auto& vars = get_tag<variables_tag>(runner, id);
+      const auto& default_vars = get_tag<variables_tag>(default_runner, id);
+      if (initial_unused_gradients.contains(id)) {
+        CHECK(bitwise_equal(
+            vars.template reference_subset<physical_tags>(),
+            default_vars.template reference_subset<physical_tags>()));
+        CHECK(bitwise_equal(vars.template reference_subset<
+                                tmpl::list<gp::Tags::PotentialGradients>>(),
+                            initial_unused_gradients.at(id)));
+      } else {
+        CHECK(bitwise_equal(vars, default_vars));
+      }
       CHECK(bitwise_equal(get_tag<dt_variables_tag>(runner, id),
                           get_tag<dt_variables_tag>(default_runner, id)));
       const auto& ghost_data =

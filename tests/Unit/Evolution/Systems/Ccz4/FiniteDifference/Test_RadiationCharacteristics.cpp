@@ -190,8 +190,6 @@ void test_radiation_characteristics(const size_t points_per_dimension) {
   const auto christoffel = ::Ccz4::christoffel_second_kind(
       conformal_spatial_metric, inverse_conformal_spatial_metric, field_p,
       conformal_christoffel);
-  const auto contracted_christoffel =
-      ::tenex::evaluate<ti::l>(christoffel(ti::M, ti::l, ti::m));
   tnsr::iJkk<DataVector, ::Ccz4::fd::System::volume_dim, Frame::Inertial>
       d_conformal_christoffel{};
   const auto d_d_conformal_metric = get<Tags::second_deriv<
@@ -218,8 +216,6 @@ void test_radiation_characteristics(const size_t points_per_dimension) {
       ::tenex::evaluate<ti::i, ti::j>(
           (d_conformal_christoffel)(ti::m, ti::M, ti::i, ti::j) -
           (d_conformal_christoffel)(ti::j, ti::M, ti::i, ti::m));
-  const auto contracted_field_d_up =
-      ::tenex::evaluate<ti::L>((field_d_up)(ti::m, ti::M, ti::L));
   const auto& d_d_conformal_factor =
       get<Tags::second_deriv<Ccz4::Tags::ConformalFactor<DataVector>,
                              tmpl::size_t<::Ccz4::fd::System::volume_dim>,
@@ -234,10 +230,9 @@ void test_radiation_characteristics(const size_t points_per_dimension) {
   tnsr::ii<DataVector, ::Ccz4::fd::System::volume_dim, Frame::Inertial>
       spatial_ricci_tensor{};
   ::Ccz4::spatial_ricci_tensor(
-      make_not_null(&spatial_ricci_tensor), christoffel, contracted_christoffel,
+      make_not_null(&spatial_ricci_tensor), conformal_christoffel,
       contracted_d_conformal_christoffel_difference, conformal_spatial_metric,
-      inverse_conformal_spatial_metric, field_d, field_d_up,
-      contracted_field_d_up, field_p, d_field_p);
+      inverse_conformal_spatial_metric, field_p, d_field_p);
 
   typename ::Ccz4::fd::Tags::RadiationCharacteristicFields<
       DataVector, ::Ccz4::fd::System::volume_dim, Frame::Inertial>::type

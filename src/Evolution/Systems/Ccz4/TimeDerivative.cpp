@@ -62,8 +62,6 @@ void TimeDerivative<Dim>::apply(
         contracted_symmetrized_d_field_b,
     const gsl::not_null<tnsr::ijk<DataVector, Dim>*> field_b_times_field_d,
     const gsl::not_null<tnsr::i<DataVector, Dim>*> field_d_up_times_a_tilde,
-    const gsl::not_null<tnsr::I<DataVector, Dim>*>
-        contracted_field_d_up,  // temp for eq 18 -20
     const gsl::not_null<Scalar<DataVector>*>
         half_conformal_factor_squared,  // temp for eq 25
     const gsl::not_null<tnsr::ij<DataVector, Dim>*>
@@ -78,8 +76,6 @@ void TimeDerivative<Dim>::apply(
         gamma_hat_minus_contracted_conformal_christoffel,
     const gsl::not_null<tnsr::iJ<DataVector, Dim>*>
         d_gamma_hat_minus_contracted_conformal_christoffel,
-    const gsl::not_null<tnsr::i<DataVector, Dim>*>
-        contracted_christoffel_second_kind,  // temp for eq 18 -20
     const gsl::not_null<tnsr::ij<DataVector, Dim>*>
         contracted_d_conformal_christoffel_difference,  // temp for eq 18 -20
     const gsl::not_null<Scalar<DataVector>*> k_minus_2_theta_c,
@@ -125,8 +121,8 @@ void TimeDerivative<Dim>::apply(
     const Scalar<DataVector>& eta, const double f,
     const Scalar<DataVector>& k_0, const tnsr::i<DataVector, Dim>& d_k_0,
     const Scalar<DataVector>& kappa_1, const Scalar<DataVector>& kappa_2,
-    const double kappa_3,
-    const double mu, const double one_over_relaxation_time,  // \tau^{-1}
+    const double kappa_3, const double mu,
+    const double one_over_relaxation_time,  // \tau^{-1}
     const EvolveShift evolve_shift,
     const SlicingConditionType slicing_condition_type,
     // evolved variables
@@ -229,24 +225,16 @@ void TimeDerivative<Dim>::apply(
                                   *conformal_christoffel_second_kind);
 
   // temporary expressions needed for eq 18 - 20
-  ::tenex::evaluate<ti::l>(contracted_christoffel_second_kind,
-                           (*christoffel_second_kind)(ti::M, ti::l, ti::m));
-
   ::tenex::evaluate<ti::i, ti::j>(
       contracted_d_conformal_christoffel_difference,
       (*d_conformal_christoffel_second_kind)(ti::m, ti::M, ti::i, ti::j) -
           (*d_conformal_christoffel_second_kind)(ti::j, ti::M, ti::i, ti::m));
 
-  ::tenex::evaluate<ti::L>(contracted_field_d_up,
-                           (*field_d_up)(ti::m, ti::M, ti::L));
-
   // eq 18 - 20
   ::Ccz4::spatial_ricci_tensor(
-      spatial_ricci_tensor, *christoffel_second_kind,
-      *contracted_christoffel_second_kind,
+      spatial_ricci_tensor, *conformal_christoffel_second_kind,
       *contracted_d_conformal_christoffel_difference, conformal_spatial_metric,
-      *inv_conformal_spatial_metric, field_d, *field_d_up,
-      *contracted_field_d_up, field_p, d_field_p);
+      *inv_conformal_spatial_metric, field_p, d_field_p);
 
   // eq 21
   ::Ccz4::grad_grad_lapse(grad_grad_lapse, *lapse, *christoffel_second_kind,

@@ -8,13 +8,23 @@
 #include <cstddef>
 #include <random>
 #include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "DataStructures/DataBox/DataBox.hpp"
 #include "DataStructures/DataVector.hpp"
 #include "DataStructures/TaggedTuple.hpp"
 #include "DataStructures/Tensor/Tensor.hpp"
 #include "DataStructures/Variables.hpp"
+#include "Domain/Structure/DirectionalId.hpp"
+#include "Domain/Structure/DirectionalIdMap.hpp"
 #include "Domain/Structure/Element.hpp"
+#include "Domain/Structure/ElementId.hpp"
+#include "Domain/Tags.hpp"
+#include "Evolution/DgSubcell/ActiveGrid.hpp"
+#include "Evolution/DgSubcell/GhostData.hpp"
+#include "Evolution/DgSubcell/Tags/ActiveGrid.hpp"
 #include "Evolution/DgSubcell/Tags/GhostDataForReconstruction.hpp"
 #include "Evolution/DgSubcell/Tags/Jacobians.hpp"
 #include "Evolution/DgSubcell/Tags/Mesh.hpp"
@@ -32,8 +42,10 @@
 #include "Framework/TestHelpers.hpp"
 #include "Helpers/Evolution/Systems/Ccz4/PrimReconstructor.hpp"
 #include "NumericalAlgorithms/Spectral/Mesh.hpp"
+#include "Parallel/AlgorithmExecution.hpp"
 #include "Parallel/GlobalCache.hpp"
 #include "PointwiseFunctions/GeneralRelativity/Tags.hpp"
+#include "Utilities/Algorithm.hpp"
 #include "Utilities/Gsl.hpp"
 #include "Utilities/TMPL.hpp"
 
@@ -343,6 +355,158 @@ void test_action() {
   }
 }
 
+// The active grids fixed at initialization, with the auxiliary
+// finite-difference ghost data reused (as in EvolveCcz4) or not.
+template <bool ReuseAuxiliaryGhostData>
+struct FixedActiveGridsMetavariables {
+  using component_list = tmpl::list<>;
+  struct SubcellOptions {
+    static constexpr bool subcell_enabled = true;
+    static constexpr bool active_grids_fixed_at_initialization = true;
+    static constexpr bool reuse_auxiliary_finite_difference_ghost_data =
+        ReuseAuxiliaryGhostData;
+  };
+};
+
+using NeighborActiveGrids =
+    evolution::dg::subcell::Tags::NeighborActiveGrids<3>::type;
+
+// Applies the action with the metavariables `Metavars` to the smooth fields
+// with poisoned gradients of test_action on `element`, with the ghost data of
+// test_action in all directions of `element` (none if `with_ghost_data` is
+// false), and returns the evolved variables.
+template <typename Metavars>
+Variables<Ccz4::fd::System::variables_tag_list> apply_action(
+    const Element<3>& element, const NeighborActiveGrids& neighbor_active_grids,
+    const bool with_ghost_data, const bool evolve_lapse_and_shift = true) {
+  const Mesh<3> mesh{5, Spectral::Basis::FiniteDifference,
+                     Spectral::Quadrature::CellCentered};
+  const auto logical_coords =
+      TestHelpers::Ccz4::fd::detail::set_logical_coordinates(mesh);
+  InverseJacobian<DataVector, 3, Frame::ElementLogical, Frame::Inertial>
+      inverse_jacobian{mesh.number_of_grid_points(), 0.0};
+  for (size_t i = 0; i < 3; ++i) {
+    inverse_jacobian.get(i, i) = 1.0;
+  }
+  auto box = db::create<db::AddSimpleTags<
+      Ccz4::fd::Tags::EvolveLapseAndShift, domain::Tags::Element<3>,
+      evolution::dg::subcell::Tags::NeighborActiveGrids<3>,
+      evolution::dg::subcell::Tags::Mesh<3>, Ccz4::fd::System::variables_tag,
+      evolution::dg::subcell::Tags::GhostDataForReconstruction<3>,
+      evolution::dg::subcell::fd::Tags::InverseJacobianLogicalToInertial<3>>>(
+      evolve_lapse_and_shift, element, neighbor_active_grids, mesh,
+      smooth_solution(logical_coords),
+      with_ghost_data
+          ? TestHelpers::Ccz4::fd::detail::compute_ghost_data(
+                mesh, logical_coords, element.neighbors(), 3, smooth_solution)
+          : DirectionalIdMap<3, evolution::dg::subcell::GhostData>{},
+      inverse_jacobian);
+  tuples::TaggedTuple<> inboxes{};
+  const Parallel::GlobalCache<Metavars> cache{};
+  const auto result = gp::Actions::ComputeFiniteDifferenceGradients::apply(
+      box, inboxes, cache, 0, tmpl::list<>{},
+      static_cast<const Component*>(nullptr));
+  CHECK(std::get<0>(result) == Parallel::AlgorithmExecution::Continue);
+  CHECK_FALSE(std::get<1>(result).has_value());
+  return db::get<Ccz4::fd::System::variables_tag>(box);
+}
+
+// With the active grids fixed at initialization and the auxiliary ghost data
+// reused, the action leaves the evolved variables unchanged on an element none
+// of whose neighbors uses DG, and otherwise computes the gradients exactly as
+// without fixed active grids (checked in test_action). Without reused ghost
+// data, it always computes them.
+void test_action_with_fixed_active_grids() {
+  using evolution::dg::subcell::ActiveGrid;
+  using Fixed = FixedActiveGridsMetavariables<false>;
+  using FixedReused = FixedActiveGridsMetavariables<true>;
+  const Mesh<3> mesh{5, Spectral::Basis::FiniteDifference,
+                     Spectral::Quadrature::CellCentered};
+  const auto initial_vars = smooth_solution(
+      TestHelpers::Ccz4::fd::detail::set_logical_coordinates(mesh));
+  // One neighbor in each direction, in the blocks 1 to 6.
+  const Element<3> element = TestHelpers::Ccz4::fd::detail::set_element();
+  const std::vector<size_t> neighbor_blocks{1, 2, 3, 4, 5, 6};
+  const Element<3> element_without_neighbors{ElementId<3>{0, {}}, {}};
+  // The active grids of the neighbors of `element`, of which those in the
+  // blocks `dg_blocks` use DG.
+  const auto active_grids = [&element](const std::vector<size_t>& dg_blocks) {
+    NeighborActiveGrids result{};
+    for (const auto& [direction, neighbors] : element.neighbors()) {
+      for (const ElementId<3>& neighbor : neighbors) {
+        result[DirectionalId<3>{direction, neighbor}] =
+            alg::found(dg_blocks, neighbor.block_id()) ? ActiveGrid::Dg
+                                                       : ActiveGrid::Subcell;
+      }
+    }
+    return result;
+  };
+
+  const auto computed =
+      apply_action<Metavariables>(element, active_grids({}), true);
+  REQUIRE(get<gp::Tags::PotentialGradients>(computed) !=
+          get<gp::Tags::PotentialGradients>(initial_vars));
+
+  // Without reused auxiliary ghost data, also if no neighbor uses DG.
+  CHECK(apply_action<Fixed>(element, active_grids({}), true) == computed);
+  CHECK(apply_action<Fixed>(element, active_grids(neighbor_blocks), true) ==
+        computed);
+
+  // No neighbor uses DG, or there are none: the poisoned gradients and the
+  // physical fields are unchanged, without the ghost data that the
+  // finite-difference derivatives require in every direction.
+  CHECK(apply_action<FixedReused>(element, active_grids({}), false) ==
+        initial_vars);
+  CHECK(apply_action<FixedReused>(element_without_neighbors, {}, false) ==
+        initial_vars);
+
+  // Any one neighbor, or all, use DG.
+  for (const size_t dg_block : neighbor_blocks) {
+    CAPTURE(dg_block);
+    CHECK(apply_action<FixedReused>(element, active_grids({dg_block}), true) ==
+          computed);
+  }
+  CHECK(apply_action<FixedReused>(element, active_grids(neighbor_blocks),
+                                  true) == computed);
+
+  // A neighbor without an active grid is an error, also if another neighbor
+  // uses DG (wherever it is, so whichever is checked first).
+  for (const size_t missing_block : neighbor_blocks) {
+    CAPTURE(missing_block);
+    std::vector<std::vector<size_t>> dg_block_sets{{}};
+    for (const size_t dg_block : neighbor_blocks) {
+      if (dg_block != missing_block) {
+        dg_block_sets.push_back({dg_block});
+      }
+    }
+    for (const auto& dg_blocks : dg_block_sets) {
+      CAPTURE(dg_blocks);
+      NeighborActiveGrids neighbor_active_grids = active_grids(dg_blocks);
+      REQUIRE(std::erase_if(
+                  neighbor_active_grids, [&missing_block](const auto& entry) {
+                    return entry.first.id().block_id() == missing_block;
+                  }) == 1);
+      CHECK_THROWS_WITH(
+          apply_action<FixedReused>(element, neighbor_active_grids, true),
+          Catch::Matchers::ContainsSubstring(
+              "has no active grid for its neighbor"));
+    }
+  }
+
+  // Not evolving the lapse and shift is an error, before the neighbors are
+  // checked: also if no neighbor uses DG, there are none, or none has an
+  // active grid.
+  for (const auto& [test_element, neighbor_active_grids] :
+       {std::pair{element, active_grids({})},
+        std::pair{element_without_neighbors, NeighborActiveGrids{}},
+        std::pair{element, NeighborActiveGrids{}}}) {
+    CHECK_THROWS_WITH(
+        apply_action<FixedReused>(test_element, neighbor_active_grids, false,
+                                  false),
+        Catch::Matchers::ContainsSubstring("must too (EvolveLapseAndShift)"));
+  }
+}
+
 SPECTRE_TEST_CASE(
     "Unit.Evolution.Systems.Ccz4.GradientProjection.FiniteDifferenceGradients",
     "[Unit][Evolution]") {
@@ -351,5 +515,6 @@ SPECTRE_TEST_CASE(
   MAKE_GENERATOR(gen);
   test_pointwise(make_not_null(&gen));
   test_action();
+  test_action_with_fixed_active_grids();
 }
 }  // namespace
